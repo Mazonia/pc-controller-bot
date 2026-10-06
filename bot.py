@@ -167,6 +167,7 @@ def get_media_keyboard() -> InlineKeyboardMarkup:
             InlineKeyboardButton("⏭️ Next", callback_data="cb_media_next"),
         ],
         [
+            InlineKeyboardButton("⏹️ Stop Playback", callback_data="cb_media_stop"),
             InlineKeyboardButton("🔙 Back to Main Menu", callback_data="cb_menu"),
         ]
     ])
@@ -872,6 +873,9 @@ async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data == "cb_media_prev":
         SystemController.control_media("prev")
         await query.answer("⏮️ Previous Track")
+    elif data == "cb_media_stop":
+        SystemController.control_media("stop")
+        await query.answer("⏹️ Playback Stopped")
     elif data == "cb_pwr_sleep":
         await query.message.reply_text("💤 Putting PC to sleep...")
         SystemController.sleep_pc()

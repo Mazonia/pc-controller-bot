@@ -242,38 +242,35 @@ class SystemController:
     @staticmethod
     def control_media(action: str) -> bool:
         """
-        Adjust volume and media playback via Windows virtual keystrokes with extended scan codes
-        and broadcast WM_APPCOMMAND for background media players (Spotify, YouTube, VLC, etc.).
-        action: 'up', 'down', 'mute', 'play_pause', 'next', 'prev', 'stop'
+        Adjust volume and media playback via Windows virtual keystrokes with extended scan codes.
+        Executes a clean, single hardware-level keystroke without duplicate broadcasts to prevent double-toggling.
+        action: 'up', 'down', 'mute', 'play_pause', 'play', 'pause', 'next', 'prev', 'stop'
         """
         KEYEVENTF_EXTENDEDKEY = 0x0001
         KEYEVENTF_KEYUP = 0x0002
 
-        # Mapping: (VK_CODE, SCAN_CODE, APPCOMMAND_ID)
+        # Mapping: (VK_CODE, SCAN_CODE)
         key_map = {
-            "up": (0xAF, 0x30, 10),          # VK_VOLUME_UP
-            "down": (0xAE, 0x2E, 9),         # VK_VOLUME_DOWN
-            "mute": (0xAD, 0x20, 8),         # VK_VOLUME_MUTE
-            "play_pause": (0xCD, 0x22, 14),  # VK_MEDIA_PLAY_PAUSE
-            "next": (0xB0, 0x19, 11),        # VK_MEDIA_NEXT_TRACK
-            "prev": (0xB1, 0x10, 12),        # VK_MEDIA_PREV_TRACK
-            "stop": (0xB2, 0x24, 13),        # VK_MEDIA_STOP
+            "up": (0xAF, 0x30),          # VK_VOLUME_UP
+            "down": (0xAE, 0x2E),         # VK_VOLUME_DOWN
+            "mute": (0xAD, 0x20),         # VK_VOLUME_MUTE
+            "play_pause": (0xCD, 0x22),   # VK_MEDIA_PLAY_PAUSE
+            "play": (0xCD, 0x22),         # VK_MEDIA_PLAY_PAUSE
+            "pause": (0xCD, 0x22),        # VK_MEDIA_PLAY_PAUSE
+            "next": (0xB0, 0x19),         # VK_MEDIA_NEXT_TRACK
+            "prev": (0xB1, 0x10),         # VK_MEDIA_PREV_TRACK
+            "stop": (0xB2, 0x24),         # VK_MEDIA_STOP
         }
         entry = key_map.get(action.lower())
         if not entry:
             return False
 
-        vk, scan, app_cmd = entry
+        vk, scan = entry
         try:
-            # 1. Simulate hardware extended media key
+            # Simulate a single genuine extended hardware media key press
             ctypes.windll.user32.keybd_event(vk, scan, KEYEVENTF_EXTENDEDKEY, 0)
-            time.sleep(0.03)
+            time.sleep(0.05)
             ctypes.windll.user32.keybd_event(vk, scan, KEYEVENTF_EXTENDEDKEY | KEYEVENTF_KEYUP, 0)
-
-            # 2. Broadcast WM_APPCOMMAND to Windows Shell / System Media Transport Controls
-            HWND_BROADCAST = 0xFFFF
-            WM_APPCOMMAND = 0x0319
-            ctypes.windll.user32.PostMessageW(HWND_BROADCAST, WM_APPCOMMAND, 0, app_cmd << 16)
             return True
         except Exception as e:
             logger.error(f"Media control error: {e}")
