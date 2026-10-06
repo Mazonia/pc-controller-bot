@@ -130,7 +130,7 @@ class SystemController:
 
     @staticmethod
     def record_screen_video(output_path: Path, duration_sec: int = 10) -> Tuple[bool, str]:
-        """Record desktop screen video for specified seconds."""
+        """Record desktop screen video for specified seconds (up to 120s)."""
         if cv2 is None:
             return False, "OpenCV is not installed."
         
@@ -138,7 +138,17 @@ class SystemController:
             import numpy as np
             screen = ImageGrab.grab()
             width, height = screen.size
-            fps = 12.0
+            scale = 1.0
+            if width > 1920:
+                scale = 1920.0 / width
+                width = 1920
+                height = int(height * scale)
+            if width % 2 != 0:
+                width -= 1
+            if height % 2 != 0:
+                height -= 1
+
+            fps = 10.0
             fourcc = cv2.VideoWriter_fourcc(*'mp4v')
             out = cv2.VideoWriter(str(output_path), fourcc, fps, (width, height))
 
@@ -149,6 +159,8 @@ class SystemController:
                 t0 = time.time()
                 img = ImageGrab.grab()
                 frame = cv2.cvtColor(np.array(img), cv2.COLOR_RGB2BGR)
+                if scale != 1.0:
+                    frame = cv2.resize(frame, (width, height))
                 out.write(frame)
                 elapsed = time.time() - t0
                 if elapsed < frame_delay:
@@ -268,6 +280,57 @@ class SystemController:
             return False
 
     @staticmethod
+    def play_audio_file(file_path: Path) -> Tuple[bool, str]:
+        """Play any audio file (Telegram voice note .ogg, .mp3, .wav, etc.) through PC speakers."""
+        try:
+            target_path = file_path
+            temp_wav = None
+
+            # Telegram voice notes are Opus in OGG; convert to PCM WAV for native Windows audio playback
+            if file_path.suffix.lower() != ".wav":
+                temp_wav = file_path.with_suffix(".temp.wav")
+                try:
+                    import av
+                    in_container = av.open(str(file_path))
+                    out_container = av.open(str(temp_wav), mode="w", format="wav")
+                    in_stream = in_container.streams.audio[0]
+                    out_stream = out_container.add_stream("pcm_s16le", rate=44100, layout="stereo")
+                    resampler = av.AudioResampler(format="s16", layout="stereo", rate=44100)
+                    for frame in in_container.decode(in_stream):
+                        for rf in resampler.resample(frame):
+                            for packet in out_stream.encode(rf):
+                                out_container.mux(packet)
+                    for packet in out_stream.encode(None):
+                        out_container.mux(packet)
+                    out_container.close()
+                    in_container.close()
+                    target_path = temp_wav
+                except Exception as conv_err:
+                    logger.warning(f"Audio conversion warning: {conv_err}")
+
+            # Play using winsound SND_FILENAME
+            try:
+                winsound.PlaySound(str(target_path), winsound.SND_FILENAME)
+            except Exception:
+                try:
+                    import playsound3
+                    playsound3.playsound(str(target_path))
+                except Exception as ps_err:
+                    return False, f"Audio playback failed: {ps_err}"
+
+            # Clean up temporary WAV file
+            if temp_wav and temp_wav.exists():
+                try:
+                    temp_wav.unlink()
+                except Exception:
+                    pass
+
+            return True, "Audio played on PC speakers"
+        except Exception as e:
+            logger.error(f"Failed to play audio: {e}")
+            return False, str(e)
+
+    @staticmethod
     def play_alert_siren() -> None:
         """Play alert siren sounds through PC speaker/audio output."""
         try:
@@ -281,23 +344,42 @@ class SystemController:
 
     @staticmethod
     def list_top_processes(limit: int = 10) -> List[Dict[str, Any]]:
-        """List top processes sorted by CPU and memory."""
+        """List top processes sorted by memory and active CPU consumption."""
         procs = []
-        for p in psutil.process_iter(['pid', 'name', 'cpu_percent', 'memory_percent']):
+        for p in psutil.process_iter(['pid', 'name', 'memory_percent']):
             try:
                 info = p.info
+                name = info['name'] or "Unknown"
                 procs.append({
                     "pid": info['pid'],
-                    "name": info['name'] or "Unknown",
-                    "cpu": info['cpu_percent'] or 0.0,
+                    "name": name,
                     "mem": round(info['memory_percent'] or 0.0, 1),
+                    "_proc": p,
                 })
             except (psutil.NoSuchProcess, psutil.AccessDenied):
                 continue
 
-        # Sort by memory usage descending
-        procs.sort(key=lambda x: (x['mem'], x['cpu']), reverse=True)
-        return procs[:limit]
+        # Sort primarily by memory usage descending
+        procs.sort(key=lambda x: x['mem'], reverse=True)
+        top = procs[:limit]
+
+        # Fast sampling for active CPU usage
+        for item in top:
+            try:
+                item['_proc'].cpu_percent()
+            except Exception:
+                pass
+
+        time.sleep(0.1)
+
+        for item in top:
+            try:
+                item['cpu'] = round(item['_proc'].cpu_percent(), 1)
+            except Exception:
+                item['cpu'] = 0.0
+            del item['_proc']
+
+        return top
 
     @staticmethod
     def kill_process(identifier: str) -> Tuple[bool, str]:

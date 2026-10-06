@@ -3,7 +3,7 @@ title PC-Remote-Sentinel
 cd /d "%~dp0"
 
 echo ==============================================
-echo       PC REMOTE SENTINEL & COMMAND CENTER
+echo       PC REMOTE SENTINEL ^& COMMAND CENTER
 echo ==============================================
 echo.
 

@@ -8,24 +8,19 @@ Control your PC from anywhere in the world: inspect diagnostics, capture instant
 
 ## ✨ Features & Capabilities
 
-- 📊 **Real-time Diagnostics (`/status`, `/ping`)**: CPU load, RAM utilization, C: drive disk capacity, battery status, and uptime.
-- 📸 **Desktop Screenshots (`/screenshot`)**: High-res multi-monitor or desktop snapshots sent immediately to your chat.
-- 📹 **Webcam Surveillance (`/webcam`, `/webcam_clip`)**: Instant photo capture or 10-second security video clip from connected webcams.
-- 🎬 **Screen Video Recorder (`/screen_record`)**: Records 10 seconds of on-screen desktop action into an MP4 video file.
+- 📊 **Real-time Diagnostics (`/status`)**: CPU load, RAM utilization, C: drive disk capacity, battery status, and uptime.
+- 📸 **Desktop Screenshots (`/shot`, `/screenshot`)**: High-res multi-monitor or desktop snapshots sent immediately to your chat.
+- 📹 **Webcam Surveillance (`/webcam`, `/record_webcam`)**: Instant photo capture or security video clip from connected webcams.
+- 🎬 **Multi-Duration Screen Recorder (`/record_screen`)**: Interactive selector for 10s, 20s, 30s, 40s, 50s, 1 min, or 2 mins of on-screen desktop action into an MP4 video file.
 - ⚡ **Power & Workstation Control**:
-  - `/lock` — Instantly lock Windows workstation.
-  - `/sleep` — Put computer into low-power sleep mode.
-  - `/monitors_off` — Turn off connected computer monitors.
-  - `/shutdown` — Instant shutdown.
-  - `/shutdown_timer <min>` — Timed shutdown (15m, 30m, 60m).
-  - `/cancel_shutdown` — Abort any scheduled shutdown.
-  - `/restart` — Reboot the computer.
-- 🔊 **Audio & Voice Control**:
-  - `/mute`, `/volup`, `/voldown` — Control system master volume.
-  - `/say <text>` — Speak messages through PC speakers via text-to-speech engine.
-  - `/siren` — Play loud emergency alert audio to locate or alert around your PC.
+  - Sleep PC, Lock workstation, turn off monitors, shutdown timers (15m, 30m, 60m), and PC restart.
+- 🔊 **Audio & Speaker Control**:
+  - `/mute`, volume up, volume down master audio controls.
+  - 🗣️ **Direct Type-to-Speak & TTS (`/say <text>`)**: Type any message directly into chat or use `/say` to speak aloud via PC speakers using Windows speech synthesis.
+  - 🎙️ **Voice Note Speaker Playback**: Send any voice note or audio file (.ogg, .mp3, .wav) to play your actual voice directly through your laptop/PC speakers.
+  - `/siren` / Alert Alarm — Play loud emergency alert audio through speakers.
 - 📋 **Process & Task Manager**:
-  - `/top` — View top CPU and memory consuming processes.
+  - `/top` — Interactive view of top memory & CPU consuming processes with live refresh.
   - `/kill <name_or_pid>` — Terminate frozen or unwanted processes.
 - 📥 **Remote File Drop**: Send any file, document, or photo to the bot to automatically save it in your PC's `downloads/` folder.
 - 🌐 **Remote Web Launch (`/open <url>`)**: Launch any website or URL in your PC's default web browser.

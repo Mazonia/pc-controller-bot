@@ -5,3 +5,5 @@ opencv-python>=4.8.0
 python-dotenv>=1.0.0
 loguru>=0.7.0
 pywin32>=306
+av>=11.0.0
+playsound3>=3.3.0
