@@ -242,31 +242,38 @@ class SystemController:
     @staticmethod
     def control_media(action: str) -> bool:
         """
-        Adjust volume and media playback via Windows virtual keystrokes.
-        action: 'up', 'down', 'mute', 'play_pause', 'next', 'prev'
+        Adjust volume and media playback via Windows virtual keystrokes with extended scan codes
+        and broadcast WM_APPCOMMAND for background media players (Spotify, YouTube, VLC, etc.).
+        action: 'up', 'down', 'mute', 'play_pause', 'next', 'prev', 'stop'
         """
-        VK_VOLUME_MUTE = 0xAD
-        VK_VOLUME_DOWN = 0xAE
-        VK_VOLUME_UP = 0xAF
-        VK_MEDIA_NEXT_TRACK = 0xB0
-        VK_MEDIA_PREV_TRACK = 0xB1
-        VK_MEDIA_PLAY_PAUSE = 0xCD
+        KEYEVENTF_EXTENDEDKEY = 0x0001
+        KEYEVENTF_KEYUP = 0x0002
 
-        code_map = {
-            "up": VK_VOLUME_UP,
-            "down": VK_VOLUME_DOWN,
-            "mute": VK_VOLUME_MUTE,
-            "play_pause": VK_MEDIA_PLAY_PAUSE,
-            "next": VK_MEDIA_NEXT_TRACK,
-            "prev": VK_MEDIA_PREV_TRACK,
+        # Mapping: (VK_CODE, SCAN_CODE, APPCOMMAND_ID)
+        key_map = {
+            "up": (0xAF, 0x30, 10),          # VK_VOLUME_UP
+            "down": (0xAE, 0x2E, 9),         # VK_VOLUME_DOWN
+            "mute": (0xAD, 0x20, 8),         # VK_VOLUME_MUTE
+            "play_pause": (0xCD, 0x22, 14),  # VK_MEDIA_PLAY_PAUSE
+            "next": (0xB0, 0x19, 11),        # VK_MEDIA_NEXT_TRACK
+            "prev": (0xB1, 0x10, 12),        # VK_MEDIA_PREV_TRACK
+            "stop": (0xB2, 0x24, 13),        # VK_MEDIA_STOP
         }
-        vk = code_map.get(action.lower())
-        if not vk:
+        entry = key_map.get(action.lower())
+        if not entry:
             return False
 
+        vk, scan, app_cmd = entry
         try:
-            ctypes.windll.user32.keybd_event(vk, 0, 0, 0)
-            ctypes.windll.user32.keybd_event(vk, 0, 2, 0)
+            # 1. Simulate hardware extended media key
+            ctypes.windll.user32.keybd_event(vk, scan, KEYEVENTF_EXTENDEDKEY, 0)
+            time.sleep(0.03)
+            ctypes.windll.user32.keybd_event(vk, scan, KEYEVENTF_EXTENDEDKEY | KEYEVENTF_KEYUP, 0)
+
+            # 2. Broadcast WM_APPCOMMAND to Windows Shell / System Media Transport Controls
+            HWND_BROADCAST = 0xFFFF
+            WM_APPCOMMAND = 0x0319
+            ctypes.windll.user32.PostMessageW(HWND_BROADCAST, WM_APPCOMMAND, 0, app_cmd << 16)
             return True
         except Exception as e:
             logger.error(f"Media control error: {e}")
@@ -448,6 +455,70 @@ class SystemController:
         except Exception as e:
             logger.error(f"Clipboard write error: {e}")
             return False
+
+    @staticmethod
+    def scan_storage_candidates(recordings_dir: Path, downloads_dir: Path) -> List[Dict[str, Any]]:
+        """
+        Scan recordings and temporary downloads folders for cleanup candidates without deleting anything.
+        Returns list of metadata dicts (path, name, folder, size_bytes, size_mb, age_str).
+        """
+        candidates = []
+        now = time.time()
+        for folder_type, folder in [("recordings", recordings_dir), ("downloads", downloads_dir)]:
+            if not folder.exists():
+                continue
+            for item in folder.iterdir():
+                if item.is_file():
+                    try:
+                        stat = item.stat()
+                        age_sec = max(0, now - stat.st_mtime)
+                        if age_sec < 60:
+                            age_str = f"{int(age_sec)}s ago"
+                        elif age_sec < 3600:
+                            age_str = f"{int(age_sec / 60)}m ago"
+                        elif age_sec < 86400:
+                            age_str = f"{int(age_sec / 3600)}h ago"
+                        else:
+                            age_str = f"{int(age_sec / 86400)}d ago"
+
+                        candidates.append({
+                            "path": str(item.resolve()),
+                            "name": item.name,
+                            "folder": folder_type,
+                            "size_bytes": stat.st_size,
+                            "size_mb": round(stat.st_size / (1024 * 1024), 2),
+                            "age_str": age_str,
+                        })
+                    except Exception as e:
+                        logger.warning(f"Could not stat {item.name}: {e}")
+        return candidates
+
+    @staticmethod
+    def delete_storage_files(file_paths: List[str], allowed_dirs: List[Path]) -> Tuple[int, int]:
+        """
+        Securely delete explicitly approved files. Validates that each file path resides
+        strictly within the allowed bot directories to prevent path traversal attacks.
+        Returns (deleted_count, freed_bytes).
+        """
+        deleted_count = 0
+        freed_bytes = 0
+        resolved_allowed = [d.resolve() for d in allowed_dirs if d.exists()]
+
+        for path_str in file_paths:
+            try:
+                p = Path(path_str).resolve()
+                if not any(str(p).startswith(str(d)) for d in resolved_allowed):
+                    logger.warning(f"Security: Refusing to delete file outside allowed dirs: {p}")
+                    continue
+                if p.is_file():
+                    sz = p.stat().st_size
+                    p.unlink()
+                    deleted_count += 1
+                    freed_bytes += sz
+            except Exception as e:
+                logger.error(f"Error deleting file {path_str}: {e}")
+
+        return deleted_count, freed_bytes
 
     @staticmethod
     def cleanup_old_files(recordings_dir: Path, downloads_dir: Path, max_age_days: int = 3) -> Tuple[int, int]:

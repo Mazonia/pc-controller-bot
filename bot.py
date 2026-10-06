@@ -574,19 +574,76 @@ async def handle_getclip(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(f"📋 <b>PC Clipboard Content:</b>\n<pre>{html.escape(content)}</pre>", parse_mode="HTML")
 
 
+def format_cleanup_preview(candidates: List[Dict[str, Any]]) -> Tuple[str, InlineKeyboardMarkup]:
+    """Format an informative storage scan preview and approval keyboard."""
+    if not candidates:
+        text = (
+            "🧹 <b>STORAGE CLEANUP AUDIT</b>\n\n"
+            "✨ <b>Storage is clean!</b>\n\n"
+            "No temporary recordings or cached downloads found in:\n"
+            "• <code>recordings/</code>\n"
+            "• <code>downloads/</code>"
+        )
+        keyboard = InlineKeyboardMarkup([
+            [InlineKeyboardButton("🔙 Back to Main Menu", callback_data="cb_menu")]
+        ])
+        return text, keyboard
+
+    total_bytes = sum(c["size_bytes"] for c in candidates)
+    total_mb = round(total_bytes / (1024 * 1024), 2)
+    count = len(candidates)
+
+    rec_files = [c for c in candidates if c["folder"] == "recordings"]
+    dl_files = [c for c in candidates if c["folder"] == "downloads"]
+
+    lines = [
+        "🧹 <b>STORAGE CLEANUP — APPROVAL REQUIRED</b>\n",
+        f"Sentinel audited cache folders and found <b>{count} file(s)</b> ({total_mb} MB):\n"
+    ]
+
+    if rec_files:
+        rec_mb = round(sum(c["size_bytes"] for c in rec_files) / (1024 * 1024), 2)
+        lines.append(f"📁 <b>recordings/</b> ({len(rec_files)} files, {rec_mb} MB):")
+        for f in rec_files[:6]:
+            lines.append(f" • <code>{html.escape(f['name'])}</code> ({f['size_mb']} MB, {f['age_str']})")
+        if len(rec_files) > 6:
+            lines.append(f"   <i>...and {len(rec_files) - 6} more</i>")
+        lines.append("")
+
+    if dl_files:
+        dl_mb = round(sum(c["size_bytes"] for c in dl_files) / (1024 * 1024), 2)
+        lines.append(f"📁 <b>downloads/</b> ({len(dl_files)} files, {dl_mb} MB):")
+        for f in dl_files[:6]:
+            lines.append(f" • <code>{html.escape(f['name'])}</code> ({f['size_mb']} MB, {f['age_str']})")
+        if len(dl_files) > 6:
+            lines.append(f"   <i>...and {len(dl_files) - 6} more</i>")
+        lines.append("")
+
+    lines.append("⚠️ <b>Do you approve permanently deleting these files?</b>")
+
+    keyboard = InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton(f"✅ Confirm & Delete ({total_mb} MB)", callback_data="cb_clean_confirm"),
+        ],
+        [
+            InlineKeyboardButton("❌ Cancel Cleanup", callback_data="cb_clean_cancel"),
+            InlineKeyboardButton("🔙 Back to Menu", callback_data="cb_menu"),
+        ]
+    ])
+
+    return "\n".join(lines), keyboard
+
+
 async def handle_clean(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Clean old recordings and temporary files older than 3 days."""
+    """Audit storage and seek explicit approval before deleting files: /clean"""
     if not is_authorized(update.effective_user.id):
         await notify_unauthorized_access(update, context)
         return
-    count, bytes_freed = SystemController.cleanup_old_files(config.RECORDINGS_DIR, config.DOWNLOADS_DIR, max_age_days=3)
-    mb_freed = round(bytes_freed / (1024 * 1024), 2)
-    await update.message.reply_text(
-        f"🧹 <b>Storage Cleanup Completed!</b>\n\n"
-        f"• Files Deleted: <code>{count}</code>\n"
-        f"• Disk Space Freed: <code>{mb_freed} MB</code>",
-        parse_mode="HTML"
-    )
+
+    candidates = SystemController.scan_storage_candidates(config.RECORDINGS_DIR, config.DOWNLOADS_DIR)
+    context.user_data["pending_cleanup"] = [c["path"] for c in candidates]
+    text, keyboard = format_cleanup_preview(candidates)
+    await update.message.reply_text(text, reply_markup=keyboard, parse_mode="HTML")
 
 
 async def handle_incoming_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -747,9 +804,42 @@ async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         clip_full = SystemController.get_clipboard()
         await query.message.reply_text(f"📋 <b>PC Clipboard Content:</b>\n<pre>{html.escape(clip_full)}</pre>", parse_mode="HTML")
     elif data == "cb_clean":
-        count, freed = SystemController.cleanup_old_files(config.RECORDINGS_DIR, config.DOWNLOADS_DIR, max_age_days=3)
+        candidates = SystemController.scan_storage_candidates(config.RECORDINGS_DIR, config.DOWNLOADS_DIR)
+        context.user_data["pending_cleanup"] = [c["path"] for c in candidates]
+        text, keyboard = format_cleanup_preview(candidates)
+        await query.edit_message_text(text, reply_markup=keyboard, parse_mode="HTML")
+    elif data == "cb_clean_confirm":
+        pending = context.user_data.pop("pending_cleanup", None)
+        if pending is None:
+            candidates = SystemController.scan_storage_candidates(config.RECORDINGS_DIR, config.DOWNLOADS_DIR)
+            pending = [c["path"] for c in candidates]
+
+        if not pending:
+            await query.edit_message_text(
+                "✨ <b>Storage is clean!</b> No files found to delete.",
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back to Main Menu", callback_data="cb_menu")]]),
+                parse_mode="HTML"
+            )
+            return
+
+        count, freed = SystemController.delete_storage_files(pending, [config.RECORDINGS_DIR, config.DOWNLOADS_DIR])
         mb = round(freed / (1024 * 1024), 2)
-        await query.answer(f"🧹 Cleaned {count} old files ({mb} MB freed)", show_alert=True)
+        await query.edit_message_text(
+            f"🧹 <b>STORAGE CLEANUP COMPLETED</b> ✅\n\n"
+            f"• <b>Files Deleted:</b> <code>{count}</code>\n"
+            f"• <b>Disk Space Freed:</b> <code>{mb} MB</code>\n\n"
+            f"Scanned & cleared: <code>recordings/</code>, <code>downloads/</code>",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back to Main Menu", callback_data="cb_menu")]]),
+            parse_mode="HTML"
+        )
+    elif data == "cb_clean_cancel":
+        context.user_data.pop("pending_cleanup", None)
+        await query.edit_message_text(
+            "❌ <b>Storage Cleanup Cancelled</b>\n\n"
+            "No files were deleted. Your recordings and downloads remain intact.",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back to Main Menu", callback_data="cb_menu")]]),
+            parse_mode="HTML"
+        )
     elif data == "cb_tts_info":
         await query.message.reply_text(
             "🗣️ <b>Speaker & Voice Playback:</b>\n\n"
