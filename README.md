@@ -1,8 +1,13 @@
 # 🛡️ PC Remote Sentinel & Command Center
 
-A secure, full-duplex remote control, system monitoring, and surveillance bot for your Windows PC via Telegram.
+[![Python](https://img.shields.io/badge/Python-3.10%2B-blue.svg?logo=python&logoColor=white)](https://www.python.org/)
+[![Platform](https://img.shields.io/badge/Platform-Windows%2010%20%7C%2011-0078D6.svg?logo=windows&logoColor=white)](https://microsoft.com/windows)
+[![Telegram](https://img.shields.io/badge/Telegram-Bot%20API%20v21%2B-2CA5E0.svg?logo=telegram&logoColor=white)](https://core.telegram.org/bots)
+[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+[![Security](https://img.shields.io/badge/Security-Whitelist%20Locked-brightgreen.svg)](SECURITY.md)
 
-Control your PC from anywhere in the world: inspect diagnostics, capture instant high-resolution desktop screenshots, record 10-second screen clips, trigger webcam security snapshots, adjust audio, execute text-to-speech, manage power states (sleep, shutdown timers), and drop incoming files directly onto your hard drive.
+> **A secure, full-duplex remote control, system monitoring, surveillance, and automation bot for Windows PC via Telegram.**  
+> Remotely capture desktop screenshots, record screen videos (up to 2 minutes), capture webcam security feeds, control media and volume, play voice notes on laptop speakers, sync clipboards, and monitor system diagnostics from your phone anywhere in the world.
 
 ---
 
