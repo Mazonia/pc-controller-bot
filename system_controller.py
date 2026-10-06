@@ -240,6 +240,33 @@ class SystemController:
             logger.error(f"Monitor off error: {e}")
             return False
 
+    @staticmethod
+    def turn_on_monitors() -> bool:
+        """Wake up and power on monitors immediately."""
+        try:
+            HWND_BROADCAST = 0xFFFF
+            WM_SYSCOMMAND = 0x0112
+            SC_MONITORPOWER = 0xF170
+            MONITOR_ON = -1
+
+            # 1. Broadcast WM_SYSCOMMAND to power on display
+            ctypes.windll.user32.SendMessageW(HWND_BROADCAST, WM_SYSCOMMAND, SC_MONITORPOWER, MONITOR_ON)
+
+            # 2. Inform power subsystem that display is required (resets idle timers)
+            ES_SYSTEM_REQUIRED = 0x00000001
+            ES_DISPLAY_REQUIRED = 0x00000002
+            ctypes.windll.kernel32.SetThreadExecutionState(ES_SYSTEM_REQUIRED | ES_DISPLAY_REQUIRED)
+
+            # 3. Simulate relative hardware mouse movement to wake physical display controller
+            MOUSEEVENTF_MOVE = 0x0001
+            ctypes.windll.user32.mouse_event(MOUSEEVENTF_MOVE, 1, 0, 0, 0)
+            time.sleep(0.02)
+            ctypes.windll.user32.mouse_event(MOUSEEVENTF_MOVE, -1, 0, 0, 0)
+            return True
+        except Exception as e:
+            logger.error(f"Monitor on error: {e}")
+            return False
+
     # ── Audio & Speech Controls ─────────────────────────────────────────
 
     @staticmethod

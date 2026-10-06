@@ -204,7 +204,7 @@ def get_power_keyboard() -> InlineKeyboardMarkup:
         ],
         [
             InlineKeyboardButton("🖥️ Turn Off Monitors", callback_data="cb_pwr_monitor_off"),
-            InlineKeyboardButton("🛑 Shutdown Now", callback_data="cb_pwr_shutdown_now"),
+            InlineKeyboardButton("💡 Turn On Monitors", callback_data="cb_pwr_monitor_on"),
         ],
         [
             InlineKeyboardButton("⏳ Shutdown in 15m", callback_data="cb_pwr_shut_15"),
@@ -215,7 +215,10 @@ def get_power_keyboard() -> InlineKeyboardMarkup:
             InlineKeyboardButton("❌ Cancel Shutdown", callback_data="cb_pwr_shut_cancel"),
         ],
         [
+            InlineKeyboardButton("🛑 Shutdown Now", callback_data="cb_pwr_shutdown_now"),
             InlineKeyboardButton("🔄 Restart PC", callback_data="cb_pwr_restart"),
+        ],
+        [
             InlineKeyboardButton("🔙 Back to Main Menu", callback_data="cb_menu"),
         ]
     ])
@@ -845,6 +848,28 @@ async def handle_cancelalarm(update: Update, context: ContextTypes.DEFAULT_TYPE)
         await update.message.reply_text("ℹ️ No active scheduled alarm found to cancel.")
 
 
+async def handle_monitor(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Turn monitors on or off: /monitor [on|off]"""
+    if not is_authorized(update.effective_user.id):
+        await notify_unauthorized_access(update, context)
+        return
+
+    action = "on"
+    if context.args:
+        arg = context.args[0].lower().strip()
+        if arg in ("off", "sleep", "down"):
+            action = "off"
+        elif arg in ("on", "wake", "up", "start"):
+            action = "on"
+
+    if action == "on":
+        SystemController.turn_on_monitors()
+        await update.message.reply_text("💡 <b>Monitors powered on / awakened.</b>", parse_mode="HTML")
+    else:
+        SystemController.turn_off_monitors()
+        await update.message.reply_text("🖥️ <b>Monitors put to sleep.</b>", parse_mode="HTML")
+
+
 async def handle_incoming_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Save any received document/photo into downloads directory on PC and play if audio."""
     if not is_authorized(update.effective_user.id):
@@ -1107,6 +1132,9 @@ async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data == "cb_pwr_monitor_off":
         SystemController.turn_off_monitors()
         await query.message.reply_text("🖥️ Monitors put to sleep.")
+    elif data == "cb_pwr_monitor_on":
+        SystemController.turn_on_monitors()
+        await query.message.reply_text("💡 Monitors powered on / awakened.")
     elif data == "cb_pwr_shutdown_now":
         await query.message.reply_text("🛑 Shutting down PC immediately...")
         SystemController.shutdown_pc(0)
@@ -1161,6 +1189,7 @@ def main():
     app.add_handler(CommandHandler(["alarm", "timer"], handle_alarm))
     app.add_handler(CommandHandler(["stopalarm", "silence"], handle_stopalarm))
     app.add_handler(CommandHandler(["cancelalarm"], handle_cancelalarm))
+    app.add_handler(CommandHandler("monitor", handle_monitor))
     app.add_handler(MessageHandler(filters.VOICE | filters.AUDIO, handle_incoming_voice))
     app.add_handler(MessageHandler(filters.Document.ALL, handle_incoming_file))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_incoming_text))
@@ -1181,6 +1210,7 @@ def main():
             BotCommand("alarm", "PC Alarm & Timer (/alarm 20m Label)"),
             BotCommand("stopalarm", "Silence ringing alarm"),
             BotCommand("cancelalarm", "Cancel pending scheduled alarm"),
+            BotCommand("monitor", "Turn monitors on/off (/monitor on|off)"),
             BotCommand("top", "List Top RAM & CPU Processes"),
             BotCommand("kill", "Kill Process (/kill notepad.exe)"),
             BotCommand("say", "Speak text aloud on PC speakers"),
