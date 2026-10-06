@@ -240,32 +240,42 @@ class SystemController:
     # ── Audio & Speech Controls ─────────────────────────────────────────
 
     @staticmethod
-    def change_volume(action: str) -> bool:
+    def control_media(action: str) -> bool:
         """
-        Adjust master system volume using Windows virtual keystrokes.
-        action: 'up', 'down', 'mute'
+        Adjust volume and media playback via Windows virtual keystrokes.
+        action: 'up', 'down', 'mute', 'play_pause', 'next', 'prev'
         """
         VK_VOLUME_MUTE = 0xAD
         VK_VOLUME_DOWN = 0xAE
         VK_VOLUME_UP = 0xAF
+        VK_MEDIA_NEXT_TRACK = 0xB0
+        VK_MEDIA_PREV_TRACK = 0xB1
+        VK_MEDIA_PLAY_PAUSE = 0xCD
 
         code_map = {
             "up": VK_VOLUME_UP,
             "down": VK_VOLUME_DOWN,
-            "mute": VK_VOLUME_MUTE
+            "mute": VK_VOLUME_MUTE,
+            "play_pause": VK_MEDIA_PLAY_PAUSE,
+            "next": VK_MEDIA_NEXT_TRACK,
+            "prev": VK_MEDIA_PREV_TRACK,
         }
         vk = code_map.get(action.lower())
         if not vk:
             return False
 
         try:
-            # Send key down and up
             ctypes.windll.user32.keybd_event(vk, 0, 0, 0)
             ctypes.windll.user32.keybd_event(vk, 0, 2, 0)
             return True
         except Exception as e:
-            logger.error(f"Volume error: {e}")
+            logger.error(f"Media control error: {e}")
             return False
+
+    @staticmethod
+    def change_volume(action: str) -> bool:
+        """Backward-compatible alias for control_media."""
+        return SystemController.control_media(action)
 
     @staticmethod
     def speak_text(text: str) -> bool:
@@ -407,8 +417,76 @@ class SystemController:
             return False, f"No running process found matching '{target}'"
 
     @staticmethod
-    def run_cmd(command: str) -> Tuple[int, str]:
-        """Execute terminal command and capture output."""
+    def get_clipboard() -> str:
+        """Read current text contents from Windows clipboard."""
+        try:
+            import win32clipboard, win32con
+            win32clipboard.OpenClipboard()
+            try:
+                if win32clipboard.IsClipboardFormatAvailable(win32con.CF_UNICODETEXT):
+                    data = win32clipboard.GetClipboardData(win32con.CF_UNICODETEXT)
+                    return data if data else "[Clipboard text is empty]"
+                return "[Clipboard does not contain text]"
+            finally:
+                win32clipboard.CloseClipboard()
+        except Exception as e:
+            logger.error(f"Clipboard read error: {e}")
+            return f"[Error reading clipboard: {e}]"
+
+    @staticmethod
+    def set_clipboard(text: str) -> bool:
+        """Copy text to Windows clipboard."""
+        try:
+            import win32clipboard, win32con
+            win32clipboard.OpenClipboard()
+            try:
+                win32clipboard.EmptyClipboard()
+                win32clipboard.SetClipboardData(win32con.CF_UNICODETEXT, text)
+                return True
+            finally:
+                win32clipboard.CloseClipboard()
+        except Exception as e:
+            logger.error(f"Clipboard write error: {e}")
+            return False
+
+    @staticmethod
+    def cleanup_old_files(recordings_dir: Path, downloads_dir: Path, max_age_days: int = 3) -> Tuple[int, int]:
+        """Delete recordings and temp files older than max_age_days. Returns (count, bytes_freed)."""
+        deleted_count = 0
+        freed_bytes = 0
+        now = time.time()
+        max_age_sec = max_age_days * 86400
+
+        for folder in [recordings_dir, downloads_dir]:
+            if not folder.exists():
+                continue
+            for item in folder.iterdir():
+                if item.is_file():
+                    try:
+                        mtime = item.stat().st_mtime
+                        if now - mtime > max_age_sec:
+                            sz = item.stat().st_size
+                            item.unlink()
+                            deleted_count += 1
+                            freed_bytes += sz
+                    except Exception as e:
+                        logger.warning(f"Could not remove old file {item.name}: {e}")
+        return deleted_count, freed_bytes
+
+    @staticmethod
+    def run_cmd(command: str, bot_token: str = "") -> Tuple[int, str]:
+        """Execute terminal command securely with dangerous command blocking and token masking."""
+        cmd_lower = command.lower().strip()
+
+        # Security policy: Block credential extraction & catastrophic system destruction
+        blocked_keywords = [
+            ".env", "type .env", "cat .env", "get-content .env",
+            "format ", "diskpart", "del /f /s /q c:", "rmdir /s /q c:"
+        ]
+        for pattern in blocked_keywords:
+            if pattern in cmd_lower:
+                return -1, f"⛔ Security Violation: Execution of command containing '{pattern}' is blocked by Sentinel policy."
+
         try:
             proc = subprocess.run(
                 command,
@@ -418,7 +496,13 @@ class SystemController:
                 timeout=30
             )
             out = proc.stdout if proc.stdout else proc.stderr
-            return proc.returncode, out.strip() or "[Command finished with no output]"
+            res_str = out.strip() or "[Command finished with no output]"
+
+            # Prevent token leakage if environment variables are dumped
+            if bot_token and bot_token in res_str:
+                res_str = res_str.replace(bot_token, "[PROTECTED_BOT_TOKEN]")
+
+            return proc.returncode, res_str
         except subprocess.TimeoutExpired:
             return -1, "Command timed out after 30 seconds."
         except Exception as e:

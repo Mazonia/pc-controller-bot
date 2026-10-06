@@ -38,12 +38,52 @@ import config
 from system_controller import SystemController
 
 
+# ── Security & Locks ──────────────────────────────────────────────────
+
+hardware_lock = asyncio.Lock()
+unauthorized_alert_cooldown: dict[int, float] = {}
+
+
 def is_authorized(user_id: int) -> bool:
     """Check if sender ID is in authorized whitelist."""
     if not config.AUTHORIZED_USER_IDS:
         return False
     return user_id in config.AUTHORIZED_USER_IDS
 
+
+async def notify_unauthorized_access(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Notify authorized owners of unauthorized access attempts with rate-limiting."""
+    user = update.effective_user
+    user_id = user.id if user else 0
+    username = f"@{user.username}" if user and user.username else f"User {user_id}"
+
+    # 60s cooldown per user ID to prevent spam/flooding
+    now = datetime.now().timestamp()
+    if now - unauthorized_alert_cooldown.get(user_id, 0) < 60:
+        return
+    unauthorized_alert_cooldown[user_id] = now
+
+    action = update.message.text if update.message and update.message.text else (
+        update.callback_query.data if update.callback_query else "Unknown"
+    )
+    logger.warning(f"🚨 UNAUTHORIZED ACCESS BLOCKED: {username} ({user_id}) -> {action}")
+
+    alert_text = (
+        f"🚨 <b>SECURITY ALERT: UNAUTHORIZED ACCESS BLOCKED</b>\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"👤 <b>Attempted By:</b> {html.escape(username)} (ID: <code>{user_id}</code>)\n"
+        f"🕒 <b>Timestamp:</b> <code>{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</code>\n"
+        f"🎯 <b>Action:</b> <code>{html.escape(action[:120])}</code>\n\n"
+        f"🛡️ <i>The request was immediately denied and blocked by Sentinel.</i>"
+    )
+    for owner_id in config.AUTHORIZED_USER_IDS:
+        try:
+            await context.bot.send_message(chat_id=owner_id, text=alert_text, parse_mode="HTML")
+        except Exception:
+            pass
+
+
+# ── Interactive Keyboards ──────────────────────────────────────────────
 
 def get_main_keyboard() -> InlineKeyboardMarkup:
     """Create the primary interactive Command Center keyboard."""
@@ -53,20 +93,24 @@ def get_main_keyboard() -> InlineKeyboardMarkup:
             InlineKeyboardButton("📸 Screenshot", callback_data="cb_shot"),
         ],
         [
-            InlineKeyboardButton("📷 Webcam Selfie", callback_data="cb_webcam"),
+            InlineKeyboardButton("📷 Webcam Menu", callback_data="cb_webcam_menu"),
             InlineKeyboardButton("🎥 Screen Video", callback_data="cb_screen_menu"),
         ],
         [
             InlineKeyboardButton("⚡ Power & Sleep", callback_data="cb_power_menu"),
-            InlineKeyboardButton("🔊 Volume Control", callback_data="cb_volume_menu"),
+            InlineKeyboardButton("🎵 Media & Volume", callback_data="cb_media_menu"),
         ],
         [
             InlineKeyboardButton("💻 Top Processes", callback_data="cb_top"),
-            InlineKeyboardButton("🗣️ Speak / TTS", callback_data="cb_tts_info"),
+            InlineKeyboardButton("📋 Clipboard Tools", callback_data="cb_clip_menu"),
         ],
         [
-            InlineKeyboardButton("🚨 Play Alert Alarm", callback_data="cb_alarm"),
-            InlineKeyboardButton("🔄 Refresh Menu", callback_data="cb_menu"),
+            InlineKeyboardButton("🗣️ Speak / TTS", callback_data="cb_tts_info"),
+            InlineKeyboardButton("🚨 Play Alert Siren", callback_data="cb_alarm"),
+        ],
+        [
+            InlineKeyboardButton("🧹 Clean Storage", callback_data="cb_clean"),
+            InlineKeyboardButton("🔄 Refresh Dashboard", callback_data="cb_menu"),
         ]
     ])
 
@@ -86,6 +130,53 @@ def get_screen_keyboard() -> InlineKeyboardMarkup:
         [
             InlineKeyboardButton("⏱️ 1 Min (60s)", callback_data="cb_rec_screen_60"),
             InlineKeyboardButton("⏱️ 2 Mins (120s)", callback_data="cb_rec_screen_120"),
+        ],
+        [
+            InlineKeyboardButton("🔙 Back to Main Menu", callback_data="cb_menu"),
+        ]
+    ])
+
+
+def get_webcam_keyboard() -> InlineKeyboardMarkup:
+    """Create webcam actions selector."""
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("📸 Snapshot Photo", callback_data="cb_webcam_shot"),
+        ],
+        [
+            InlineKeyboardButton("📹 Record 10s Clip", callback_data="cb_rec_webcam_10"),
+            InlineKeyboardButton("📹 Record 30s Clip", callback_data="cb_rec_webcam_30"),
+        ],
+        [
+            InlineKeyboardButton("🔙 Back to Main Menu", callback_data="cb_menu"),
+        ]
+    ])
+
+
+def get_media_keyboard() -> InlineKeyboardMarkup:
+    """Create interactive media playback and volume controller keyboard."""
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("🔊 Volume +10%", callback_data="cb_vol_up"),
+            InlineKeyboardButton("🔉 Volume -10%", callback_data="cb_vol_down"),
+            InlineKeyboardButton("🔇 Mute", callback_data="cb_vol_mute"),
+        ],
+        [
+            InlineKeyboardButton("⏮️ Previous", callback_data="cb_media_prev"),
+            InlineKeyboardButton("⏯️ Play / Pause", callback_data="cb_media_play_pause"),
+            InlineKeyboardButton("⏭️ Next", callback_data="cb_media_next"),
+        ],
+        [
+            InlineKeyboardButton("🔙 Back to Main Menu", callback_data="cb_menu"),
+        ]
+    ])
+
+
+def get_clipboard_keyboard() -> InlineKeyboardMarkup:
+    """Create clipboard tools keyboard."""
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("📋 Read PC Clipboard", callback_data="cb_clip_read"),
         ],
         [
             InlineKeyboardButton("🔙 Back to Main Menu", callback_data="cb_menu"),
@@ -124,20 +215,6 @@ def get_power_keyboard() -> InlineKeyboardMarkup:
         ],
         [
             InlineKeyboardButton("🔄 Restart PC", callback_data="cb_pwr_restart"),
-            InlineKeyboardButton("🔙 Back to Main Menu", callback_data="cb_menu"),
-        ]
-    ])
-
-
-def get_volume_keyboard() -> InlineKeyboardMarkup:
-    """Create interactive volume controller keyboard."""
-    return InlineKeyboardMarkup([
-        [
-            InlineKeyboardButton("🔊 Volume +10%", callback_data="cb_vol_up"),
-            InlineKeyboardButton("🔉 Volume -10%", callback_data="cb_vol_down"),
-        ],
-        [
-            InlineKeyboardButton("🔇 Mute / Unmute", callback_data="cb_vol_mute"),
             InlineKeyboardButton("🔙 Back to Main Menu", callback_data="cb_menu"),
         ]
     ])
@@ -204,44 +281,65 @@ async def handle_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def handle_screenshot(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /shot or /screenshot command."""
     if not is_authorized(update.effective_user.id):
+        await notify_unauthorized_access(update, context)
         return
-    msg = await (update.effective_message.reply_text("📸 <i>Capturing desktop screenshot...</i>", parse_mode="HTML"))
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    shot_path = config.RECORDINGS_DIR / f"shot_{timestamp}.png"
-    if SystemController.take_screenshot(shot_path):
-        with open(shot_path, "rb") as f:
-            await update.effective_chat.send_photo(photo=f, caption=f"🖥️ <b>PC Desktop Screenshot</b>\n📅 {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}", parse_mode="HTML")
-        try:
-            await msg.delete()
-        except Exception:
-            pass
-    else:
-        await msg.edit_text("❌ Failed to capture screenshot.")
+
+    if hardware_lock.locked():
+        await update.effective_message.reply_text("⏳ <i>Hardware device is currently in use. Please wait a moment.</i>", parse_mode="HTML")
+        return
+
+    async with hardware_lock:
+        msg = await update.effective_message.reply_text("📸 <i>Capturing desktop screenshot...</i>", parse_mode="HTML")
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        shot_path = config.RECORDINGS_DIR / f"shot_{timestamp}.png"
+        ok = await asyncio.to_thread(SystemController.take_screenshot, shot_path)
+        if ok and shot_path.exists():
+            with open(shot_path, "rb") as f:
+                await update.effective_chat.send_photo(photo=f, caption=f"🖥️ <b>PC Desktop Screenshot</b>\n📅 {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}", parse_mode="HTML")
+            try:
+                await msg.delete()
+            except Exception:
+                pass
+        else:
+            await msg.edit_text("❌ Failed to capture screenshot.")
 
 
 async def handle_webcam(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /webcam snapshot command."""
     if not is_authorized(update.effective_user.id):
+        await notify_unauthorized_access(update, context)
         return
-    msg = await (update.effective_message.reply_text("📷 <i>Accessing webcam sensor...</i>", parse_mode="HTML"))
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    photo_path = config.RECORDINGS_DIR / f"webcam_{timestamp}.jpg"
-    ok, status = SystemController.take_webcam_photo(photo_path)
-    if ok:
-        with open(photo_path, "rb") as f:
-            await update.effective_chat.send_photo(photo=f, caption=f"📷 <b>PC Webcam Snapshot</b>\n📅 {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}", parse_mode="HTML")
-        try:
-            await msg.delete()
-        except Exception:
-            pass
-    else:
-        await msg.edit_text(f"❌ Webcam capture failed: {status}")
+
+    if hardware_lock.locked():
+        await update.effective_message.reply_text("⏳ <i>Camera device is currently busy. Please wait a moment.</i>", parse_mode="HTML")
+        return
+
+    async with hardware_lock:
+        msg = await update.effective_message.reply_text("📷 <i>Accessing webcam sensor...</i>", parse_mode="HTML")
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        photo_path = config.RECORDINGS_DIR / f"webcam_{timestamp}.jpg"
+        ok, status = await asyncio.to_thread(SystemController.take_webcam_photo, photo_path)
+        if ok and photo_path.exists():
+            with open(photo_path, "rb") as f:
+                await update.effective_chat.send_photo(photo=f, caption=f"📷 <b>PC Webcam Snapshot</b>\n📅 {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}", parse_mode="HTML")
+            try:
+                await msg.delete()
+            except Exception:
+                pass
+        else:
+            await msg.edit_text(f"❌ Webcam capture failed: {status}")
 
 
 async def execute_screen_recording(update: Update, context: ContextTypes.DEFAULT_TYPE, duration: int = 10):
     """Execute desktop screen recording asynchronously and send video."""
     if not is_authorized(update.effective_user.id):
+        await notify_unauthorized_access(update, context)
         return
+
+    if hardware_lock.locked():
+        await update.effective_message.reply_text("⏳ <i>Recording device is currently busy. Please wait for previous job to finish.</i>", parse_mode="HTML")
+        return
+
     duration = min(max(duration, 3), 120)
     msg = await update.effective_message.reply_text(
         f"🎥 <i>Recording {duration}s of desktop screen... (please wait)</i>",
@@ -250,25 +348,27 @@ async def execute_screen_recording(update: Update, context: ContextTypes.DEFAULT
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     video_path = config.RECORDINGS_DIR / f"screen_{timestamp}_{duration}s.mp4"
 
-    ok, status = await asyncio.to_thread(SystemController.record_screen_video, video_path, duration_sec=duration)
-    if ok and video_path.exists():
-        with open(video_path, "rb") as f:
-            await update.effective_chat.send_video(
-                video=f,
-                caption=f"🎥 <b>Desktop Screen Recording ({duration}s)</b>\n📅 {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
-                parse_mode="HTML"
-            )
-        try:
-            await msg.delete()
-        except Exception:
-            pass
-    else:
-        await msg.edit_text(f"❌ Screen recording failed: {status}")
+    async with hardware_lock:
+        ok, status = await asyncio.to_thread(SystemController.record_screen_video, video_path, duration_sec=duration)
+        if ok and video_path.exists():
+            with open(video_path, "rb") as f:
+                await update.effective_chat.send_video(
+                    video=f,
+                    caption=f"🎥 <b>Desktop Screen Recording ({duration}s)</b>\n📅 {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+                    parse_mode="HTML"
+                )
+            try:
+                await msg.delete()
+            except Exception:
+                pass
+        else:
+            await msg.edit_text(f"❌ Screen recording failed: {status}")
 
 
 async def handle_record_screen(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /record_screen [seconds] command or display duration menu."""
     if not is_authorized(update.effective_user.id):
+        await notify_unauthorized_access(update, context)
         return
     if context.args and context.args[0].isdigit():
         duration = int(context.args[0])
@@ -281,27 +381,43 @@ async def handle_record_screen(update: Update, context: ContextTypes.DEFAULT_TYP
         )
 
 
+async def execute_webcam_recording(update: Update, context: ContextTypes.DEFAULT_TYPE, duration: int = 10):
+    """Execute webcam clip recording asynchronously."""
+    if not is_authorized(update.effective_user.id):
+        await notify_unauthorized_access(update, context)
+        return
+
+    if hardware_lock.locked():
+        await update.effective_message.reply_text("⏳ <i>Camera device is currently busy. Please wait a moment.</i>", parse_mode="HTML")
+        return
+
+    duration = min(max(duration, 3), 60)
+    msg = await update.effective_message.reply_text(f"📹 <i>Recording {duration}s from webcam... (please wait)</i>", parse_mode="HTML")
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    video_path = config.RECORDINGS_DIR / f"webcam_video_{timestamp}_{duration}s.mp4"
+
+    async with hardware_lock:
+        ok, status = await asyncio.to_thread(SystemController.record_webcam_video, video_path, duration_sec=duration)
+        if ok and video_path.exists():
+            with open(video_path, "rb") as f:
+                await update.effective_chat.send_video(video=f, caption=f"📹 <b>Webcam Video Clip ({duration}s)</b>", parse_mode="HTML")
+            try:
+                await msg.delete()
+            except Exception:
+                pass
+        else:
+            await msg.edit_text(f"❌ Webcam recording failed: {status}")
+
+
 async def handle_record_webcam(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /record_webcam [seconds] command."""
     if not is_authorized(update.effective_user.id):
+        await notify_unauthorized_access(update, context)
         return
     duration = 10
     if context.args and context.args[0].isdigit():
-        duration = min(max(int(context.args[0]), 3), 60)
-
-    msg = await update.effective_message.reply_text(f"📹 <i>Recording {duration}s from webcam...</i>", parse_mode="HTML")
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    video_path = config.RECORDINGS_DIR / f"webcam_video_{timestamp}.mp4"
-    ok, status = await asyncio.to_thread(SystemController.record_webcam_video, video_path, duration_sec=duration)
-    if ok and video_path.exists():
-        with open(video_path, "rb") as f:
-            await update.effective_chat.send_video(video=f, caption=f"📹 <b>Webcam Video Clip ({duration}s)</b>", parse_mode="HTML")
-        try:
-            await msg.delete()
-        except Exception:
-            pass
-    else:
-        await msg.edit_text(f"❌ Webcam recording failed: {status}")
+        duration = int(context.args[0])
+    await execute_webcam_recording(update, context, duration=duration)
 
 
 async def handle_say(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -376,32 +492,127 @@ async def handle_open(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def handle_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Execute PowerShell/CMD command remotely."""
     if not is_authorized(update.effective_user.id):
+        await notify_unauthorized_access(update, context)
         return
     if not context.args:
         await update.message.reply_text("Usage: <code>/cmd dir</code> or <code>/cmd ipconfig</code>", parse_mode="HTML")
         return
     command = " ".join(context.args)
-    code, output = SystemController.run_cmd(command)
+    code, output = SystemController.run_cmd(command, bot_token=config.BOT_TOKEN)
     emoji = "✅" if code == 0 else "⚠️"
     truncated = output[:3500] if len(output) > 3500 else output
     text = f"{emoji} <b>Command Output (Code {code}):</b>\n<pre>{html.escape(truncated)}</pre>"
     await update.message.reply_text(text, parse_mode="HTML")
 
 
+async def handle_get_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Securely fetch and send a file from PC to Telegram chat."""
+    if not is_authorized(update.effective_user.id):
+        await notify_unauthorized_access(update, context)
+        return
+    if not context.args:
+        await update.message.reply_text("Usage: <code>/get C:\\path\\to\\file.txt</code>", parse_mode="HTML")
+        return
+
+    req_path = Path(" ".join(context.args))
+    if not req_path.is_file():
+        await update.message.reply_text("❌ File not found or is a directory.", parse_mode="HTML")
+        return
+
+    # Security blacklist check
+    sensitive_blacklist = [".env", "id_rsa", "id_ed25519", "sam", "system", "security", ".git", ".ssh", "ntuser.dat"]
+    resolved = req_path.resolve()
+    for item in sensitive_blacklist:
+        if item.lower() in resolved.name.lower() or item.lower() in [p.lower() for p in resolved.parts]:
+            await update.message.reply_text("⛔ <b>Access Denied:</b> This file is protected by Sentinel security policy.", parse_mode="HTML")
+            return
+
+    # Check file size (Telegram limit: 50MB)
+    size_mb = resolved.stat().st_size / (1024 * 1024)
+    if size_mb > 50:
+        await update.message.reply_text(f"⚠️ File is too large ({size_mb:.1f} MB). Telegram upload limit is 50 MB.", parse_mode="HTML")
+        return
+
+    msg = await update.message.reply_text(f"📤 <i>Sending {html.escape(resolved.name)} ({size_mb:.2f} MB)...</i>", parse_mode="HTML")
+    try:
+        with open(resolved, "rb") as f:
+            await update.effective_chat.send_document(
+                document=f,
+                caption=f"📄 <b>File from PC:</b> <code>{html.escape(resolved.name)}</code>\n💾 Size: <code>{size_mb:.2f} MB</code>",
+                parse_mode="HTML"
+            )
+        try:
+            await msg.delete()
+        except Exception:
+            pass
+    except Exception as e:
+        await msg.edit_text(f"❌ Failed to send file: {e}")
+
+
+async def handle_clip(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Set PC clipboard text: /clip <text>"""
+    if not is_authorized(update.effective_user.id):
+        await notify_unauthorized_access(update, context)
+        return
+    if not context.args:
+        await update.message.reply_text("Usage: <code>/clip Text to copy onto PC clipboard</code>", parse_mode="HTML")
+        return
+    text = " ".join(context.args)
+    ok = SystemController.set_clipboard(text)
+    if ok:
+        await update.message.reply_text(f"📋 <b>Copied to PC Clipboard!</b>\n<pre>{html.escape(text)}</pre>", parse_mode="HTML")
+    else:
+        await update.message.reply_text("❌ Failed to set PC clipboard.")
+
+
+async def handle_getclip(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Read PC clipboard text: /getclip"""
+    if not is_authorized(update.effective_user.id):
+        await notify_unauthorized_access(update, context)
+        return
+    content = SystemController.get_clipboard()
+    await update.message.reply_text(f"📋 <b>PC Clipboard Content:</b>\n<pre>{html.escape(content)}</pre>", parse_mode="HTML")
+
+
+async def handle_clean(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Clean old recordings and temporary files older than 3 days."""
+    if not is_authorized(update.effective_user.id):
+        await notify_unauthorized_access(update, context)
+        return
+    count, bytes_freed = SystemController.cleanup_old_files(config.RECORDINGS_DIR, config.DOWNLOADS_DIR, max_age_days=3)
+    mb_freed = round(bytes_freed / (1024 * 1024), 2)
+    await update.message.reply_text(
+        f"🧹 <b>Storage Cleanup Completed!</b>\n\n"
+        f"• Files Deleted: <code>{count}</code>\n"
+        f"• Disk Space Freed: <code>{mb_freed} MB</code>",
+        parse_mode="HTML"
+    )
+
+
 async def handle_incoming_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Save any received document/photo into downloads directory on PC and play if audio."""
     if not is_authorized(update.effective_user.id):
+        await notify_unauthorized_access(update, context)
         return
     doc = update.message.document
     if not doc:
         return
+
+    raw_name = Path(doc.file_name or "downloaded_file").name
+    safe_name = "".join(c for c in raw_name if c.isalnum() or c in "._- ") or "file.bin"
+    save_path = (config.DOWNLOADS_DIR / safe_name).resolve()
+
+    # Path traversal protection
+    if not str(save_path).startswith(str(config.DOWNLOADS_DIR.resolve())):
+        await update.message.reply_text("⛔ Security Violation: Invalid path.", parse_mode="HTML")
+        return
+
     file_obj = await context.bot.get_file(doc.file_id)
-    save_path = config.DOWNLOADS_DIR / doc.file_name
     await file_obj.download_to_drive(save_path)
 
     # If document is an audio file, also play it aloud
-    if doc.file_name and Path(doc.file_name).suffix.lower() in [".mp3", ".wav", ".ogg", ".m4a", ".flac"]:
-        await update.message.reply_text(f"🔊 <i>Playing audio document on PC speakers:</i> <code>{html.escape(doc.file_name)}</code>", parse_mode="HTML")
+    if save_path.suffix.lower() in [".mp3", ".wav", ".ogg", ".m4a", ".flac"]:
+        await update.message.reply_text(f"🔊 <i>Playing audio document on PC speakers:</i> <code>{html.escape(save_path.name)}</code>", parse_mode="HTML")
         await asyncio.to_thread(SystemController.play_audio_file, save_path)
 
     await update.message.reply_text(
@@ -505,8 +716,14 @@ async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await handle_status(update, context)
     elif data == "cb_shot":
         await handle_screenshot(update, context)
-    elif data == "cb_webcam":
+    elif data in ("cb_webcam", "cb_webcam_menu"):
+        await query.edit_message_text("📷 <b>WEBCAM SURVEILLANCE MENU</b>\nSelect an action:", reply_markup=get_webcam_keyboard(), parse_mode="HTML")
+    elif data == "cb_webcam_shot":
         await handle_webcam(update, context)
+    elif data == "cb_rec_webcam_10":
+        await execute_webcam_recording(update, context, duration=10)
+    elif data == "cb_rec_webcam_30":
+        await execute_webcam_recording(update, context, duration=30)
     elif data == "cb_screen_menu":
         await query.edit_message_text("🎥 <b>DESKTOP SCREEN RECORDING</b>\nSelect recording duration:", reply_markup=get_screen_keyboard(), parse_mode="HTML")
     elif data.startswith("cb_rec_screen_"):
@@ -516,6 +733,23 @@ async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text("🎥 <b>DESKTOP SCREEN RECORDING</b>\nSelect recording duration:", reply_markup=get_screen_keyboard(), parse_mode="HTML")
     elif data == "cb_top":
         await handle_top(update, context)
+    elif data == "cb_clip_menu":
+        clip_preview = SystemController.get_clipboard()
+        truncated = clip_preview[:250] + ("..." if len(clip_preview) > 250 else "")
+        await query.edit_message_text(
+            f"📋 <b>PC CLIPBOARD MANAGER</b>\n\n"
+            f"<b>Current Clipboard:</b>\n<pre>{html.escape(truncated)}</pre>\n\n"
+            f"<i>To copy text to PC from your phone, send:</i>\n<code>/clip Your text here</code>",
+            reply_markup=get_clipboard_keyboard(),
+            parse_mode="HTML"
+        )
+    elif data == "cb_clip_read":
+        clip_full = SystemController.get_clipboard()
+        await query.message.reply_text(f"📋 <b>PC Clipboard Content:</b>\n<pre>{html.escape(clip_full)}</pre>", parse_mode="HTML")
+    elif data == "cb_clean":
+        count, freed = SystemController.cleanup_old_files(config.RECORDINGS_DIR, config.DOWNLOADS_DIR, max_age_days=3)
+        mb = round(freed / (1024 * 1024), 2)
+        await query.answer(f"🧹 Cleaned {count} old files ({mb} MB freed)", show_alert=True)
     elif data == "cb_tts_info":
         await query.message.reply_text(
             "🗣️ <b>Speaker & Voice Playback:</b>\n\n"
@@ -528,17 +762,26 @@ async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.message.reply_text("🚨 <b>Alert Siren Beep sounded on PC!</b>", parse_mode="HTML")
     elif data == "cb_power_menu":
         await query.edit_message_text("⚡ <b>PC POWER & SLEEP MANAGEMENT</b>", reply_markup=get_power_keyboard(), parse_mode="HTML")
-    elif data == "cb_volume_menu":
-        await query.edit_message_text("🔊 <b>SYSTEM AUDIO & VOLUME CONTROLS</b>", reply_markup=get_volume_keyboard(), parse_mode="HTML")
+    elif data == "cb_media_menu":
+        await query.edit_message_text("🎵 <b>MEDIA PLAYBACK & SYSTEM VOLUME</b>", reply_markup=get_media_keyboard(), parse_mode="HTML")
     elif data == "cb_vol_up":
-        SystemController.change_volume("up")
+        SystemController.control_media("up")
         await query.answer("🔊 Volume +10%")
     elif data == "cb_vol_down":
-        SystemController.change_volume("down")
+        SystemController.control_media("down")
         await query.answer("🔉 Volume -10%")
     elif data == "cb_vol_mute":
-        SystemController.change_volume("mute")
+        SystemController.control_media("mute")
         await query.answer("🔇 Mute toggled")
+    elif data == "cb_media_play_pause":
+        SystemController.control_media("play_pause")
+        await query.answer("⏯️ Play / Pause toggled")
+    elif data == "cb_media_next":
+        SystemController.control_media("next")
+        await query.answer("⏭️ Next Track")
+    elif data == "cb_media_prev":
+        SystemController.control_media("prev")
+        await query.answer("⏮️ Previous Track")
     elif data == "cb_pwr_sleep":
         await query.message.reply_text("💤 Putting PC to sleep...")
         SystemController.sleep_pc()
@@ -595,6 +838,10 @@ def main():
     app.add_handler(CommandHandler("say", handle_say))
     app.add_handler(CommandHandler("open", handle_open))
     app.add_handler(CommandHandler("cmd", handle_cmd))
+    app.add_handler(CommandHandler("get", handle_get_file))
+    app.add_handler(CommandHandler("clip", handle_clip))
+    app.add_handler(CommandHandler("getclip", handle_getclip))
+    app.add_handler(CommandHandler("clean", handle_clean))
     app.add_handler(MessageHandler(filters.VOICE | filters.AUDIO, handle_incoming_voice))
     app.add_handler(MessageHandler(filters.Document.ALL, handle_incoming_file))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_incoming_text))
@@ -602,16 +849,20 @@ def main():
 
     async def post_init(application):
         cmds = [
-            BotCommand("start", "Command Center & Dashboard"),
-            BotCommand("status", "CPU, RAM, Disk & Uptime Diagnostics"),
+            BotCommand("start", "Command Center Dashboard"),
+            BotCommand("status", "System Diagnostics (CPU, RAM, Uptime)"),
             BotCommand("shot", "Instant Desktop Screenshot"),
             BotCommand("webcam", "Capture Webcam Snapshot"),
             BotCommand("record_screen", "Record Desktop Screen (10s-120s)"),
             BotCommand("record_webcam", "Record Webcam Video Clip"),
             BotCommand("top", "List Top RAM & CPU Processes"),
-            BotCommand("kill", "Kill Process (e.g. /kill notepad.exe)"),
+            BotCommand("kill", "Kill Process (/kill notepad.exe)"),
             BotCommand("say", "Speak text aloud on PC speakers"),
-            BotCommand("open", "Open URL or App (e.g. /open https://...)"),
+            BotCommand("clip", "Copy text to PC clipboard"),
+            BotCommand("getclip", "Read PC clipboard content"),
+            BotCommand("get", "Securely fetch file from PC"),
+            BotCommand("clean", "Free disk space (cleanup old recordings)"),
+            BotCommand("open", "Open URL or App on PC"),
             BotCommand("cmd", "Execute Terminal Command"),
         ]
         try:
@@ -619,6 +870,31 @@ def main():
             logger.info("Registered Telegram menu commands.")
         except Exception as e:
             logger.warning(f"Could not register commands: {e}")
+
+        # Broadcast Sentinel Online status to authorized owners
+        import socket
+        try:
+            hostname = socket.gethostname()
+            local_ip = socket.gethostbyname(hostname)
+        except Exception:
+            hostname = "Windows PC"
+            local_ip = "127.0.0.1"
+
+        stats = SystemController.get_system_stats()
+        startup_msg = (
+            f"🛡️ <b>PC REMOTE SENTINEL ONLINE</b> ⚡\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"💻 <b>Host:</b> <code>{html.escape(hostname)}</code> (<code>{local_ip}</code>)\n"
+            f"⏱️ <b>Uptime:</b> <code>{stats['uptime']}</code>\n"
+            f"🔋 <b>Battery:</b> <code>{stats['battery']}</code>\n"
+            f"🧠 <b>RAM Used:</b> <code>{stats['memory_percent']}%</code>\n\n"
+            f"<i>Sentinel is active and monitoring for commands.</i>"
+        )
+        for uid in config.AUTHORIZED_USER_IDS:
+            try:
+                await application.bot.send_message(chat_id=uid, text=startup_msg, reply_markup=get_main_keyboard(), parse_mode="HTML")
+            except Exception as e:
+                logger.warning(f"Could not deliver startup message to {uid}: {e}")
 
     app.post_init = post_init
     logger.info("🛡️ PC Remote Sentinel Bot is running and actively listening...")

@@ -33,3 +33,26 @@ We take the security of **PC Remote Sentinel & Command Center** seriously. If yo
 * **Never share your Telegram Bot Token**: Anyone with this token can control your bot.
 * **Set Authorized User IDs**: Always restrict access using `AUTHORIZED_USER_IDS` in `.env` to prevent unauthorized parties from accessing bot functions.
 * **Keep `.env` in `.gitignore`**: Never push configuration files containing live secrets to public repositories.
+
+---
+
+## 🛡️ Built-in Security Controls
+
+PC Remote Sentinel implements multiple layers of defense-in-depth protection:
+
+1. **Intruder Detection & Alerting**:
+   - Any message or button interaction from an unauthorized Telegram account is rejected instantly.
+   - Authorized owners receive an immediate alert containing the intruder's ID, username, and timestamp.
+   - Built-in rate limiting prevents notification flood attacks.
+
+2. **Credential & Secret Protection**:
+   - Terminal command execution via `/cmd` strictly blocks inspection of `.env` and credential files.
+   - Bot API tokens are automatically masked from all terminal command output and logs.
+
+3. **Path Traversal & File Access Isolation**:
+   - All incoming file drops are restricted to `downloads/` with strict basename sanitization.
+   - Remote file fetching (`/get`) explicitly blacklists credential, SSH, registry, and configuration files (`.env`, `id_rsa`, `sam`, `.git`, etc.).
+
+4. **Hardware Concurrency Locks**:
+   - Webcam and screen recording operations use asynchronous locks to prevent race conditions or device lock-up.
+
