@@ -1,0 +1,6 @@
+.env
+recordings/
+downloads/
+__pycache__/
+*.pyc
+*.exe
