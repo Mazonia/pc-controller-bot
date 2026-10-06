@@ -6,10 +6,13 @@ Handles OS hardware metrics, webcam, screen capture/recording, power, and audio 
 import os
 import sys
 import time
+import math
+import re
+import threading
 import ctypes
 import subprocess
 import winsound
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Dict, Any, List, Optional, Tuple
 
@@ -345,14 +348,34 @@ class SystemController:
             return False, str(e)
 
     @staticmethod
-    def play_alert_siren() -> None:
-        """Play alert siren sounds through PC speaker/audio output."""
-        try:
-            for _ in range(3):
-                winsound.Beep(1200, 200)
-                winsound.Beep(800, 200)
-        except Exception:
-            pass
+    def play_alert_siren(label: str = "Instant Alarm") -> None:
+        """Play alert siren sounds and voice alert immediately."""
+        alarm_manager.trigger_alarm_now(label)
+
+    @staticmethod
+    def set_alarm(seconds: int, label: str = "Scheduled Alarm", callback=None) -> Dict[str, Any]:
+        """Schedule a PC alarm timer with customizable duration and label."""
+        return alarm_manager.set_alarm(seconds, label, callback)
+
+    @staticmethod
+    def cancel_alarm() -> bool:
+        """Cancel any pending countdown/scheduled alarm."""
+        return alarm_manager.cancel_alarm()
+
+    @staticmethod
+    def stop_alarm() -> bool:
+        """Silence any currently ringing alarm."""
+        return alarm_manager.stop_alarm()
+
+    @staticmethod
+    def get_alarm_status() -> Dict[str, Any]:
+        """Fetch real-time alarm status (idle, scheduled, or ringing)."""
+        return alarm_manager.get_status()
+
+    @staticmethod
+    def parse_alarm_time(text: str) -> Tuple[Optional[int], str]:
+        """Parse customizable time inputs (relative '10m', '45s', or clock '18:30')."""
+        return AlarmManager.parse_time_input(text)
 
     # ── Task Manager & Utilities ────────────────────────────────────────
 
@@ -585,3 +608,187 @@ class SystemController:
         except Exception as e:
             logger.error(f"Open target error: {e}")
             return False
+
+
+class AlarmManager:
+    """
+    Manages custom PC countdown alarms, scheduled clock-time alarms,
+    audible siren loops, and speech synthesis announcements.
+    """
+    def __init__(self):
+        self.active_alarm: Optional[Dict[str, Any]] = None
+        self._ringing: bool = False
+        self._stop_event: threading.Event = threading.Event()
+        self._timer_cancel_event: threading.Event = threading.Event()
+        self._current_label: str = ""
+        self._on_trigger_callback = None
+
+    def set_alarm(self, seconds: int, label: str = "Scheduled Alarm", callback=None) -> Dict[str, Any]:
+        """Set a countdown alarm for X seconds with optional label and trigger callback."""
+        self.cancel_alarm()
+        self._stop_event.clear()
+        self._timer_cancel_event.clear()
+
+        now = time.time()
+        target_time = now + seconds
+        time_str = time.strftime("%H:%M:%S", time.localtime(target_time))
+
+        self.active_alarm = {
+            "target_time": target_time,
+            "target_time_str": time_str,
+            "label": label or "Scheduled Alarm",
+            "duration_sec": seconds,
+            "created_at": now
+        }
+        self._on_trigger_callback = callback
+
+        def _timer_worker():
+            if not self._timer_cancel_event.wait(timeout=seconds):
+                # Alarm triggered!
+                alarm_info = self.active_alarm
+                self.active_alarm = None
+                lbl = alarm_info["label"] if alarm_info else label
+                t_str = alarm_info["target_time_str"] if alarm_info else time_str
+
+                if self._on_trigger_callback:
+                    try:
+                        self._on_trigger_callback(lbl, t_str)
+                    except Exception as err:
+                        logger.error(f"Alarm trigger callback error: {err}")
+
+                self._sound_alarm_loop(lbl)
+
+        t = threading.Thread(target=_timer_worker, daemon=True, name="AlarmTimerThread")
+        t.start()
+        return self.active_alarm
+
+    def cancel_alarm(self) -> bool:
+        """Cancel any pending countdown/scheduled alarm."""
+        had_alarm = self.active_alarm is not None
+        self._timer_cancel_event.set()
+        self.active_alarm = None
+        return had_alarm
+
+    def trigger_alarm_now(self, label: str = "Instant Alarm") -> None:
+        """Sound alarm siren and voice immediately."""
+        self.stop_alarm()
+        t = threading.Thread(target=self._sound_alarm_loop, args=(label,), daemon=True, name="AlarmRingingThread")
+        t.start()
+
+    def stop_alarm(self) -> bool:
+        """Silence any currently ringing alarm."""
+        was_ringing = self._ringing
+        self._stop_event.set()
+        self._ringing = False
+        return was_ringing
+
+    def _sound_alarm_loop(self, label: str):
+        """Sound audible alarm on PC with sirens and speech synthesis."""
+        self._ringing = True
+        self._current_label = label
+        self._stop_event.clear()
+
+        # Unmute and boost PC speaker volume
+        try:
+            SystemController.control_media("up")
+            SystemController.control_media("up")
+        except Exception:
+            pass
+
+        # Speak announcement in background
+        if label:
+            try:
+                SystemController.speak_text(f"Attention! Alarm: {label}")
+            except Exception:
+                pass
+
+        # Sound alternating siren beeps for up to 60s or until stopped
+        start_time = time.time()
+        while not self._stop_event.is_set() and (time.time() - start_time < 60):
+            try:
+                winsound.Beep(1200, 250)
+                if self._stop_event.is_set():
+                    break
+                winsound.Beep(800, 250)
+            except Exception:
+                time.sleep(0.5)
+
+        self._ringing = False
+
+    def get_status(self) -> Dict[str, Any]:
+        """Return real-time alarm status dictionary."""
+        now = time.time()
+        if self._ringing:
+            return {"status": "ringing", "label": self._current_label}
+        if self.active_alarm:
+            rem = max(1, int(math.ceil(self.active_alarm["target_time"] - now)))
+            if rem > 0:
+                mins = rem // 60
+                secs = rem % 60
+                hours = mins // 60
+                mins = mins % 60
+                if hours > 0:
+                    time_left_str = f"{hours}h {mins}m {secs}s"
+                elif mins > 0:
+                    time_left_str = f"{mins}m {secs}s"
+                else:
+                    time_left_str = f"{secs}s"
+
+                return {
+                    "status": "scheduled",
+                    "seconds_left": rem,
+                    "time_left_str": time_left_str,
+                    "target_time_str": self.active_alarm["target_time_str"],
+                    "label": self.active_alarm["label"]
+                }
+        return {"status": "idle"}
+
+    @staticmethod
+    def parse_time_input(input_str: str) -> Tuple[Optional[int], str]:
+        """
+        Parse user time string supporting:
+        - Relative intervals: '10s', '5m', '15m', '1.5h', '2h', '10' (minutes default)
+        - Clock times: '14:30', '7:00am', '8:30pm'
+        Returns (seconds, label).
+        """
+        text = input_str.strip()
+        if not text:
+            return None, ""
+
+        parts = text.split(maxsplit=1)
+        time_part = parts[0].lower().strip()
+        label = parts[1].strip() if len(parts) > 1 else "Scheduled Alarm"
+
+        # 1. Clock time (e.g. 18:30, 7:00, 7:30am, 8:45pm)
+        clock_match = re.match(r"^(\d{1,2}):(\d{2})\s*(am|pm)?$", time_part)
+        if clock_match:
+            h = int(clock_match.group(1))
+            m = int(clock_match.group(2))
+            ampm = clock_match.group(3)
+            if ampm == "pm" and h < 12:
+                h += 12
+            elif ampm == "am" and h == 12:
+                h = 0
+            if 0 <= h <= 23 and 0 <= m <= 59:
+                now = datetime.now()
+                target = now.replace(hour=h, minute=m, second=0, microsecond=0)
+                if target <= now:
+                    target += timedelta(days=1)
+                seconds = int((target - now).total_seconds())
+                return seconds, label
+
+        # 2. Relative intervals (e.g. 30s, 5m, 10m, 1.5h, 2h, or plain numbers like 15)
+        rel_match = re.match(r"^(\d+(?:\.\d+)?)\s*([smhd])?$", time_part)
+        if rel_match:
+            val = float(rel_match.group(1))
+            unit = rel_match.group(2) or "m"
+            multipliers = {"s": 1, "m": 60, "h": 3600, "d": 86400}
+            seconds = int(val * multipliers.get(unit, 60))
+            if seconds > 0:
+                return seconds, label
+
+        return None, label
+
+
+alarm_manager = AlarmManager()
+

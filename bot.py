@@ -106,7 +106,7 @@ def get_main_keyboard() -> InlineKeyboardMarkup:
         ],
         [
             InlineKeyboardButton("🗣️ Speak / TTS", callback_data="cb_tts_info"),
-            InlineKeyboardButton("🚨 Play Alert Siren", callback_data="cb_alarm"),
+            InlineKeyboardButton("⏰ Alarm & Siren", callback_data="cb_alarm_menu"),
         ],
         [
             InlineKeyboardButton("🧹 Clean Storage", callback_data="cb_clean"),
@@ -219,6 +219,81 @@ def get_power_keyboard() -> InlineKeyboardMarkup:
             InlineKeyboardButton("🔙 Back to Main Menu", callback_data="cb_menu"),
         ]
     ])
+
+
+def get_alarm_keyboard(has_active: bool = False, is_ringing: bool = False) -> InlineKeyboardMarkup:
+    """Create interactive Alarm and Timer management keyboard."""
+    buttons = [
+        [
+            InlineKeyboardButton("⏱️ 1 Min", callback_data="cb_alarm_set_60"),
+            InlineKeyboardButton("⏱️ 5 Mins", callback_data="cb_alarm_set_300"),
+            InlineKeyboardButton("⏱️ 10 Mins", callback_data="cb_alarm_set_600"),
+        ],
+        [
+            InlineKeyboardButton("⏱️ 15 Mins", callback_data="cb_alarm_set_900"),
+            InlineKeyboardButton("⏱️ 30 Mins", callback_data="cb_alarm_set_1800"),
+            InlineKeyboardButton("⏱️ 1 Hour", callback_data="cb_alarm_set_3600"),
+        ],
+        [
+            InlineKeyboardButton("🚨 Sound Alarm Now", callback_data="cb_alarm_trigger_now"),
+        ]
+    ]
+
+    action_row = []
+    if is_ringing:
+        action_row.append(InlineKeyboardButton("🔕 Silence Alarm", callback_data="cb_alarm_stop"))
+    if has_active:
+        action_row.append(InlineKeyboardButton("❌ Cancel Scheduled", callback_data="cb_alarm_cancel"))
+
+    if action_row:
+        buttons.append(action_row)
+
+    buttons.append([
+        InlineKeyboardButton("🔄 Refresh Status", callback_data="cb_alarm_menu"),
+        InlineKeyboardButton("🔙 Back to Main Menu", callback_data="cb_menu"),
+    ])
+
+    return InlineKeyboardMarkup(buttons)
+
+
+def format_alarm_menu_text() -> Tuple[str, InlineKeyboardMarkup]:
+    """Format real-time alarm dashboard text and control keyboard."""
+    status_info = SystemController.get_alarm_status()
+    st = status_info["status"]
+
+    lines = ["⏰ <b>PC ALARM & COUNTDOWN TIMER</b>\n"]
+
+    has_active = False
+    is_ringing = False
+
+    if st == "ringing":
+        is_ringing = True
+        lbl = html.escape(status_info.get("label", "Alarm"))
+        lines.append(f"🚨 <b>STATUS: ALARM IS CURRENTLY RINGING ON PC!</b>")
+        lines.append(f"• <b>Label:</b> <code>{lbl}</code>")
+        lines.append(f"• <i>Siren & voice alert are active on PC speakers.</i>\n")
+    elif st == "scheduled":
+        has_active = True
+        lbl = html.escape(status_info.get("label", "Scheduled Alarm"))
+        rem_str = status_info.get("time_left_str", "soon")
+        tgt_str = status_info.get("target_time_str", "")
+        lines.append(f"⏳ <b>STATUS: COUNTDOWN TIMER ACTIVE</b>")
+        lines.append(f"• <b>Target Time:</b> <code>{tgt_str}</code> (in <b>{rem_str}</b>)")
+        lines.append(f"• <b>Label:</b> <code>{lbl}</code>\n")
+    else:
+        lines.append("💤 <b>STATUS: No alarm scheduled</b>\n")
+
+    lines.append(
+        "💡 <b>Set Custom Alarms & Labels:</b>\n"
+        "Send anytime from chat:\n"
+        "• <code>/alarm 20m Check dinner</code>\n"
+        "• <code>/alarm 45s Stretch timer</code>\n"
+        "• <code>/alarm 07:30 Wake up workout</code>\n"
+        "• <code>/alarm cancel</code> or <code>/alarm stop</code>"
+    )
+
+    kb = get_alarm_keyboard(has_active=has_active, is_ringing=is_ringing)
+    return "\n".join(lines), kb
 
 
 # ── Command Handlers ───────────────────────────────────────────────────
@@ -647,6 +722,129 @@ async def handle_clean(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(text, reply_markup=keyboard, parse_mode="HTML")
 
 
+_bot_app = None
+_bot_loop = None
+
+
+def _alarm_trigger_dispatcher(label: str, time_str: str):
+    """Callback fired by AlarmManager when a timer triggers on PC."""
+    global _bot_app, _bot_loop
+    if _bot_app and _bot_loop and _bot_loop.is_running():
+        async def _notify():
+            alert_text = (
+                "🚨 <b>ALARM TRIGGERED ON PC!</b> 🚨\n\n"
+                f"• <b>Label:</b> <code>{html.escape(label)}</code>\n"
+                f"• <b>Trigger Time:</b> <code>{time_str}</code>\n\n"
+                "🔊 <i>Alarm siren and voice alert are actively ringing on your PC speakers!</i>"
+            )
+            kb = InlineKeyboardMarkup([
+                [InlineKeyboardButton("🔕 Silence Alarm", callback_data="cb_alarm_stop")],
+                [InlineKeyboardButton("⏰ Alarm Menu", callback_data="cb_alarm_menu")],
+            ])
+            for owner_id in config.AUTHORIZED_USER_IDS:
+                try:
+                    await _bot_app.bot.send_message(chat_id=owner_id, text=alert_text, reply_markup=kb, parse_mode="HTML")
+                except Exception as err:
+                    logger.error(f"Failed to send alarm alert to {owner_id}: {err}")
+
+        asyncio.run_coroutine_threadsafe(_notify(), _bot_loop)
+
+
+async def handle_alarm(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Manage customizable PC alarms: /alarm [time] [label]"""
+    if not is_authorized(update.effective_user.id):
+        await notify_unauthorized_access(update, context)
+        return
+
+    args = context.args
+    if not args:
+        text, kb = format_alarm_menu_text()
+        await update.message.reply_text(text, reply_markup=kb, parse_mode="HTML")
+        return
+
+    first_arg = args[0].lower().strip()
+    if first_arg in ("cancel", "clear"):
+        if SystemController.cancel_alarm():
+            await update.message.reply_text("✅ <b>Scheduled alarm cancelled.</b>", parse_mode="HTML")
+        else:
+            await update.message.reply_text("ℹ️ No active scheduled alarm found to cancel.")
+        return
+    elif first_arg in ("stop", "silence", "mute"):
+        if SystemController.stop_alarm():
+            await update.message.reply_text("🔕 <b>Alarm silenced successfully.</b>", parse_mode="HTML")
+        else:
+            await update.message.reply_text("ℹ️ No alarm is currently ringing.")
+        return
+    elif first_arg in ("now", "siren"):
+        label = " ".join(args[1:]) if len(args) > 1 else "Instant Alarm"
+        SystemController.play_alert_siren(label)
+        await update.message.reply_text(
+            f"🚨 <b>Alert Siren sounding on PC!</b>\n• <b>Label:</b> <code>{html.escape(label)}</code>",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔕 Silence Alarm", callback_data="cb_alarm_stop")]]),
+            parse_mode="HTML"
+        )
+        return
+
+    raw_input = " ".join(args)
+    seconds, label = SystemController.parse_alarm_time(raw_input)
+    if seconds is None or seconds <= 0:
+        await update.message.reply_text(
+            "⚠️ <b>Invalid alarm time format.</b>\n\n"
+            "<b>Supported Examples:</b>\n"
+            "• <code>/alarm 10m</code> <i>(in 10 minutes)</i>\n"
+            "• <code>/alarm 45s Stretch</code> <i>(in 45 seconds with label)</i>\n"
+            "• <code>/alarm 1.5h Deep Work</code> <i>(in 90 minutes)</i>\n"
+            "• <code>/alarm 18:30 Dinner</code> <i>(at 18:30 clock time)</i>\n"
+            "• <code>/alarm 7:00am Wake up</code> <i>(at 07:00 tomorrow)</i>",
+            parse_mode="HTML"
+        )
+        return
+
+    alarm_info = SystemController.set_alarm(seconds, label, callback=_alarm_trigger_dispatcher)
+    mins = seconds // 60
+    secs = seconds % 60
+    hours = mins // 60
+    mins = mins % 60
+    dur_str = f"{hours}h {mins}m {secs}s" if hours > 0 else (f"{mins}m {secs}s" if mins > 0 else f"{secs}s")
+
+    kb = InlineKeyboardMarkup([
+        [InlineKeyboardButton("❌ Cancel This Alarm", callback_data="cb_alarm_cancel")],
+        [InlineKeyboardButton("⏰ Alarm Menu", callback_data="cb_alarm_menu")],
+    ])
+
+    await update.message.reply_text(
+        f"⏰ <b>PC Alarm Scheduled!</b>\n\n"
+        f"• <b>Duration:</b> <code>{dur_str}</code>\n"
+        f"• <b>Trigger Time:</b> <code>{alarm_info['target_time_str']}</code>\n"
+        f"• <b>Label:</b> <code>{html.escape(label)}</code>\n\n"
+        f"🔊 <i>When the time arrives, PC speakers will announce the label and sound the alarm siren.</i>",
+        reply_markup=kb,
+        parse_mode="HTML"
+    )
+
+
+async def handle_stopalarm(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Silence any active alarm: /stopalarm"""
+    if not is_authorized(update.effective_user.id):
+        await notify_unauthorized_access(update, context)
+        return
+    if SystemController.stop_alarm():
+        await update.message.reply_text("🔕 <b>Alarm silenced.</b>", parse_mode="HTML")
+    else:
+        await update.message.reply_text("ℹ️ No alarm is currently ringing.")
+
+
+async def handle_cancelalarm(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Cancel scheduled alarm: /cancelalarm"""
+    if not is_authorized(update.effective_user.id):
+        await notify_unauthorized_access(update, context)
+        return
+    if SystemController.cancel_alarm():
+        await update.message.reply_text("✅ <b>Scheduled alarm cancelled.</b>", parse_mode="HTML")
+    else:
+        await update.message.reply_text("ℹ️ No active scheduled alarm found to cancel.")
+
+
 async def handle_incoming_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Save any received document/photo into downloads directory on PC and play if audio."""
     if not is_authorized(update.effective_user.id):
@@ -848,9 +1046,33 @@ async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "• <b>Voice Notes:</b> Send a voice note or audio file to play your voice directly through the laptop speakers!",
             parse_mode="HTML"
         )
-    elif data == "cb_alarm":
-        SystemController.play_alert_siren()
-        await query.message.reply_text("🚨 <b>Alert Siren Beep sounded on PC!</b>", parse_mode="HTML")
+    elif data in ("cb_alarm", "cb_alarm_menu"):
+        text, kb = format_alarm_menu_text()
+        await query.edit_message_text(text, reply_markup=kb, parse_mode="HTML")
+    elif data == "cb_alarm_trigger_now":
+        SystemController.play_alert_siren("Instant Alert")
+        await query.answer("🚨 Siren sounding on PC!")
+        text, kb = format_alarm_menu_text()
+        await query.edit_message_text(text, reply_markup=kb, parse_mode="HTML")
+    elif data == "cb_alarm_stop":
+        SystemController.stop_alarm()
+        await query.answer("🔕 Alarm silenced!")
+        text, kb = format_alarm_menu_text()
+        await query.edit_message_text(text, reply_markup=kb, parse_mode="HTML")
+    elif data == "cb_alarm_cancel":
+        if SystemController.cancel_alarm():
+            await query.answer("❌ Scheduled alarm cancelled!")
+        else:
+            await query.answer("ℹ️ No scheduled alarm active.")
+        text, kb = format_alarm_menu_text()
+        await query.edit_message_text(text, reply_markup=kb, parse_mode="HTML")
+    elif data.startswith("cb_alarm_set_"):
+        secs = int(data.split("_")[-1])
+        label = f"{secs // 60}m Timer" if secs >= 60 else f"{secs}s Timer"
+        SystemController.set_alarm(secs, label, callback=_alarm_trigger_dispatcher)
+        await query.answer(f"⏰ Alarm set for {label}!")
+        text, kb = format_alarm_menu_text()
+        await query.edit_message_text(text, reply_markup=kb, parse_mode="HTML")
     elif data == "cb_power_menu":
         await query.edit_message_text("⚡ <b>PC POWER & SLEEP MANAGEMENT</b>", reply_markup=get_power_keyboard(), parse_mode="HTML")
     elif data == "cb_media_menu":
@@ -936,12 +1158,19 @@ def main():
     app.add_handler(CommandHandler("clip", handle_clip))
     app.add_handler(CommandHandler("getclip", handle_getclip))
     app.add_handler(CommandHandler("clean", handle_clean))
+    app.add_handler(CommandHandler(["alarm", "timer"], handle_alarm))
+    app.add_handler(CommandHandler(["stopalarm", "silence"], handle_stopalarm))
+    app.add_handler(CommandHandler(["cancelalarm"], handle_cancelalarm))
     app.add_handler(MessageHandler(filters.VOICE | filters.AUDIO, handle_incoming_voice))
     app.add_handler(MessageHandler(filters.Document.ALL, handle_incoming_file))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_incoming_text))
     app.add_handler(CallbackQueryHandler(callback_router))
 
     async def post_init(application):
+        global _bot_app, _bot_loop
+        _bot_app = application
+        _bot_loop = asyncio.get_running_loop()
+
         cmds = [
             BotCommand("start", "Command Center Dashboard"),
             BotCommand("status", "System Diagnostics (CPU, RAM, Uptime)"),
@@ -949,6 +1178,9 @@ def main():
             BotCommand("webcam", "Capture Webcam Snapshot"),
             BotCommand("record_screen", "Record Desktop Screen (10s-120s)"),
             BotCommand("record_webcam", "Record Webcam Video Clip"),
+            BotCommand("alarm", "PC Alarm & Timer (/alarm 20m Label)"),
+            BotCommand("stopalarm", "Silence ringing alarm"),
+            BotCommand("cancelalarm", "Cancel pending scheduled alarm"),
             BotCommand("top", "List Top RAM & CPU Processes"),
             BotCommand("kill", "Kill Process (/kill notepad.exe)"),
             BotCommand("say", "Speak text aloud on PC speakers"),

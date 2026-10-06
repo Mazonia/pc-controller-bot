@@ -19,12 +19,18 @@
 - 🎬 **Multi-Duration Screen Recorder (`/record_screen`)**: Interactive selector for 10s, 20s, 30s, 40s, 50s, 1 min, or 2 mins of on-screen desktop action into an MP4 video file.
 - ⚡ **Power & Workstation Control**:
   - Sleep PC, Lock workstation, turn off monitors, shutdown timers (15m, 30m, 60m), and PC restart.
+- ⏰ **Customizable PC Alarm & Countdown Timers (`/alarm [time] [label]`)**:
+  - Set relative countdown timers (e.g. `/alarm 10m`, `/alarm 45s Stretch`, `/alarm 1.5h Deep Work`).
+  - Set specific clock-time alarms (e.g. `/alarm 07:30 Wake up workout`, `/alarm 18:30 Dinner`).
+  - Sound audible sirens and speech synthesis voice announcements through PC speakers.
+  - Interactive timer menu with 1m, 5m, 10m, 15m, 30m, and 1h quick presets.
+  - Remote alarm silencing (`/stopalarm`) and cancellation (`/cancelalarm`).
 - 🎵 **Media Player & Volume Controls**:
-  - Play/Pause, Next Track, Previous Track, Volume +/- 10%, and Mute (controls Spotify, YouTube, VLC, Netflix, etc.).
+  - Play/Pause toggle, Stop playback, Next track, Previous track, Volume +/- 10%, and Mute (controls Spotify, YouTube, Chrome, VLC, Edge, etc.).
 - 🔊 **Audio & Speaker Control**:
   - 🗣️ **Direct Type-to-Speak & TTS (`/say <text>`)**: Type any message directly into chat or use `/say` to speak aloud via PC speakers using Windows speech synthesis.
   - 🎙️ **Voice Note Speaker Playback**: Send any voice note or audio file (.ogg, .mp3, .wav) to play your actual voice directly through your laptop/PC speakers.
-  - 🚨 `/siren` / Alert Alarm — Play loud emergency alert audio through speakers.
+  - 🚨 Alert Siren — Play loud emergency alert audio through PC speakers.
 - 📋 **Process & Task Manager**:
   - `/top` — Interactive view of top memory & CPU consuming processes with live refresh.
   - `/kill <name_or_pid>` — Terminate frozen or unwanted processes.
@@ -33,7 +39,7 @@
   - `/getclip` — Read and view the current PC clipboard text remotely.
 - 📤 **Remote File Fetcher (`/get <path>`)**: Securely download any file from your PC directly to your Telegram chat (up to 50MB).
 - 📥 **Remote File Drop**: Send any file, document, or photo to the bot to automatically save it in your PC's `downloads/` folder (with path-traversal protection).
-- 🧹 **Storage Cleaner (`/clean`)**: Purge old recordings and temp files older than 3 days to reclaim disk space.
+- 🧹 **Interactive Storage Cleaner (`/clean`)**: Audit cached recordings and downloads with file names, sizes, and ages, requiring explicit user approval before permanent deletion.
 - 🌐 **Remote Web Launch (`/open <url>`)**: Launch any website or URL in your PC's default web browser.
 - 🛡️ **Enterprise Security Architecture**:
   - **Intruder Detection & Instant Owner Alerting**: Unrecognized Telegram users are immediately blocked and owners receive an alert with the intruder's ID, username, and attempted action.
@@ -128,7 +134,10 @@ To ensure only **you** can control your PC, you must configure your Telegram num
 | `/clip <text>` | Copy text from phone directly onto Windows clipboard |
 | `/getclip` | Read text currently on Windows clipboard |
 | `/get <path>` | Securely download a file from PC to Telegram chat |
-| `/clean` | Cleanup old recordings to free disk space |
+| `/alarm [time] [label]` | Set countdown timer (`10m`, `45s`, `1.5h`) or clock alarm (`18:30`, `7:00am`) |
+| `/stopalarm`, `/silence` | Silence and stop currently ringing PC alarm |
+| `/cancelalarm` | Cancel pending scheduled alarm countdown |
+| `/clean` | Audit & cleanup cached recordings/downloads with user approval |
 | `/open <url>` | Open website or app on PC |
 | `/cmd <command>` | Execute terminal command with token masking & security protection |
 
