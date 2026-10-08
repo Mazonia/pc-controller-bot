@@ -39,8 +39,8 @@ if %errorlevel% equ 0 (
     echo [SUCCESS] PC Remote Sentinel successfully registered in Task Scheduler!
     echo.
     echo Task Name: PC-Remote-Sentinel
-    echo Trigger:   At System Startup (Boot)
-    echo Account:   SYSTEM (Headless 24/7)
+    echo Trigger:   At System Startup [Boot]
+    echo Account:   SYSTEM [Headless 24/7]
     echo.
     echo The bot will now run automatically whenever your PC turns on,
     echo even if no one logs into Windows!
