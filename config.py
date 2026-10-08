@@ -23,3 +23,11 @@ DOWNLOADS_DIR = BASE_DIR / os.getenv("DOWNLOADS_DIR", "downloads")
 
 RECORDINGS_DIR.mkdir(parents=True, exist_ok=True)
 DOWNLOADS_DIR.mkdir(parents=True, exist_ok=True)
+
+# PIN Login Authentication
+BOT_PIN = os.getenv("BOT_PIN", "").strip()
+SESSION_TIMEOUT_MINS = int(os.getenv("SESSION_TIMEOUT_MINS", "60"))
+
+# Remote Screen Casting Tunnel
+ENABLE_PUBLIC_TUNNEL = os.getenv("ENABLE_PUBLIC_TUNNEL", "true").strip().lower() in ("1", "true", "yes")
+STREAM_PORT = int(os.getenv("STREAM_PORT", "8585"))

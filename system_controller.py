@@ -63,18 +63,58 @@ class SystemController:
             "battery": battery_info,
             "uptime": uptime_str,
             "boot_time": boot_time.strftime("%Y-%m-%d %H:%M:%S"),
+            "session_state": SystemController.get_session_state(),
         }
 
     @staticmethod
-    def take_screenshot(output_path: Path) -> bool:
-        """Capture full desktop screenshot."""
+    def ensure_desktop_access() -> bool:
+        """Attach thread to active Windows input desktop."""
         try:
+            try:
+                ctypes.windll.shcore.SetProcessDpiAwareness(2)
+            except Exception:
+                pass
+            hdesk = ctypes.windll.user32.OpenInputDesktop(0, False, 0x01FF)
+            if hdesk:
+                ctypes.windll.user32.SetThreadDesktop(hdesk)
+                return True
+        except Exception:
+            pass
+        return False
+
+    @staticmethod
+    def get_session_state() -> str:
+        """Detect if Windows is at interactive desktop, lock screen, or Session 0."""
+        try:
+            hdesk = ctypes.windll.user32.OpenInputDesktop(0, False, 0x0100)
+            if hdesk:
+                buf = ctypes.create_unicode_buffer(256)
+                size = ctypes.c_uint(0)
+                ctypes.windll.user32.GetUserObjectInformationW(hdesk, 2, buf, 256, ctypes.byref(size))
+                desk = buf.value.lower()
+                if desk == "default":
+                    return "Interactive Desktop (Unlocked) 🟢"
+                elif desk == "winlogon":
+                    return "Windows Login / Lock Screen 🔒"
+                return f"{buf.value} 🖥️"
+        except Exception:
+            pass
+        return "Pre-Login / Session 0 🔒"
+
+    @staticmethod
+    def take_screenshot(output_path: Path) -> Tuple[bool, str]:
+        """Capture full desktop screenshot with graceful pre-login detection."""
+        try:
+            SystemController.ensure_desktop_access()
             screenshot = ImageGrab.grab(all_screens=True)
             screenshot.save(output_path, "PNG")
-            return True
+            return True, "Screenshot captured"
         except Exception as e:
-            logger.error(f"Screenshot error: {e}")
-            return False
+            err = str(e)
+            logger.error(f"Screenshot error: {err}")
+            if "screen grab failed" in err.lower():
+                return False, "⚠️ Screen capture unavailable: PC is currently at the pre-login lock screen (Session 0). Please log into Windows to view active desktop."
+            return False, f"Screenshot error: {err}"
 
     @staticmethod
     def take_webcam_photo(output_path: Path, camera_index: int = 0) -> Tuple[bool, str]:

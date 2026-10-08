@@ -15,6 +15,7 @@
 
 - 📊 **Real-time Diagnostics (`/status`)**: CPU load, RAM utilization, C: drive disk capacity, battery status, and uptime.
 - 📸 **Desktop Screenshots (`/shot`, `/screenshot`)**: High-res multi-monitor or desktop snapshots sent immediately to your chat.
+- 📺 **Live Screen Casting & Streaming (`/cast`, `/stream`)**: Stream whatever is happening on your PC live in real-time. Includes an ultra-smooth 15-25 FPS dark-mode HTML5 web player with fullscreen & quality controls, an in-chat live surveillance radar, and RTMP broadcast support for Telegram Channels.
 - 📹 **Webcam Surveillance (`/webcam`, `/record_webcam`)**: Instant photo capture or security video clip (10s/30s) from connected webcams.
 - 🎬 **Multi-Duration Screen Recorder (`/record_screen`)**: Interactive selector for 10s, 20s, 30s, 40s, 50s, 1 min, or 2 mins of on-screen desktop action into an MP4 video file.
 - ⚡ **Power & Workstation Control**:
@@ -123,8 +124,11 @@ To ensure only **you** can control your PC, you must configure your Telegram num
 | Command | Description |
 | :--- | :--- |
 | `/start`, `/menu` | Open interactive Command Center dashboard |
-| `/status` | View real-time CPU, RAM, Disk, Battery, and Uptime |
+| `/login <pin>` | Authenticate with PIN to unlock Command Center |
+| `/logout` | Lock bot session immediately |
+| `/status` | View real-time CPU, RAM, Disk, Battery, Uptime, and Session state |
 | `/shot`, `/screenshot` | Capture instant high-resolution desktop screenshot |
+| `/cast`, `/stream` | Open Live Screen Cast hub (Global Web stream, In-chat radar, RTMP) |
 | `/webcam` | Capture webcam photo snapshot |
 | `/record_webcam [s]` | Record 10s or custom webcam video clip |
 | `/record_screen [s]` | Open duration selector or record screen video (10s-120s) |
@@ -144,5 +148,35 @@ To ensure only **you** can control your PC, you must configure your Telegram num
 
 ---
 
+## ⚡ Headless Boot Setup & Background Running
+
+### Run Automatically on PC Boot (Before Windows Login)
+Sentinel can run completely headless at system startup via Windows Task Scheduler:
+1. Right-click **`setup_headless_task.bat`** $\rightarrow$ **Run as administrator**.
+2. The task is registered as `SYSTEM` with `ONSTART` trigger.
+3. When the PC restarts, Sentinel starts automatically and sends a Telegram broadcast:
+   > *"🛡️ PC Remote Sentinel Online (Windows Login / Lock Screen 🔒)"*
+4. All system commands (`/status`, `/cmd`, `/top`, `/kill`, power controls) are available immediately.
+5. To uninstall: Right-click **`uninstall_headless_task.bat`** $\rightarrow$ **Run as administrator**.
+
+### Run Silently in the Background
+Double-click **`start_hidden.vbs`** to launch Sentinel silently with no command prompt window.
+
+---
+
+## 🔒 Passcode / PIN Login Security (Optional)
+To add a PIN lock to your bot:
+1. Open `.env` and set:
+   ```env
+   BOT_PIN=1234
+   SESSION_TIMEOUT_MINS=60
+   ```
+2. When anyone accesses the bot, all commands are locked until they send `/login 1234`.
+3. The message containing your PIN is automatically deleted from chat for security.
+4. Send `/logout` at any time to immediately re-lock the Command Center.
+
+---
+
 ## 📄 License
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+

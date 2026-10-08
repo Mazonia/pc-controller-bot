@@ -23,6 +23,7 @@ from telegram import (
     InlineKeyboardMarkup,
     Update,
     BotCommand,
+    InputMediaPhoto,
 )
 from telegram.ext import (
     Application,
@@ -36,12 +37,15 @@ from telegram.ext import (
 
 import config
 from system_controller import SystemController
+from screen_caster import screen_caster, get_active_window_title
 
 
 # ── Security & Locks ──────────────────────────────────────────────────
 
 hardware_lock = asyncio.Lock()
 unauthorized_alert_cooldown: dict[int, float] = {}
+authenticated_sessions: dict[int, float] = {}
+failed_login_attempts: dict[int, list[float]] = {}
 
 
 def is_authorized(user_id: int) -> bool:
@@ -49,6 +53,37 @@ def is_authorized(user_id: int) -> bool:
     if not config.AUTHORIZED_USER_IDS:
         return False
     return user_id in config.AUTHORIZED_USER_IDS
+
+
+def is_authenticated(user_id: int) -> bool:
+    """Verify if user has active authenticated PIN session (or if PIN is not required)."""
+    if not config.BOT_PIN:
+        return True
+    expiry = authenticated_sessions.get(user_id, 0)
+    return datetime.now().timestamp() < expiry
+
+
+async def check_access(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
+    """Verify both whitelist authorization and session PIN authentication."""
+    user = update.effective_user
+    if not user or not is_authorized(user.id):
+        await notify_unauthorized_access(update, context)
+        return False
+    
+    if not is_authenticated(user.id):
+        text = (
+            "🔒 <b>COMMAND CENTER LOCKED</b>\n"
+            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            "PIN security is enabled on this Sentinel.\n"
+            "Please authenticate to access commands:\n\n"
+            "👉 <code>/login YOUR_PIN</code>"
+        )
+        if update.callback_query:
+            await update.callback_query.answer("🔒 Bot is locked. Send /login <PIN> to unlock.", show_alert=True)
+        else:
+            await update.effective_message.reply_text(text, parse_mode="HTML")
+        return False
+    return True
 
 
 async def notify_unauthorized_access(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -93,24 +128,84 @@ def get_main_keyboard() -> InlineKeyboardMarkup:
             InlineKeyboardButton("📸 Screenshot", callback_data="cb_shot"),
         ],
         [
-            InlineKeyboardButton("📷 Webcam Menu", callback_data="cb_webcam_menu"),
+            InlineKeyboardButton("📺 Live Screen Cast", callback_data="cb_cast_menu"),
             InlineKeyboardButton("🎥 Screen Video", callback_data="cb_screen_menu"),
         ],
         [
+            InlineKeyboardButton("📷 Webcam Menu", callback_data="cb_webcam_menu"),
             InlineKeyboardButton("⚡ Power & Sleep", callback_data="cb_power_menu"),
+        ],
+        [
             InlineKeyboardButton("🎵 Media & Volume", callback_data="cb_media_menu"),
-        ],
-        [
             InlineKeyboardButton("💻 Top Processes", callback_data="cb_top"),
+        ],
+        [
             InlineKeyboardButton("📋 Clipboard Tools", callback_data="cb_clip_menu"),
-        ],
-        [
             InlineKeyboardButton("🗣️ Speak / TTS", callback_data="cb_tts_info"),
-            InlineKeyboardButton("⏰ Alarm & Siren", callback_data="cb_alarm_menu"),
         ],
         [
+            InlineKeyboardButton("⏰ Alarm & Siren", callback_data="cb_alarm_menu"),
             InlineKeyboardButton("🧹 Clean Storage", callback_data="cb_clean"),
+        ],
+        [
             InlineKeyboardButton("🔄 Refresh Dashboard", callback_data="cb_menu"),
+        ]
+    ])
+
+
+def get_cast_menu_text() -> str:
+    """Generate informative dashboard status for screen casting."""
+    status = screen_caster.get_status()
+    web_state = "🟢 <b>ACTIVE</b>" if status["is_web_streaming"] else "⚪ <i>Inactive</i>"
+    rtmp_state = "🟢 <b>ACTIVE</b>" if status["is_rtmp_streaming"] else "⚪ <i>Inactive</i>"
+    win = html.escape(status.get("active_window", "Desktop")[:45])
+    
+    return (
+        f"📺 <b>LIVE SCREEN CASTING & SURVEILLANCE</b>\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"Stream whatever is happening on your PC in real-time!\n\n"
+        f"• <b>Web Live Stream:</b> {web_state}\n"
+        f"• <b>RTMP Broadcast:</b> {rtmp_state}\n"
+        f"• <b>Active Window:</b> <code>{win}</code>\n\n"
+        f"<b>Choose a streaming mode:</b>\n"
+        f"🌐 <b>Web Cast:</b> Ultra-smooth 15-25 FPS browser stream with fullscreen & quality toggles.\n"
+        f"⚡ <b>In-Chat Live View:</b> Auto-refreshing surveillance photo directly in Telegram chat.\n"
+        f"📡 <b>RTMP Broadcast:</b> Stream to Telegram Channel/Group video chat."
+    )
+
+
+def get_cast_keyboard(is_web_streaming: bool = False, lan_url: str = None) -> InlineKeyboardMarkup:
+    """Create casting control keyboard."""
+    rows = []
+    if is_web_streaming and lan_url:
+        rows.append([
+            InlineKeyboardButton("🌐 Open Stream in Browser", url=lan_url),
+            InlineKeyboardButton("⏹️ Stop Web Stream", callback_data="cb_cast_web_stop"),
+        ])
+    else:
+        rows.append([
+            InlineKeyboardButton("🌐 Start Web Live Cast", callback_data="cb_cast_web_start"),
+        ])
+    rows.append([
+        InlineKeyboardButton("⚡ In-Chat Live View", callback_data="cb_cast_radar_start"),
+        InlineKeyboardButton("📡 RTMP Broadcast", callback_data="cb_cast_rtmp_info"),
+    ])
+    rows.append([
+        InlineKeyboardButton("🔙 Back to Main Menu", callback_data="cb_menu"),
+    ])
+    return InlineKeyboardMarkup(rows)
+
+
+def get_radar_keyboard() -> InlineKeyboardMarkup:
+    """Create keyboard for in-chat live radar burst."""
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("⏹️ Stop Live View", callback_data="cb_cast_radar_stop"),
+            InlineKeyboardButton("📸 Capture High-Res", callback_data="cb_shot"),
+        ],
+        [
+            InlineKeyboardButton("🌐 Switch to Web Cast", callback_data="cb_cast_web_start"),
+            InlineKeyboardButton("🔙 Cast Menu", callback_data="cb_cast_menu"),
         ]
     ])
 
@@ -322,13 +417,29 @@ async def handle_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("⛔ <b>Access Denied:</b> This bot is locked to authorized PC owners.", parse_mode="HTML")
         return
 
+    if config.BOT_PIN and not is_authenticated(user.id):
+        text = (
+            f"🔒 <b>PC REMOTE SENTINEL — LOCKED</b>\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"🛡️ <b>Security Mode:</b> PIN Protected\n"
+            f"💻 <b>Machine:</b> Windows PC Online\n\n"
+            f"<i>Please enter your PIN to unlock the Command Center:</i>\n"
+            f"👉 <code>/login YOUR_PIN</code>"
+        )
+        keyboard = InlineKeyboardMarkup([
+            [InlineKeyboardButton("📊 System Status", callback_data="cb_status")],
+        ])
+        await update.message.reply_text(text, reply_markup=keyboard, parse_mode="HTML")
+        return
+
     stats = SystemController.get_system_stats()
     text = (
         f"🛡️ <b>PC REMOTE SENTINEL — COMMAND CENTER</b> ⚡\n"
         f"<b>Machine:</b> Windows PC Online\n"
         f"<b>CPU Load:</b> <code>{stats['cpu_percent']:.1f}%</code>\n"
         f"<b>RAM Used:</b> <code>{stats['memory_percent']:.1f}%</code> ({stats['memory_used_gb']} / {stats['memory_total_gb']} GB)\n"
-        f"<b>Uptime:</b> <code>{stats['uptime']}</code>\n\n"
+        f"<b>Uptime:</b> <code>{stats['uptime']}</code>\n"
+        f"<b>Session:</b> <code>{stats.get('session_state', 'Normal')}</code>\n\n"
         f"<i>Tap below or send commands to control your PC remotely:</i>"
     )
     await update.message.reply_text(text, reply_markup=get_main_keyboard(), parse_mode="HTML")
@@ -348,6 +459,7 @@ async def handle_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"🧠 <b>RAM Memory:</b> <code>{stats['memory_percent']:.1f}%</code> ({stats['memory_used_gb']} GB / {stats['memory_total_gb']} GB)\n"
         f"💾 <b>C: Drive:</b> <code>{stats['disk_percent']:.1f}%</code> (Free: {stats['disk_free_gb']} GB / Total: {stats['disk_total_gb']} GB)\n"
         f"🔋 <b>Power/Battery:</b> <code>{stats['battery']}</code>\n"
+        f"🪟 <b>Session:</b> <code>{stats.get('session_state', 'Normal')}</code>\n"
         f"⏱️ <b>System Uptime:</b> <code>{stats['uptime']}</code>\n"
         f"📅 <b>Booted At:</b> <code>{stats['boot_time']}</code>"
     )
@@ -359,8 +471,7 @@ async def handle_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def handle_screenshot(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /shot or /screenshot command."""
-    if not is_authorized(update.effective_user.id):
-        await notify_unauthorized_access(update, context)
+    if not await check_access(update, context):
         return
 
     if hardware_lock.locked():
@@ -371,7 +482,7 @@ async def handle_screenshot(update: Update, context: ContextTypes.DEFAULT_TYPE):
         msg = await update.effective_message.reply_text("📸 <i>Capturing desktop screenshot...</i>", parse_mode="HTML")
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         shot_path = config.RECORDINGS_DIR / f"shot_{timestamp}.png"
-        ok = await asyncio.to_thread(SystemController.take_screenshot, shot_path)
+        ok, status = await asyncio.to_thread(SystemController.take_screenshot, shot_path)
         if ok and shot_path.exists():
             with open(shot_path, "rb") as f:
                 await update.effective_chat.send_photo(photo=f, caption=f"🖥️ <b>PC Desktop Screenshot</b>\n📅 {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}", parse_mode="HTML")
@@ -380,7 +491,7 @@ async def handle_screenshot(update: Update, context: ContextTypes.DEFAULT_TYPE):
             except Exception:
                 pass
         else:
-            await msg.edit_text("❌ Failed to capture screenshot.")
+            await msg.edit_text(f"❌ {status}")
 
 
 async def handle_webcam(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -497,6 +608,322 @@ async def handle_record_webcam(update: Update, context: ContextTypes.DEFAULT_TYP
     if context.args and context.args[0].isdigit():
         duration = int(context.args[0])
     await execute_webcam_recording(update, context, duration=duration)
+
+
+# ── Screen Casting Handlers & Live Feeds ─────────────────────────────
+
+active_radar_tasks: dict[int, asyncio.Task] = {}
+
+
+async def execute_cast_web_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Start local Web Screen Cast HTTP server and global Cloudflare tunnel."""
+    if not await check_access(update, context):
+        return
+
+    init_msg = None
+    if update.callback_query:
+        await update.callback_query.edit_message_text(
+            "⏳ <i>Starting screen stream & initializing global internet tunnel...</i>",
+            parse_mode="HTML"
+        )
+    else:
+        init_msg = await update.effective_message.reply_text(
+            "⏳ <i>Starting screen stream & initializing global internet tunnel...</i>",
+            parse_mode="HTML"
+        )
+
+    res = await asyncio.to_thread(screen_caster.start_web_cast, config.STREAM_PORT, enable_tunnel=config.ENABLE_PUBLIC_TUNNEL)
+    lan_url = res.get("lan_url", "")
+    public_url = res.get("public_url", "")
+    token = res.get("token", "")
+
+    url_section = ""
+    buttons = []
+
+    if public_url:
+        url_section += f"🌍 <b>Global Internet Link (Access Anywhere):</b>\n<code>{public_url}</code>\n\n"
+        buttons.append([InlineKeyboardButton("🌍 Open Global Stream (Anywhere)", url=public_url)])
+
+    if lan_url:
+        url_section += f"🏠 <b>Local Wi-Fi Link (Home Network):</b>\n<code>{lan_url}</code>\n\n"
+        if not public_url:
+            buttons.append([InlineKeyboardButton("🏠 Open Local Stream", url=lan_url)])
+        else:
+            buttons.append([InlineKeyboardButton("🏠 Open Local Stream (Wi-Fi)", url=lan_url)])
+
+    msg_text = (
+        f"📺 <b>LIVE WEB SCREEN CAST ONLINE</b> 🔴\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"Your PC desktop is streaming live in real-time!\n\n"
+        f"{url_section}"
+        f"🔒 <b>Security Token:</b> <code>{token}</code>\n"
+        f"⚡ <b>Target Rate:</b> <code>15-25 FPS</code> (Adjustable in player)\n"
+        f"📱 <b>Features:</b> Fullscreen, Snapshot button, Low-latency HTML5\n"
+        f"⏱️ <b>Auto-Off:</b> Shuts down after 10m idle with no viewers\n\n"
+        f"<i>💡 Works from anywhere in the world over cellular data (4G/5G) or Wi-Fi.</i>"
+    )
+
+    buttons.append([
+        InlineKeyboardButton("⏹️ Stop Web Stream", callback_data="cb_cast_web_stop"),
+        InlineKeyboardButton("🔄 Stream Status", callback_data="cb_cast_status"),
+    ])
+    buttons.append([
+        InlineKeyboardButton("🔙 Back to Cast Menu", callback_data="cb_cast_menu"),
+    ])
+
+    keyboard = InlineKeyboardMarkup(buttons)
+    if update.callback_query:
+        await update.callback_query.edit_message_text(msg_text, reply_markup=keyboard, parse_mode="HTML")
+    elif init_msg:
+        await init_msg.edit_text(msg_text, reply_markup=keyboard, parse_mode="HTML")
+    else:
+        await update.effective_message.reply_text(msg_text, reply_markup=keyboard, parse_mode="HTML")
+
+
+async def handle_login(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Authenticate user with PIN to unlock Sentinel commands."""
+    user = update.effective_user
+    if not user or not is_authorized(user.id):
+        await notify_unauthorized_access(update, context)
+        return
+
+    if not config.BOT_PIN:
+        await update.effective_message.reply_text("ℹ️ PIN security is not enabled in .env (BOT_PIN is empty). All commands are already unlocked.", parse_mode="HTML")
+        return
+
+    now = datetime.now().timestamp()
+    attempts = [t for t in failed_login_attempts.get(user.id, []) if now - t < 300]
+    if len(attempts) >= 5:
+        await update.effective_message.reply_text("⛔ <b>Too many failed login attempts.</b> Locked out for 5 minutes.", parse_mode="HTML")
+        return
+
+    if not context.args:
+        await update.effective_message.reply_text("Usage: <code>/login 1234</code>", parse_mode="HTML")
+        return
+
+    pin_input = context.args[0].strip()
+
+    # Automatically delete the message containing the PIN so it doesn't stay in chat history
+    try:
+        await update.message.delete()
+    except Exception:
+        pass
+
+    if pin_input == config.BOT_PIN:
+        authenticated_sessions[user.id] = now + (config.SESSION_TIMEOUT_MINS * 60)
+        failed_login_attempts.pop(user.id, None)
+        await update.effective_chat.send_message(
+            f"🔓 <b>ACCESS GRANTED</b> ✅\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"Session unlocked for <b>{config.SESSION_TIMEOUT_MINS} minutes</b>.\n"
+            f"Send <code>/logout</code> at any time to re-lock.",
+            reply_markup=get_main_keyboard(),
+            parse_mode="HTML"
+        )
+    else:
+        attempts.append(now)
+        failed_login_attempts[user.id] = attempts
+        remaining = 5 - len(attempts)
+        await update.effective_chat.send_message(
+            f"❌ <b>Incorrect PIN!</b> ({remaining} attempts remaining before lockout).",
+            parse_mode="HTML"
+        )
+
+
+async def handle_logout(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Lock user session immediately."""
+    user = update.effective_user
+    if user:
+        authenticated_sessions.pop(user.id, None)
+    await update.effective_message.reply_text(
+        "🔒 <b>Session Locked</b> ✅\n"
+        "You have been logged out. Send <code>/login &lt;PIN&gt;</code> to re-authenticate.",
+        parse_mode="HTML"
+    )
+
+
+async def execute_cast_web_stop(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Stop the web screen casting server."""
+    user_id = update.effective_user.id
+    if not is_authorized(user_id):
+        await notify_unauthorized_access(update, context)
+        return
+
+    await asyncio.to_thread(screen_caster.stop_web_cast)
+    msg_text = (
+        "⏹️ <b>Web Screen Cast Stopped</b> ✅\n"
+        "The streaming server has been shut down and capture resources released."
+    )
+    keyboard = InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("▶️ Restart Web Stream", callback_data="cb_cast_web_start"),
+            InlineKeyboardButton("🔙 Cast Menu", callback_data="cb_cast_menu"),
+        ]
+    ])
+    if update.callback_query:
+        await update.callback_query.edit_message_text(msg_text, reply_markup=keyboard, parse_mode="HTML")
+    else:
+        await update.effective_message.reply_text(msg_text, reply_markup=keyboard, parse_mode="HTML")
+
+
+async def execute_cast_radar_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Start in-chat live radar burst (refreshing photo in Telegram chat)."""
+    user_id = update.effective_user.id
+    if not is_authorized(user_id):
+        await notify_unauthorized_access(update, context)
+        return
+
+    chat_id = update.effective_chat.id
+    if chat_id in active_radar_tasks:
+        task = active_radar_tasks.pop(chat_id)
+        task.cancel()
+
+    frame_bytes = await asyncio.to_thread(screen_caster.capture_single_frame, 65, 960)
+    if not frame_bytes:
+        await update.effective_message.reply_text("❌ Could not capture desktop frame for live radar.")
+        return
+
+    win_title = get_active_window_title()
+    now_str = datetime.now().strftime("%H:%M:%S")
+    stats = SystemController.get_system_stats()
+
+    caption = (
+        f"🔴 <b>LIVE DESKTOP RADAR</b>\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"🪟 <b>Active Window:</b> <code>{html.escape(win_title[:45])}</code>\n"
+        f"🕒 <b>Time:</b> <code>{now_str}</code> | ⏱️ <b>Frame:</b> <code>1/30</code>\n"
+        f"💻 <b>Load:</b> CPU <code>{stats['cpu_percent']}%</code> | RAM <code>{stats['memory_percent']}%</code>\n\n"
+        f"📡 <i>Updating live feed every 2 seconds...</i>"
+    )
+
+    msg = await update.effective_chat.send_photo(
+        photo=frame_bytes,
+        caption=caption,
+        reply_markup=get_radar_keyboard(),
+        parse_mode="HTML"
+    )
+
+    task = asyncio.create_task(_run_radar_loop(chat_id, msg.message_id, context))
+    active_radar_tasks[chat_id] = task
+
+
+async def _run_radar_loop(chat_id: int, message_id: int, context: ContextTypes.DEFAULT_TYPE, max_frames: int = 30):
+    """Background worker updating Telegram photo message every 2 seconds."""
+    try:
+        for frame_num in range(2, max_frames + 1):
+            await asyncio.sleep(2.0)
+            frame_bytes = await asyncio.to_thread(screen_caster.capture_single_frame, 60, 960)
+            if not frame_bytes:
+                continue
+
+            win_title = get_active_window_title()
+            now_str = datetime.now().strftime("%H:%M:%S")
+            stats = SystemController.get_system_stats()
+
+            caption = (
+                f"🔴 <b>LIVE DESKTOP RADAR</b>\n"
+                f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                f"🪟 <b>Active Window:</b> <code>{html.escape(win_title[:45])}</code>\n"
+                f"🕒 <b>Time:</b> <code>{now_str}</code> | ⏱️ <b>Frame:</b> <code>{frame_num}/{max_frames}</code>\n"
+                f"💻 <b>Load:</b> CPU <code>{stats['cpu_percent']}%</code> | RAM <code>{stats['memory_percent']}%</code>\n\n"
+                f"📡 <i>Updating live feed every 2 seconds...</i>"
+            )
+
+            try:
+                await context.bot.edit_message_media(
+                    chat_id=chat_id,
+                    message_id=message_id,
+                    media=InputMediaPhoto(media=frame_bytes, caption=caption, parse_mode="HTML"),
+                    reply_markup=get_radar_keyboard()
+                )
+            except Exception as e:
+                err_str = str(e)
+                if "Message is not modified" in err_str:
+                    pass
+                elif "Flood control" in err_str or "retry after" in err_str.lower():
+                    await asyncio.sleep(3.0)
+                else:
+                    logger.debug(f"Radar loop update error: {e}")
+
+        await context.bot.edit_message_caption(
+            chat_id=chat_id,
+            message_id=message_id,
+            caption="✅ <b>Live Radar Feed Completed.</b> (30 frames finished)\nTap below to restart or launch web cast.",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("🔄 Restart Live View", callback_data="cb_cast_radar_start")],
+                [InlineKeyboardButton("📺 Open Cast Menu", callback_data="cb_cast_menu")]
+            ]),
+            parse_mode="HTML"
+        )
+    except asyncio.CancelledError:
+        try:
+            await context.bot.edit_message_caption(
+                chat_id=chat_id,
+                message_id=message_id,
+                caption="⏹️ <b>Live Radar Feed Stopped.</b>",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🔄 Restart Live View", callback_data="cb_cast_radar_start")],
+                    [InlineKeyboardButton("📺 Open Cast Menu", callback_data="cb_cast_menu")]
+                ]),
+                parse_mode="HTML"
+            )
+        except Exception:
+            pass
+    finally:
+        active_radar_tasks.pop(chat_id, None)
+
+
+async def handle_cast(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /cast or /stream command."""
+    user_id = update.effective_user.id
+    if not is_authorized(user_id):
+        await notify_unauthorized_access(update, context)
+        return
+
+    args = context.args or []
+    if not args:
+        status = screen_caster.get_status()
+        text = get_cast_menu_text()
+        keyboard = get_cast_keyboard(status["is_web_streaming"], status.get("lan_url"))
+        await update.effective_message.reply_text(text, reply_markup=keyboard, parse_mode="HTML")
+        return
+
+    subcmd = args[0].lower()
+    if subcmd in ("web", "start"):
+        await execute_cast_web_start(update, context)
+    elif subcmd in ("stop", "off"):
+        if update.effective_chat.id in active_radar_tasks:
+            active_radar_tasks.pop(update.effective_chat.id).cancel()
+        screen_caster.stop_web_cast()
+        screen_caster.stop_rtmp_stream()
+        await update.effective_message.reply_text("⏹️ <b>All active screen casts & live feeds stopped.</b>", parse_mode="HTML")
+    elif subcmd in ("live", "radar"):
+        await execute_cast_radar_start(update, context)
+    elif subcmd == "status":
+        status = screen_caster.get_status()
+        state = "Online 🟢" if status["is_web_streaming"] else "Offline ⚪"
+        await update.effective_message.reply_text(
+            f"📺 <b>Screen Cast Status:</b> {state}\n"
+            f"• <b>Viewers:</b> <code>{status['active_viewers']}</code>\n"
+            f"• <b>Active Window:</b> <code>{html.escape(status['active_window'])}</code>\n"
+            f"• <b>Target FPS:</b> <code>{status['target_fps']}</code>\n"
+            f"• <b>URL:</b> <code>{status.get('lan_url') or 'N/A'}</code>",
+            parse_mode="HTML"
+        )
+    elif subcmd == "rtmp":
+        if len(args) < 2:
+            await update.effective_message.reply_text(
+                "📡 <b>RTMP Broadcast Usage:</b>\n"
+                "<code>/cast rtmp rtmps://dc4-1.rtmp.t.me/s/YOUR_STREAM_KEY</code>\n\n"
+                "<i>You can obtain the RTMP Server URL & Stream Key from any Telegram Channel or Group Video Chat -> 'Stream With...'.</i>",
+                parse_mode="HTML"
+            )
+            return
+        rtmp_url = args[1]
+        ok, msg = screen_caster.start_rtmp_stream(rtmp_url)
+        await update.effective_message.reply_text(f"📡 RTMP Stream: {msg}")
+    else:
+        await update.effective_message.reply_text("❓ Unknown option. Use `/cast`, `/cast web`, `/cast live`, or `/cast stop`.", parse_mode="HTML")
 
 
 async def handle_say(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -989,10 +1416,16 @@ async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.message.reply_text("⛔ Unauthorized.")
         return
 
+    if config.BOT_PIN and not is_authenticated(query.from_user.id) and query.data != "cb_status":
+        await query.answer("🔒 Sentinel is locked. Send /login <PIN> to access controls.", show_alert=True)
+        return
+
     data = query.data
 
     if data == "cb_menu":
         await query.edit_message_text("🛡️ <b>PC REMOTE SENTINEL — COMMAND CENTER</b>", reply_markup=get_main_keyboard(), parse_mode="HTML")
+    elif data == "cb_logout":
+        await handle_logout(update, context)
     elif data == "cb_status":
         await handle_status(update, context)
     elif data == "cb_shot":
@@ -1012,6 +1445,41 @@ async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await execute_screen_recording(update, context, duration=sec)
     elif data == "cb_record_screen":
         await query.edit_message_text("🎥 <b>DESKTOP SCREEN RECORDING</b>\nSelect recording duration:", reply_markup=get_screen_keyboard(), parse_mode="HTML")
+    elif data == "cb_cast_menu":
+        status = screen_caster.get_status()
+        text = get_cast_menu_text()
+        keyboard = get_cast_keyboard(status["is_web_streaming"], status.get("lan_url"))
+        await query.edit_message_text(text, reply_markup=keyboard, parse_mode="HTML")
+    elif data == "cb_cast_web_start":
+        await execute_cast_web_start(update, context)
+    elif data == "cb_cast_web_stop":
+        await execute_cast_web_stop(update, context)
+    elif data == "cb_cast_radar_start":
+        await execute_cast_radar_start(update, context)
+    elif data == "cb_cast_radar_stop":
+        chat_id = update.effective_chat.id
+        if chat_id in active_radar_tasks:
+            active_radar_tasks.pop(chat_id).cancel()
+        await query.answer("⏹️ Live radar feed stopped.")
+    elif data == "cb_cast_status":
+        status = screen_caster.get_status()
+        state = "Online 🟢" if status["is_web_streaming"] else "Offline ⚪"
+        await query.answer(f"Stream: {state} | Viewers: {status['active_viewers']} | Window: {status['active_window'][:25]}", show_alert=True)
+    elif data == "cb_cast_rtmp_info":
+        await query.edit_message_text(
+            "📡 <b>BROADCAST TO TELEGRAM CHANNEL / RTMP</b>\n"
+            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            "You can stream your live PC desktop directly into a Telegram Channel or Group Voice Chat!\n\n"
+            "<b>Setup Steps:</b>\n"
+            "1. Create a private Telegram Channel (just you & bot).\n"
+            "2. Open Channel $\rightarrow$ <b>Live Stream / Video Chat</b>.\n"
+            "3. Tap <b>Stream With...</b> $\rightarrow$ Copy the Server URL & Stream Key.\n"
+            "4. Send command to bot:\n"
+            "<code>/cast rtmp rtmps://dc4-1.rtmp.t.me/s/YOUR_KEY</code>\n\n"
+            "<i>Sentinel will encode and broadcast live H.264 desktop video directly into your Telegram stream!</i>",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back to Cast Menu", callback_data="cb_cast_menu")]]),
+            parse_mode="HTML"
+        )
     elif data == "cb_top":
         await handle_top(update, context)
     elif data == "cb_clip_menu":
@@ -1177,6 +1645,9 @@ def main():
     app.add_handler(CommandHandler("webcam", handle_webcam))
     app.add_handler(CommandHandler("record_screen", handle_record_screen))
     app.add_handler(CommandHandler("record_webcam", handle_record_webcam))
+    app.add_handler(CommandHandler(["cast", "stream"], handle_cast))
+    app.add_handler(CommandHandler("login", handle_login))
+    app.add_handler(CommandHandler("logout", handle_logout))
     app.add_handler(CommandHandler("top", handle_top))
     app.add_handler(CommandHandler("kill", handle_kill))
     app.add_handler(CommandHandler("say", handle_say))
@@ -1202,8 +1673,11 @@ def main():
 
         cmds = [
             BotCommand("start", "Command Center Dashboard"),
+            BotCommand("login", "Authenticate with PIN (/login <pin>)"),
+            BotCommand("logout", "Lock bot session"),
             BotCommand("status", "System Diagnostics (CPU, RAM, Uptime)"),
             BotCommand("shot", "Instant Desktop Screenshot"),
+            BotCommand("cast", "Live Screen Cast & Streaming"),
             BotCommand("webcam", "Capture Webcam Snapshot"),
             BotCommand("record_screen", "Record Desktop Screen (10s-120s)"),
             BotCommand("record_webcam", "Record Webcam Video Clip"),
@@ -1242,6 +1716,7 @@ def main():
             f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
             f"💻 <b>Host:</b> <code>{html.escape(hostname)}</code> (<code>{local_ip}</code>)\n"
             f"⏱️ <b>Uptime:</b> <code>{stats['uptime']}</code>\n"
+            f"🪟 <b>Session:</b> <code>{stats.get('session_state', 'Normal')}</code>\n"
             f"🔋 <b>Battery:</b> <code>{stats['battery']}</code>\n"
             f"🧠 <b>RAM Used:</b> <code>{stats['memory_percent']}%</code>\n\n"
             f"<i>Sentinel is active and monitoring for commands.</i>"
