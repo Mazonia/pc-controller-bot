@@ -2909,6 +2909,7 @@ def main():
             BotCommand("status", "System Diagnostics"),
             BotCommand("shot", "Desktop Screenshot"),
             BotCommand("cast", "Live Screen Cast"),
+            BotCommand("desktop", "Switch Virtual Desktops"),
             BotCommand("webcam", "Webcam Snapshot"),
             BotCommand("record_screen", "Record Desktop (10s-120s)"),
             BotCommand("record_webcam", "Record Webcam"),
