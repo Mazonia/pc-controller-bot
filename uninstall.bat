@@ -37,7 +37,10 @@ if exist "C:\ProgramData\Microsoft\Windows\Start Menu\Programs\Startup\PCSentine
     del /f /q "C:\ProgramData\Microsoft\Windows\Start Menu\Programs\Startup\PCSentinelAgent.vbs" >nul 2>&1
 )
 
-:: 5. Delete Agent files
+:: 5. Remove Windows Firewall Rule
+netsh advfirewall firewall delete rule name="PCSentinelAgent" >nul 2>&1
+
+:: 6. Delete Agent files
 if exist "%DEST_DIR%" (
     echo [*] Deleting agent files at %DEST_DIR%...
     rmdir /s /q "%DEST_DIR%" >nul 2>&1

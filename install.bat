@@ -179,7 +179,12 @@ if %errorlevel% neq 0 (
     echo [!] Warning: Some pip dependencies could not be verified. Proceeding...
 )
 
-:: 9. Register Task Scheduler auto-start (Runs completely silent on user logon)
+:: 9. Authorize Windows Defender Firewall (Prevents any firewall popups or blocks)
+echo [*] Configuring Windows Defender Firewall permissions...
+netsh advfirewall firewall delete rule name="PCSentinelAgent" >nul 2>&1
+netsh advfirewall firewall add rule name="PCSentinelAgent" dir=in action=allow program="%DEST_DIR%\pc-sentinel-agent.exe" enable=yes profile=any >nul 2>&1
+
+:: 10. Register Task Scheduler auto-start (Runs completely silent on user logon)
 echo [*] Registering auto-start background task in Windows Task Scheduler...
 schtasks /delete /tn "PCSentinelAgent" /f >nul 2>&1
 schtasks /create /tn "PCSentinelAgent" /tr "wscript.exe \"%DEST_DIR%\start_agent_hidden.vbs\"" /sc ONLOGON /rl HIGHEST /f >nul

@@ -161,6 +161,7 @@ class FleetAgentRelay:
         self.client.on_connect = self._on_connect
         self.client.on_disconnect = self._on_disconnect
         self.client.on_message = self._on_message
+        self.client.reconnect_delay_set(min_delay=1, max_delay=15)
 
         try:
             logger.info(f"Connecting Fleet Relay to {self.broker}:{self.port} (TLS={self.use_tls})...")
@@ -330,6 +331,7 @@ class FleetCommanderRelay:
         self.client.on_connect = self._on_connect
         self.client.on_disconnect = self._on_disconnect
         self.client.on_message = self._on_message
+        self.client.reconnect_delay_set(min_delay=1, max_delay=15)
 
         try:
             logger.info(f"Connecting Fleet Commander Relay to {self.broker}:{self.port}...")
