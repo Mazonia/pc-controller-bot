@@ -238,16 +238,25 @@ To monitor any PC (personal laptop, gaming PC, home workstation, office desktop,
 | `/cmd <command>` | Execute terminal command with token masking |
 | `/login <pin>` | Authenticate PIN to unlock Command Center |
 | `/logout` | Lock bot session immediately |
+| `/setpin <pin>` | Configure or change bot security PIN (4–8 digits) |
+| `/removepin` | Disable PIN protection completely |
+| `/removepc <name>` | Remove an uninstalled PC from the fleet list |
 | `/reload` | Reload registered fleet registry |
 
 ---
 
-## 🧹 Clean Uninstallation
+## 🧹 Clean Uninstallation (Zero Trace)
 
-To completely remove the agent from any monitored PC:
-1. Double-click **`uninstall.bat`**.
-2. Click "Yes" on the UAC prompt.
-3. All background tasks, services, and `C:\PCSentinel` files will be cleanly removed.
+Removing Sentinel from any PC is just as simple as installing it:
+
+### From Monitored Target PCs:
+1. Plug your USB pendrive into the target PC and double-click **`uninstall.bat`**.
+2. Click **"Yes"** on the Windows UAC elevation prompt.
+3. The script terminates all running agent processes, deletes the Task Scheduler task, removes startup hooks, deletes firewall rules, and wipes `C:\PCSentinel` completely.
+4. In Telegram, the PC will show as `🔴 Offline`. Simply tap **"🗑️ Remove PC from Fleet"** (or send `/removepc <name>`) to clear it from your menu.
+
+### From Your Main Host PC:
+- Double-click **`remove_autostart.bat`** to cleanly remove the startup task and background process.
 
 ---
 

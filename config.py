@@ -31,3 +31,32 @@ SESSION_TIMEOUT_MINS = int(os.getenv("SESSION_TIMEOUT_MINS", "60"))
 # Remote Screen Casting Tunnel
 ENABLE_PUBLIC_TUNNEL = os.getenv("ENABLE_PUBLIC_TUNNEL", "true").strip().lower() in ("1", "true", "yes")
 STREAM_PORT = int(os.getenv("STREAM_PORT", "8585"))
+
+
+def update_pin(new_pin: str) -> bool:
+    """Dynamically set or clear the BOT_PIN and persist to .env."""
+    global BOT_PIN
+    BOT_PIN = new_pin.strip()
+    env_path = BASE_DIR / ".env"
+    try:
+        content = ""
+        if env_path.exists():
+            content = env_path.read_text(encoding="utf-8")
+        
+        lines = content.splitlines()
+        found = False
+        new_lines = []
+        for line in lines:
+            if line.startswith("BOT_PIN="):
+                new_lines.append(f"BOT_PIN={BOT_PIN}")
+                found = True
+            else:
+                new_lines.append(line)
+        if not found:
+            new_lines.append(f"BOT_PIN={BOT_PIN}")
+        
+        env_path.write_text("\n".join(new_lines) + "\n", encoding="utf-8")
+        return True
+    except Exception:
+        return False
+

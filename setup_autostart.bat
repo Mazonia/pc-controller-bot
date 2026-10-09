@@ -20,14 +20,12 @@ if %errorlevel% neq 0 (
     exit /b
 )
 
-:: 2. Ensure dedicated executable exists for Task Manager visibility
-if not exist "%~dp0pc-sentinel.exe" (
-    echo Creating dedicated pc-sentinel.exe executable...
-    for /f "delims=" %%i in ('where python') do set "PYTHON_BIN=%%i" & goto :found_py
-    :found_py
-    if defined PYTHON_BIN (
-        copy "!PYTHON_BIN!" "%~dp0pc-sentinel.exe" >nul
-    )
+:: 2. Ensure dedicated executables exist for Task Manager visibility
+for /f "delims=" %%i in ('where python') do set "PYTHON_BIN=%%i" & goto :found_py
+:found_py
+if defined PYTHON_BIN (
+    if not exist "%~dp0pc-sentinel.exe" copy "!PYTHON_BIN!" "%~dp0pc-sentinel.exe" >nul
+    if not exist "%~dp0pc-sentinel-agent.exe" copy "!PYTHON_BIN!" "%~dp0pc-sentinel-agent.exe" >nul
 )
 
 :: 3. Register Task Scheduler Task (runs elevated at logon)

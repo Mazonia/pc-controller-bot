@@ -52,14 +52,74 @@ FLEET_FILE = config.BASE_DIR / "fleet.json"
 commander_relay: Optional[FleetCommanderRelay] = None
 
 
+def ensure_host_pc_registered(fleet: dict) -> bool:
+    """Ensure Host PC is always registered in fleet if running on Windows."""
+    if sys.platform != "win32":
+        return False
+    host_name = os.environ.get("COMPUTERNAME", "Host-PC")
+    pcs = fleet.get("pcs", [])
+    for pc in pcs:
+        if pc.get("name") == host_name:
+            pc["is_host"] = True
+            return False
+    pcs.insert(0, {
+        "name": host_name,
+        "label": f"🖥️ Host ({host_name})",
+        "ip": "127.0.0.1",
+        "port": int(os.getenv("AGENT_PORT", "9010")),
+        "is_host": True,
+    })
+    fleet["pcs"] = pcs
+    save_fleet(fleet)
+    return True
+
+
+def ensure_local_agent_running():
+    """If running on Windows and local agent is not running on port 9010, launch it in background."""
+    if sys.platform != "win32":
+        return
+    import socket
+    import subprocess
+    try:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.settimeout(0.5)
+        is_open = sock.connect_ex(("127.0.0.1", 9010)) == 0
+        sock.close()
+        if is_open:
+            logger.info("Local PC Agent is already listening on port 9010.")
+            return
+
+        agent_py = config.BASE_DIR / "agent.py"
+        if not agent_py.exists():
+            return
+
+        agent_vbs = config.BASE_DIR / "start_agent_hidden.vbs"
+        if agent_vbs.exists():
+            logger.info("Auto-launching local PC Agent silently via start_agent_hidden.vbs...")
+            subprocess.Popen(["wscript.exe", str(agent_vbs)], cwd=str(config.BASE_DIR))
+        else:
+            logger.info("Auto-launching local PC Agent in background...")
+            agent_exe = config.BASE_DIR / "pc-sentinel-agent.exe"
+            exe = str(agent_exe) if agent_exe.exists() else sys.executable
+            subprocess.Popen(
+                [exe, str(agent_py)],
+                cwd=str(config.BASE_DIR),
+                creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0,
+            )
+    except Exception as e:
+        logger.error(f"Could not auto-start local agent: {e}")
+
+
 def load_fleet() -> dict:
     """Load fleet configuration from fleet.json."""
+    fleet = {"secret": os.getenv("FLEET_SECRET", "").strip(), "pcs": []}
     if FLEET_FILE.exists():
         try:
-            return json.loads(FLEET_FILE.read_text(encoding="utf-8"))
+            fleet = json.loads(FLEET_FILE.read_text(encoding="utf-8"))
         except Exception as e:
             logger.error(f"Failed to load fleet.json: {e}")
-    return {"secret": os.getenv("FLEET_SECRET", "").strip(), "pcs": []}
+    ensure_host_pc_registered(fleet)
+    return fleet
 
 
 def save_fleet(fleet: dict):
@@ -450,8 +510,17 @@ async def notify_unauthorized_access(update: Update, context: ContextTypes.DEFAU
 # ═══════════════════════════════════════════════════════════════════════
 
 def get_selected_pc(context: ContextTypes.DEFAULT_TYPE) -> Optional[dict]:
-    """Get the currently selected PC info from user session."""
-    return context.user_data.get("selected_pc")
+    """Get the currently selected PC info from user session (defaults to Host PC or first available)."""
+    pc = context.user_data.get("selected_pc")
+    if pc:
+        return pc
+    fleet = load_fleet()
+    pcs = fleet.get("pcs", [])
+    if pcs:
+        host_pc = next((p for p in pcs if p.get("is_host")), pcs[0])
+        context.user_data["selected_pc"] = host_pc
+        return host_pc
+    return None
 
 
 def get_agent(context: ContextTypes.DEFAULT_TYPE) -> Optional[AgentClient]:
@@ -906,6 +975,136 @@ async def handle_logout(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data.pop("selected_pc", None)
     await update.effective_message.reply_text(
         "🔒 <b>Session Locked</b> ✅\nSend <code>/login &lt;PIN&gt;</code> to re-authenticate.",
+        parse_mode="HTML"
+    )
+
+
+async def handle_setpin(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Set or change the bot PIN: /setpin <4-8 digit PIN>"""
+    user = update.effective_user
+    if not user or not is_authorized(user.id):
+        await notify_unauthorized_access(update, context)
+        return
+
+    # If PIN currently active and user is not authenticated, require login first
+    if config.BOT_PIN and not is_authenticated(user.id):
+        await update.effective_message.reply_text(
+            "⛔ <b>Authentication Required</b>\nPlease log in first with <code>/login &lt;current_pin&gt;</code> before setting a new PIN.",
+            parse_mode="HTML"
+        )
+        return
+
+    if not context.args:
+        await update.effective_message.reply_text(
+            "Usage: <code>/setpin 1234</code>\n<i>(Must be 4 to 8 digits)</i>",
+            parse_mode="HTML"
+        )
+        return
+
+    new_pin = context.args[0].strip()
+    if not new_pin.isdigit() or len(new_pin) < 4 or len(new_pin) > 8:
+        await update.effective_message.reply_text(
+            "❌ <b>Invalid PIN:</b> PIN must be 4 to 8 digits (e.g. <code>/setpin 2580</code>).",
+            parse_mode="HTML"
+        )
+        return
+
+    # Delete message with the PIN for privacy
+    try:
+        await update.message.delete()
+    except Exception:
+        pass
+
+    if config.update_pin(new_pin):
+        now = datetime.now().timestamp()
+        authenticated_sessions[user.id] = now + (config.SESSION_TIMEOUT_MINS * 60)
+        failed_login_attempts.pop(user.id, None)
+        await update.effective_chat.send_message(
+            f"🔐 <b>PIN CONFIGURED SUCCESSFULLY</b> ✅\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"• PIN set to: <code>{'*' * len(new_pin)}</code>\n"
+            f"• Session timeout: <b>{config.SESSION_TIMEOUT_MINS} minutes</b>\n"
+            f"• To lock bot immediately: <code>/logout</code>\n"
+            f"• To remove PIN: <code>/removepin</code>",
+            parse_mode="HTML"
+        )
+    else:
+        await update.effective_chat.send_message("❌ Failed to save PIN to configuration.", parse_mode="HTML")
+
+
+async def handle_removepin(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Remove PIN protection: /removepin"""
+    user = update.effective_user
+    if not user or not is_authorized(user.id):
+        await notify_unauthorized_access(update, context)
+        return
+
+    if not config.BOT_PIN:
+        await update.effective_message.reply_text("ℹ️ No PIN is currently set.", parse_mode="HTML")
+        return
+
+    if not is_authenticated(user.id):
+        await update.effective_message.reply_text(
+            "⛔ <b>Authentication Required</b>\nPlease log in first with <code>/login &lt;PIN&gt;</code> before removing your PIN.",
+            parse_mode="HTML"
+        )
+        return
+
+    if config.update_pin(""):
+        authenticated_sessions.pop(user.id, None)
+        await update.effective_message.reply_text(
+            f"🔓 <b>PIN SECURITY REMOVED</b> ✅\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"PIN protection has been disabled.\n"
+            f"The bot is now directly accessible to authorized users without a PIN.\n\n"
+            f"<i>You can set a new PIN anytime with <code>/setpin &lt;digits&gt;</code>.</i>",
+            parse_mode="HTML"
+        )
+    else:
+        await update.effective_message.reply_text("❌ Failed to update configuration.", parse_mode="HTML")
+
+
+async def handle_remove_pc(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Remove a PC from the fleet registry: /removepc <pc_name>"""
+    if not await check_access(update, context):
+        return
+    fleet = load_fleet()
+    pcs = fleet.get("pcs", [])
+
+    if not context.args:
+        names = [f"• <code>{p['name']}</code> {'<i>(Host)</i>' if p.get('is_host') else ''}" for p in pcs]
+        names_str = "\n".join(names) if names else "None"
+        await update.effective_message.reply_text(
+            f"Usage: <code>/removepc &lt;pc_name&gt;</code>\n\n"
+            f"<b>Registered PCs:</b>\n{names_str}",
+            parse_mode="HTML"
+        )
+        return
+
+    target_name = context.args[0].strip()
+    found = None
+    for p in pcs:
+        if p["name"].lower() == target_name.lower():
+            found = p
+            break
+
+    if not found:
+        await update.effective_message.reply_text(f"❌ PC '<code>{html.escape(target_name)}</code>' not found in fleet.", parse_mode="HTML")
+        return
+
+    if found.get("is_host"):
+        await update.effective_message.reply_text("⚠️ Cannot remove the Host PC.", parse_mode="HTML")
+        return
+
+    fleet["pcs"] = [p for p in pcs if p["name"].lower() != target_name.lower()]
+    save_fleet(fleet)
+
+    # Clear from session if active
+    if context.user_data.get("selected_pc", {}).get("name", "").lower() == target_name.lower():
+        context.user_data.pop("selected_pc", None)
+
+    await update.effective_message.reply_text(
+        f"🗑️ <b>PC REMOVED</b> ✅\n\nPC '<code>{html.escape(found['name'])}</code>' has been removed from your fleet registry.",
         parse_mode="HTML"
     )
 
@@ -1815,14 +2014,19 @@ async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             agent = AgentClient(pc, fleet.get("secret", ""))
             health = await agent.health()
             if not health:
+                offline_buttons = [
+                    [InlineKeyboardButton("🔄 Retry", callback_data=data)],
+                    [InlineKeyboardButton("🔙 Back to PC List", callback_data="fleet_picker")],
+                ]
+                if not pc.get("is_host"):
+                    offline_buttons.insert(1, [InlineKeyboardButton("🗑️ Remove PC from Fleet", callback_data=f"cb_del_pc_{pc['name']}")])
+
                 await query.edit_message_text(
                     f"🔴 <b>{html.escape(label)} is OFFLINE</b>\n\n"
                     f"Cannot connect to <code>{pc['ip']}:{pc.get('port', 9010)}</code>.\n"
-                    f"Make sure the PC is on and the agent is running.",
-                    reply_markup=InlineKeyboardMarkup([
-                        [InlineKeyboardButton("🔄 Retry", callback_data=data)],
-                        [InlineKeyboardButton("🔙 Back to PC List", callback_data="fleet_picker")],
-                    ]),
+                    f"Make sure the PC is on and the agent is running.\n\n"
+                    f"<i>If you uninstalled Sentinel from this PC, tap below to remove it:</i>",
+                    reply_markup=InlineKeyboardMarkup(offline_buttons),
                     parse_mode="HTML"
                 )
                 return
@@ -1845,6 +2049,17 @@ async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     f"<i>Connected. Tap below to control:</i>"
                 )
             await query.edit_message_text(text, reply_markup=get_main_keyboard(), parse_mode="HTML")
+        return
+
+    if data.startswith("cb_del_pc_"):
+        target_name = data.replace("cb_del_pc_", "")
+        fleet = load_fleet()
+        fleet["pcs"] = [p for p in fleet.get("pcs", []) if p["name"].lower() != target_name.lower()]
+        save_fleet(fleet)
+        if context.user_data.get("selected_pc", {}).get("name", "").lower() == target_name.lower():
+            context.user_data.pop("selected_pc", None)
+        await query.answer(f"Removed {target_name} from fleet.")
+        await show_pc_picker(update, context, prompt=f"🗑️ PC '<b>{html.escape(target_name)}</b>' was removed from fleet.")
         return
 
     # ── PC Commands (require selected PC) ─────────────────────────
@@ -2254,6 +2469,9 @@ def main():
         print("\n⚠️ Error: TELEGRAM_BOT_TOKEN is not set in .env file!")
         return
 
+    # Auto-spawn local agent on Windows so Host PC is active immediately
+    ensure_local_agent_running()
+
     app = ApplicationBuilder().token(config.BOT_TOKEN).build()
     app.add_error_handler(error_handler)
 
@@ -2269,6 +2487,9 @@ def main():
     app.add_handler(CommandHandler(["cast", "stream"], handle_cast))
     app.add_handler(CommandHandler("login", handle_login))
     app.add_handler(CommandHandler("logout", handle_logout))
+    app.add_handler(CommandHandler(["setpin", "pin"], handle_setpin))
+    app.add_handler(CommandHandler(["removepin", "unsetpin", "delpin"], handle_removepin))
+    app.add_handler(CommandHandler(["removepc", "deletepc", "delpc"], handle_remove_pc))
     app.add_handler(CommandHandler("top", handle_top))
     app.add_handler(CommandHandler("kill", handle_kill))
     app.add_handler(CommandHandler("say", handle_say))
@@ -2329,6 +2550,9 @@ def main():
             BotCommand("reload", "Reload fleet.json"),
             BotCommand("login", "Authenticate with PIN"),
             BotCommand("logout", "Lock session"),
+            BotCommand("setpin", "Configure/change security PIN"),
+            BotCommand("removepin", "Disable security PIN"),
+            BotCommand("removepc", "Remove PC from fleet"),
             BotCommand("status", "System Diagnostics"),
             BotCommand("shot", "Desktop Screenshot"),
             BotCommand("cast", "Live Screen Cast"),

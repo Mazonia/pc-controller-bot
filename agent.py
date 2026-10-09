@@ -38,6 +38,7 @@ from loguru import logger
 
 BASE_DIR = Path(__file__).resolve().parent
 load_dotenv(BASE_DIR / "agent.env")
+load_dotenv(BASE_DIR / ".env")
 
 PC_NAME = os.getenv("PC_NAME", "").strip() or os.environ.get("COMPUTERNAME", "Unknown-PC")
 AGENT_PORT = int(os.getenv("AGENT_PORT", "9010"))

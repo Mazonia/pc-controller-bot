@@ -21,6 +21,9 @@ for /f "delims=" %%i in ('where python') do set PYTHON_BIN=%%i & goto :found_py
 if not exist pc-sentinel.exe (
     copy "%PYTHON_BIN%" pc-sentinel.exe >nul
 )
+if not exist pc-sentinel-agent.exe (
+    copy "%PYTHON_BIN%" pc-sentinel-agent.exe >nul
+)
 
 echo Starting PC Remote Sentinel Bot as [pc-sentinel.exe]...
 pc-sentinel.exe bot.py
