@@ -1,0 +1,22 @@
+services:
+  - type: worker
+    name: pc-remote-sentinel-commander
+    runtime: python
+    buildCommand: pip install -r requirements-bot.txt
+    startCommand: python bot.py
+    autoDeploy: true
+    envVars:
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: AUTHORIZED_USER_IDS
+        sync: false
+      - key: FLEET_SECRET
+        sync: false
+      - key: MQTT_BROKER
+        value: broker.emqx.io
+      - key: MQTT_PORT
+        value: "8883"
+      - key: MQTT_USE_TLS
+        value: "true"
+      - key: PYTHON_VERSION
+        value: 3.11.0

@@ -152,12 +152,20 @@ Because smartphones stay powered and connected to Wi-Fi/4G 24/7, you can run the
    ```
    *The script activates `termux-wake-lock` so Android never suspends your bot when the phone screen is off!*
 
-#### ☁️ Option B: Free Cloud Container / Docker / Linux VPS
-Host the bot on Render.com, Railway.app, Fly.io, Oracle Cloud Free Tier, or any home Linux server:
+#### ☁️ Option B: Free 24/7 Cloud Server (Render / Railway / Docker) — Zero Phone Battery
+Run the Commander Bot 24/7 in the cloud with zero hardware maintenance:
+
+**Via Render.com (Free Tier):**
+1. Sign up at [Render.com](https://render.com/) and click **New +** → **Blueprint**.
+2. Connect your GitHub repository (`Mazonia/pc-controller-bot`). Render automatically detects `render.yaml`.
+3. Enter your `TELEGRAM_BOT_TOKEN`, `AUTHORIZED_USER_IDS`, and `FLEET_SECRET` when prompted.
+4. Click **Apply**. Render will build and run your bot 24/7 continuously.
+
+**Via Docker / Home Server / VPS:**
 ```bash
 docker compose up -d
 ```
-*Zero battery usage, zero hardware maintenance, 99.99% uptime.*
+*Zero phone battery drain, 99.99% uptime, and instant access from anywhere via your Telegram app.*
 
 #### 💻 Option C: Windows Main PC / Laptop
 Double-click **`run.bat`** (or run `python bot.py`).  

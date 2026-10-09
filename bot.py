@@ -59,12 +59,22 @@ def load_fleet() -> dict:
             return json.loads(FLEET_FILE.read_text(encoding="utf-8"))
         except Exception as e:
             logger.error(f"Failed to load fleet.json: {e}")
-    return {"secret": "", "pcs": []}
+    return {"secret": os.getenv("FLEET_SECRET", "").strip(), "pcs": []}
 
 
 def save_fleet(fleet: dict):
     """Save fleet configuration."""
-    FLEET_FILE.write_text(json.dumps(fleet, indent=4), encoding="utf-8")
+    try:
+        FLEET_FILE.write_text(json.dumps(fleet, indent=4), encoding="utf-8")
+    except Exception as e:
+        logger.warning(f"Could not persist fleet.json: {e}")
+
+
+def get_fleet_secret(fleet: Optional[dict] = None) -> str:
+    """Get the active fleet encryption secret from fleet.json or environment."""
+    if fleet is None:
+        fleet = load_fleet()
+    return (fleet.get("secret", "") or "").strip() or os.getenv("FLEET_SECRET", "").strip() or "sentinel-fleet-secret-2026"
 
 
 class AgentClient:
@@ -450,7 +460,7 @@ def get_agent(context: ContextTypes.DEFAULT_TYPE) -> Optional[AgentClient]:
     if not pc:
         return None
     fleet = load_fleet()
-    return AgentClient(pc, fleet.get("secret", ""))
+    return AgentClient(pc, get_fleet_secret(fleet))
 
 
 async def require_pc(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Optional[AgentClient]:
@@ -469,7 +479,7 @@ async def require_pc(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Opti
 async def check_fleet_health(fleet: dict) -> Dict[str, dict]:
     """Check which PCs are online via Cloud Relay or LAN."""
     results = {}
-    secret = fleet.get("secret", "")
+    secret = get_fleet_secret(fleet)
 
     relay_pcs = commander_relay.get_pc_list() if (commander_relay and commander_relay.is_connected) else {}
 
@@ -2281,7 +2291,7 @@ def main():
         # Initialize and start Fleet Cloud Relay
         global commander_relay
         fleet = load_fleet()
-        secret = fleet.get("secret", "") or os.getenv("FLEET_SECRET", "sentinel-fleet-secret-2026")
+        secret = get_fleet_secret(fleet)
         broker = os.getenv("MQTT_BROKER", "broker.emqx.io").strip()
         port = int(os.getenv("MQTT_PORT", "8883"))
         use_tls = os.getenv("MQTT_USE_TLS", "true").strip().lower() in ("1", "true", "yes")
