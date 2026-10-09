@@ -19,6 +19,7 @@ import asyncio
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional, Dict, Any, List, Tuple
+import urllib.parse
 
 import httpx
 from loguru import logger
@@ -272,6 +273,33 @@ class AgentClient:
             if res.get("ok"):
                 return res
         r = await self._post(f"/desktop/switch?action={action}", timeout=10.0)
+        r.raise_for_status()
+        return r.json()
+
+    async def get_open_windows(self, limit: int = 25) -> dict:
+        if self.is_relay_online():
+            res = await commander_relay.send_command(self.name, "windows_list", {"limit": limit}, timeout=10.0)
+            if res.get("ok"):
+                return res
+        r = await self._get(f"/windows?limit={limit}", timeout=10.0)
+        r.raise_for_status()
+        return r.json()
+
+    async def focus_window(self, target: Any) -> dict:
+        if self.is_relay_online():
+            res = await commander_relay.send_command(self.name, "window_focus", {"target": str(target)}, timeout=10.0)
+            if res.get("ok"):
+                return res
+        r = await self._post(f"/windows/focus?target={urllib.parse.quote(str(target))}", timeout=10.0)
+        r.raise_for_status()
+        return r.json()
+
+    async def cycle_window(self, direction: str = "next") -> dict:
+        if self.is_relay_online():
+            res = await commander_relay.send_command(self.name, "window_cycle", {"direction": direction}, timeout=10.0)
+            if res.get("ok"):
+                return res
+        r = await self._post(f"/windows/cycle?direction={direction}", timeout=10.0)
         r.raise_for_status()
         return r.json()
 
@@ -742,7 +770,7 @@ def get_main_keyboard() -> InlineKeyboardMarkup:
         ],
         [
             InlineKeyboardButton("📺 Live Screen Cast", callback_data="cb_cast_menu"),
-            InlineKeyboardButton("🪟 Switch Desktops", callback_data="cb_desktop_menu"),
+            InlineKeyboardButton("🪟 Desktops & Windows", callback_data="cb_desktop_menu"),
         ],
         [
             InlineKeyboardButton("🎥 Screen Video", callback_data="cb_screen_menu"),
@@ -778,17 +806,48 @@ def get_desktop_keyboard() -> InlineKeyboardMarkup:
             InlineKeyboardButton("Next Desktop ▶", callback_data="cb_desktop_next"),
         ],
         [
-            InlineKeyboardButton("➕ New Desktop", callback_data="cb_desktop_new"),
+            InlineKeyboardButton("◀ Alt+Tab", callback_data="cb_win_cycle_prev"),
+            InlineKeyboardButton("Alt+Tab ▶", callback_data="cb_win_cycle_next"),
+        ],
+        [
+            InlineKeyboardButton("🗂️ Switch App / Window", callback_data="cb_win_list"),
             InlineKeyboardButton("🪟 Task View", callback_data="cb_desktop_task_view"),
         ],
         [
+            InlineKeyboardButton("➕ New Desktop", callback_data="cb_desktop_new"),
             InlineKeyboardButton("❌ Close Desktop", callback_data="cb_desktop_close"),
-            InlineKeyboardButton("📸 Screenshot", callback_data="cb_desktop_snap"),
         ],
         [
+            InlineKeyboardButton("📸 Screenshot", callback_data="cb_desktop_snap"),
             InlineKeyboardButton("🔙 Back to Menu", callback_data="cb_menu"),
         ],
     ])
+
+
+def get_windows_picker_keyboard(windows: list) -> InlineKeyboardMarkup:
+    """Build interactive inline keyboard for choosing and focusing open application windows."""
+    buttons = []
+    for w in windows[:10]:
+        title = w.get("title", "Window").strip()
+        proc = w.get("process", "").strip()
+        hwnd = w.get("hwnd", 0)
+        label = title[:28] + ("…" if len(title) > 28 else "")
+        if proc and not label.lower().endswith(proc.lower()):
+            label = f"{label} ({proc})"
+            if len(label) > 36:
+                label = label[:33] + "…"
+        buttons.append([InlineKeyboardButton(f"🪟 {label}", callback_data=f"cb_win_focus_{hwnd}")])
+
+    buttons.append([
+        InlineKeyboardButton("◀ Alt+Tab", callback_data="cb_win_cycle_prev"),
+        InlineKeyboardButton("Alt+Tab ▶", callback_data="cb_win_cycle_next"),
+        InlineKeyboardButton("🔄 Refresh", callback_data="cb_win_list"),
+    ])
+    buttons.append([
+        InlineKeyboardButton("🪟 Desktops Menu", callback_data="cb_desktop_menu"),
+        InlineKeyboardButton("🔙 Back to Menu", callback_data="cb_menu"),
+    ])
+    return InlineKeyboardMarkup(buttons)
 
 
 def get_screen_keyboard() -> InlineKeyboardMarkup:
@@ -1503,18 +1562,85 @@ async def handle_desktop(update: Update, context: ContextTypes.DEFAULT_TYPE):
     label = pc_label(context)
     try:
         st = await agent.status()
-        win = html.escape(st.get("active_window", "Desktop")[:45])
+        win = html.escape(st.get("active_window", "Desktop")[:50])
     except Exception:
         win = "Active Desktop"
 
     text = (
-        f"🪟 <b>VIRTUAL DESKTOPS — {html.escape(label)}</b>\n"
+        f"🪟 <b>DESKTOPS &amp; WINDOWS — {html.escape(label)}</b>\n"
         f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"Switch, create, or inspect Windows virtual desktops remotely.\n\n"
+        f"Switch virtual desktops or jump directly between open windows.\n\n"
         f"🖥️ <b>Active Window:</b> <code>{win}</code>\n"
-        f"⌨️ <i>Hardware Shortcuts: Win+Ctrl+Arrows, Win+Tab, Win+Ctrl+D</i>"
+        f"⌨️ <i>Hardware Shortcuts: Alt+Tab, Win+Ctrl+Arrows, Win+Tab</i>"
     )
     await update.effective_message.reply_text(text, reply_markup=get_desktop_keyboard(), parse_mode="HTML")
+
+
+async def handle_windows(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """List open application windows or switch directly to a target window (/windows, /apps, /switch)."""
+    if not await check_access(update, context):
+        return
+    agent = await require_pc(update, context)
+    if not agent:
+        return
+
+    label = pc_label(context)
+
+    # If user provided a window name or query: /switch brave, /window code, /apps spotify
+    if context.args:
+        target = " ".join(context.args).strip()
+        try:
+            res = await agent.focus_window(target)
+            ok = res.get("ok", False)
+            msg = res.get("msg", "Window focus requested")
+            active = res.get("active_window", "")
+            if ok:
+                await update.effective_message.reply_text(
+                    f"✅ <b>Window Switched!</b>\n"
+                    f"━━━━━━━━━━━━━━━━━━━━\n"
+                    f"🎯 <b>Target:</b> <code>{html.escape(msg)}</code>\n"
+                    f"🖥️ <b>Foreground:</b> <code>{html.escape(active[:50])}</code>",
+                    parse_mode="HTML"
+                )
+            else:
+                await update.effective_message.reply_text(
+                    f"⚠️ <b>Window Not Found:</b> {html.escape(msg)}\n"
+                    f"Send <code>/windows</code> without arguments to see all active open applications.",
+                    parse_mode="HTML"
+                )
+            return
+        except Exception as e:
+            await update.effective_message.reply_text(f"❌ Error switching window: {e}")
+            return
+
+    # No argument: Fetch open windows list and display keyboard
+    try:
+        data = await agent.get_open_windows(limit=15)
+        wins = data.get("windows", [])
+        active = data.get("active_window", "Desktop")
+        if not wins:
+            await update.effective_message.reply_text(
+                f"🪟 <b>NO OPEN WINDOWS FOUND — {html.escape(label)}</b>\n\n"
+                f"All application windows may be minimized or hidden.",
+                reply_markup=get_desktop_keyboard(),
+                parse_mode="HTML"
+            )
+            return
+
+        text = (
+            f"🗂️ <b>OPEN APPLICATIONS — {html.escape(label)}</b>\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"Tap any window below to bring it directly to the foreground:\n\n"
+            f"🖥️ <b>Active Window:</b> <code>{html.escape(active[:50])}</code>\n"
+            f"📊 <b>Total Visible Windows:</b> {len(wins)}"
+        )
+        await update.effective_message.reply_text(
+            text,
+            reply_markup=get_windows_picker_keyboard(wins),
+            parse_mode="HTML"
+        )
+    except Exception as e:
+        await update.effective_message.reply_text(f"❌ Error listing open windows: {e}")
 
 
 async def execute_cast_web_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2448,15 +2574,15 @@ async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         label = pc_label(context)
         try:
             st = await agent.status()
-            win = html.escape(st.get("active_window", "Desktop")[:45])
+            win = html.escape(st.get("active_window", "Desktop")[:50])
         except Exception:
             win = "Active Desktop"
         text = (
-            f"🪟 <b>VIRTUAL DESKTOPS — {html.escape(label)}</b>\n"
+            f"🪟 <b>DESKTOPS &amp; WINDOWS — {html.escape(label)}</b>\n"
             f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-            f"Switch, create, or inspect Windows virtual desktops remotely.\n\n"
+            f"Switch virtual desktops or jump directly between open windows.\n\n"
             f"🖥️ <b>Active Window:</b> <code>{win}</code>\n"
-            f"⌨️ <i>Hardware Shortcuts: Win+Ctrl+Arrows, Win+Tab, Win+Ctrl+D</i>"
+            f"⌨️ <i>Hardware Shortcuts: Alt+Tab, Win+Ctrl+Arrows, Win+Tab</i>"
         )
         await query.edit_message_text(text, reply_markup=get_desktop_keyboard(), parse_mode="HTML")
     elif data.startswith("cb_desktop_"):
@@ -2495,13 +2621,105 @@ async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 except Exception:
                     win = "Active Desktop"
             text = (
-                f"🪟 <b>VIRTUAL DESKTOPS — {html.escape(label)}</b>\n"
+                f"🪟 <b>DESKTOPS &amp; WINDOWS — {html.escape(label)}</b>\n"
                 f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
                 f"Status: <code>{html.escape(msg)}</code>\n\n"
-                f"🖥️ <b>Active Window:</b> <code>{html.escape(win[:45])}</code>\n"
-                f"⌨️ <i>Hardware Shortcuts: Win+Ctrl+Arrows, Win+Tab, Win+Ctrl+D</i>"
+                f"🖥️ <b>Active Window:</b> <code>{html.escape(win[:50])}</code>\n"
+                f"⌨️ <i>Hardware Shortcuts: Alt+Tab, Win+Ctrl+Arrows, Win+Tab</i>"
             )
             await query.edit_message_text(text, reply_markup=get_desktop_keyboard(), parse_mode="HTML")
+        except Exception as e:
+            await query.answer(f"❌ Error: {e}", show_alert=True)
+    elif data.startswith("cb_win_cycle_"):
+        direction = data.replace("cb_win_cycle_", "")
+        agent = get_agent(context)
+        if not agent:
+            await query.answer("No PC selected.", show_alert=True)
+            return
+        try:
+            res = await agent.cycle_window(direction)
+            ok = res.get("ok", False)
+            msg = res.get("msg", "Window cycled")
+            win = res.get("active_window", "")
+            toast = f"✅ {msg}" if ok else f"❌ {msg}"
+            await query.answer(toast, show_alert=False)
+
+            label = pc_label(context)
+            if not win:
+                try:
+                    st = await agent.status()
+                    win = st.get("active_window", "Desktop")
+                except Exception:
+                    win = "Active Desktop"
+
+            text = (
+                f"🪟 <b>DESKTOPS &amp; WINDOWS — {html.escape(label)}</b>\n"
+                f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                f"Action: <code>{html.escape(msg)}</code>\n\n"
+                f"🖥️ <b>Active Window:</b> <code>{html.escape(win[:50])}</code>\n"
+                f"⌨️ <i>Hardware Shortcuts: Alt+Tab, Win+Ctrl+Arrows, Win+Tab</i>"
+            )
+            await query.edit_message_text(text, reply_markup=get_desktop_keyboard(), parse_mode="HTML")
+        except Exception as e:
+            await query.answer(f"❌ Error: {e}", show_alert=True)
+    elif data == "cb_win_list":
+        agent = get_agent(context)
+        if not agent:
+            await query.answer("No PC selected.", show_alert=True)
+            return
+        try:
+            await query.answer("Loading open windows...")
+            data_wins = await agent.get_open_windows(limit=15)
+            wins = data_wins.get("windows", [])
+            active = data_wins.get("active_window", "Desktop")
+            label = pc_label(context)
+            if not wins:
+                await query.edit_message_text(
+                    f"🪟 <b>NO OPEN WINDOWS FOUND — {html.escape(label)}</b>\n\n"
+                    f"All application windows may be minimized or hidden.",
+                    reply_markup=get_desktop_keyboard(),
+                    parse_mode="HTML"
+                )
+                return
+
+            text = (
+                f"🗂️ <b>OPEN APPLICATIONS — {html.escape(label)}</b>\n"
+                f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                f"Tap any window below to bring it directly to the foreground:\n\n"
+                f"🖥️ <b>Active Window:</b> <code>{html.escape(active[:50])}</code>\n"
+                f"📊 <b>Total Visible Windows:</b> {len(wins)}"
+            )
+            await query.edit_message_text(text, reply_markup=get_windows_picker_keyboard(wins), parse_mode="HTML")
+        except Exception as e:
+            await query.answer(f"❌ Error: {e}", show_alert=True)
+    elif data.startswith("cb_win_focus_"):
+        target_hwnd = data.replace("cb_win_focus_", "")
+        agent = get_agent(context)
+        if not agent:
+            await query.answer("No PC selected.", show_alert=True)
+            return
+        try:
+            res = await agent.focus_window(target_hwnd)
+            ok = res.get("ok", False)
+            msg = res.get("msg", "Window focused")
+            active = res.get("active_window", "")
+            toast = f"✅ {msg}" if ok else f"❌ {msg}"
+            await query.answer(toast, show_alert=False)
+
+            label = pc_label(context)
+            data_wins = await agent.get_open_windows(limit=15)
+            wins = data_wins.get("windows", [])
+            if not active:
+                active = data_wins.get("active_window", "Desktop")
+
+            text = (
+                f"🗂️ <b>OPEN APPLICATIONS — {html.escape(label)}</b>\n"
+                f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                f"Status: <code>{html.escape(msg)}</code>\n\n"
+                f"🖥️ <b>Active Window:</b> <code>{html.escape(active[:50])}</code>\n"
+                f"Tap any window below to switch to it:"
+            )
+            await query.edit_message_text(text, reply_markup=get_windows_picker_keyboard(wins), parse_mode="HTML")
         except Exception as e:
             await query.answer(f"❌ Error: {e}", show_alert=True)
     elif data == "cb_top":
@@ -2835,6 +3053,7 @@ def main():
     app.add_handler(CommandHandler("record_webcam", handle_record_webcam))
     app.add_handler(CommandHandler(["cast", "stream"], handle_cast))
     app.add_handler(CommandHandler(["desktop", "desktops"], handle_desktop))
+    app.add_handler(CommandHandler(["windows", "window", "apps", "switch"], handle_windows))
     app.add_handler(CommandHandler("login", handle_login))
     app.add_handler(CommandHandler("logout", handle_logout))
     app.add_handler(CommandHandler(["setpin", "pin"], handle_setpin))
@@ -2909,7 +3128,9 @@ def main():
             BotCommand("status", "System Diagnostics"),
             BotCommand("shot", "Desktop Screenshot"),
             BotCommand("cast", "Live Screen Cast"),
-            BotCommand("desktop", "Switch Virtual Desktops"),
+            BotCommand("desktop", "Desktops & Windows Menu"),
+            BotCommand("windows", "Switch Open Apps/Windows"),
+            BotCommand("switch", "Focus App: /switch [name]"),
             BotCommand("webcam", "Webcam Snapshot"),
             BotCommand("record_screen", "Record Desktop (10s-120s)"),
             BotCommand("record_webcam", "Record Webcam"),

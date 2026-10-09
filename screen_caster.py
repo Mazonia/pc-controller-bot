@@ -514,7 +514,7 @@ HTML_PLAYER_TEMPLATE = """<!DOCTYPE html>
         </div>
 
         <div class="toolbar">
-            <!-- Row 1: Virtual Desktop Controls -->
+            <!-- Row 1: Virtual Desktop Controls & Window Switching -->
             <div class="toolbar-row">
                 <div class="control-group">
                     <span class="section-label">🪟 Desktops:</span>
@@ -522,6 +522,15 @@ HTML_PLAYER_TEMPLATE = """<!DOCTYPE html>
                     <button class="btn btn-desktop" onclick="switchDesktop('next')" title="Switch to Next Virtual Desktop (Win+Ctrl+Right)">Desktop ▶</button>
                     <button class="btn" onclick="switchDesktop('task_view')" title="Toggle Task View / Desktop Overview (Win+Tab)">🪟 Task View</button>
                     <button class="btn" onclick="switchDesktop('new')" title="Create New Virtual Desktop (Win+Ctrl+D)">➕ New</button>
+                </div>
+                <div class="control-group">
+                    <span class="section-label">⚡ Windows:</span>
+                    <button class="btn btn-desktop" onclick="cycleWindow('prev')" title="Alt+Shift+Tab (Cycle back)">◀ Alt+Tab</button>
+                    <button class="btn btn-desktop" onclick="cycleWindow('next')" title="Alt+Tab (Cycle forward)">Alt+Tab ▶</button>
+                    <select id="sel-app" onchange="focusSelectedApp()" title="Directly focus open application" style="max-width: 220px;">
+                        <option value="">🗂️ Switch App...</option>
+                    </select>
+                    <button class="btn" onclick="refreshOpenWindows()" title="Refresh open application list">🔄</button>
                 </div>
                 <div class="control-group">
                     <button class="btn btn-accent" onclick="downloadSnapshot()">📸 Snapshot</button>
@@ -716,6 +725,71 @@ HTML_PLAYER_TEMPLATE = """<!DOCTYPE html>
             }
         }
 
+        // Remote Window Cycling (Alt+Tab / Alt+Shift+Tab)
+        async function cycleWindow(dir) {
+            try {
+                showToast(`Cycling window (${dir})...`, false);
+                const res = await fetch(`/windows/cycle?token=${token}&dir=${dir}`, { method: 'POST' });
+                if (res.ok) {
+                    const data = await res.json();
+                    showToast(data.msg || `Window switched (${dir})`);
+                    if (data.active_window) document.getElementById('window-title').textContent = data.active_window;
+                    setTimeout(fetchStatusAndPing, 300);
+                    setTimeout(refreshOpenWindows, 500);
+                } else {
+                    showToast('Failed to cycle window', true);
+                }
+            } catch (e) {
+                showToast('Cycle error: ' + e.message, true);
+            }
+        }
+
+        // Focus selected window from application dropdown
+        async function focusSelectedApp() {
+            const sel = document.getElementById('sel-app');
+            const val = sel.value;
+            if (!val) return;
+            try {
+                showToast('Bringing window to front...', false);
+                const res = await fetch(`/windows/focus?token=${token}&target=${encodeURIComponent(val)}`, { method: 'POST' });
+                if (res.ok) {
+                    const data = await res.json();
+                    showToast(data.msg || 'Focused window');
+                    if (data.active_window) document.getElementById('window-title').textContent = data.active_window;
+                    setTimeout(fetchStatusAndPing, 300);
+                } else {
+                    showToast('Failed to focus window', true);
+                }
+            } catch (e) {
+                showToast('Focus error: ' + e.message, true);
+            } finally {
+                sel.value = "";
+            }
+        }
+
+        // Fetch and refresh list of open top-level application windows
+        async function refreshOpenWindows() {
+            try {
+                const res = await fetch(`/windows?token=${token}`);
+                if (res.ok) {
+                    const data = await res.json();
+                    const sel = document.getElementById('sel-app');
+                    sel.innerHTML = '<option value="">🗂️ Switch App (' + (data.windows ? data.windows.length : 0) + ')...</option>';
+                    if (data.windows && Array.isArray(data.windows)) {
+                        data.windows.forEach(w => {
+                            const opt = document.createElement('option');
+                            opt.value = w.hwnd;
+                            const title = w.title.length > 32 ? w.title.substring(0, 30) + '...' : w.title;
+                            opt.textContent = `${title} [${w.process}]`;
+                            sel.appendChild(opt);
+                        });
+                    }
+                }
+            } catch (e) {}
+        }
+        setInterval(refreshOpenWindows, 10000);
+        setTimeout(refreshOpenWindows, 1200);
+
         // Download high-resolution snapshot
         function downloadSnapshot() {
             const a = document.createElement('a');
@@ -839,6 +913,23 @@ class StreamHTTPHandler(BaseHTTPRequestHandler):
                 self.send_response(500)
                 self.end_headers()
 
+        elif path == "/windows":
+            try:
+                from system_controller import SystemController
+                wins = SystemController.get_open_windows(limit=25)
+            except Exception:
+                wins = []
+            resp = json.dumps({
+                "ok": True,
+                "windows": wins,
+                "active_window": get_active_window_title()
+            }).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(resp)))
+            self.end_headers()
+            self.wfile.write(resp)
+
         elif path == "/stream.mjpg":
             # Multipart MJPEG stream
             self.send_response(200)
@@ -904,6 +995,46 @@ class StreamHTTPHandler(BaseHTTPRequestHandler):
                 "ok": ok,
                 "msg": msg,
                 "action": action,
+                "active_window": get_active_window_title()
+            }).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(resp)))
+            self.end_headers()
+            self.wfile.write(resp)
+
+        elif path == "/windows/cycle":
+            query = parse_qs(parsed.query)
+            direction = query.get("dir", ["next"])[0]
+            try:
+                from system_controller import SystemController
+                ok, msg = SystemController.cycle_window(direction)
+            except Exception as e:
+                ok, msg = False, str(e)
+            resp = json.dumps({
+                "ok": ok,
+                "msg": msg,
+                "direction": direction,
+                "active_window": get_active_window_title()
+            }).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(resp)))
+            self.end_headers()
+            self.wfile.write(resp)
+
+        elif path == "/windows/focus":
+            query = parse_qs(parsed.query)
+            target = query.get("target", [""])[0]
+            try:
+                from system_controller import SystemController
+                ok, msg = SystemController.focus_window(target)
+            except Exception as e:
+                ok, msg = False, str(e)
+            resp = json.dumps({
+                "ok": ok,
+                "msg": msg,
+                "target": target,
                 "active_window": get_active_window_title()
             }).encode("utf-8")
             self.send_response(200)

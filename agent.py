@@ -232,6 +232,39 @@ def handle_relay_command(data: dict) -> dict:
             "pc_name": PC_NAME,
         }
 
+    elif cmd == "windows_list":
+        limit = int(params.get("limit", 20))
+        windows = SystemController.get_open_windows(limit=limit)
+        return {
+            "ok": True,
+            "windows": windows,
+            "active_window": get_active_window_title(),
+            "pc_name": PC_NAME,
+        }
+
+    elif cmd == "window_focus":
+        target = params.get("target") or params.get("hwnd") or params.get("query")
+        if not target:
+            return {"ok": False, "error": "No target window specified."}
+        ok, msg = SystemController.focus_window(target)
+        return {
+            "ok": ok,
+            "msg": msg,
+            "active_window": get_active_window_title(),
+            "pc_name": PC_NAME,
+        }
+
+    elif cmd == "window_cycle":
+        direction = params.get("direction", "next")
+        ok, msg = SystemController.cycle_window(direction)
+        return {
+            "ok": ok,
+            "msg": msg,
+            "direction": direction,
+            "active_window": get_active_window_title(),
+            "pc_name": PC_NAME,
+        }
+
     # 7. POWER & LOCK
     elif cmd == "lock":
         ok, msg = SystemController.lock_workstation()
@@ -452,6 +485,24 @@ async def api_desktop_switch(action: str = "next"):
         "active_window": get_active_window_title(),
         "pc_name": PC_NAME,
     }
+
+
+@app.get("/windows")
+async def api_windows_list(limit: int = 20):
+    wins = SystemController.get_open_windows(limit=limit)
+    return {"ok": True, "windows": wins, "active_window": get_active_window_title()}
+
+
+@app.post("/windows/focus")
+async def api_window_focus(target: str = ""):
+    ok, msg = SystemController.focus_window(target)
+    return {"ok": ok, "msg": msg, "active_window": get_active_window_title()}
+
+
+@app.post("/windows/cycle")
+async def api_window_cycle(direction: str = "next"):
+    ok, msg = SystemController.cycle_window(direction)
+    return {"ok": ok, "msg": msg, "direction": direction, "active_window": get_active_window_title()}
 
 
 # ═══════════════════════════════════════════════════════════════════════

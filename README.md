@@ -76,15 +76,20 @@ Traditional remote desktop tools require port forwarding, static public IPs, com
   - **Interactive Remote Controls**: Control virtual desktops, inspect ping latency/FPS HUD, and capture high-res snapshots directly from your phone's browser.
   - **In-Chat Live Radar**: Rapid refreshing photo frames streamed directly inside your Telegram chat over the cloud relay.
 
-### 🪟 Windows Virtual Desktop Switching
-- **Dedicated Remote Control (`/desktop`, `/desktops`)**: Switch, create, or inspect Windows Virtual Desktops with 1 tap from Telegram or the live web stream player.
-- **Hardware Key Navigation**:
+### 🪟 Desktops & Windows Application Switching
+- **Dedicated Remote Control (`/desktop`, `/windows`, `/switch`)**: Switch, create, or inspect Windows Virtual Desktops and cycle or focus active application windows with 1 tap from Telegram or the live web stream player.
+- **Active Window Selection**: Tap any running application from the interactive Telegram keyboard or select it from the Live Stream dropdown to bring it directly to the front (even if minimized).
+- **Fast Window Cycling**:
+  - `[◀ Alt+Tab]` (Cycle forward)
+  - `[Alt+Tab ▶]` (Cycle backward with Shift)
+  - Direct Command: `/switch brave`, `/switch code`, `/switch spotify`
+- **Virtual Desktop Navigation**:
   - `[◀ Prev Desktop]` (`Win + Ctrl + Left`)
   - `[Next Desktop ▶]` (`Win + Ctrl + Right`)
   - `[➕ New Desktop]` (`Win + Ctrl + D`)
   - `[🪟 Task View]` (`Win + Tab`)
   - `[❌ Close Desktop]` (`Win + Ctrl + F4`)
-- **Safe Modifier Handling**: Fully isolated hardware scan-code events with guaranteed modifier key release to eliminate sticky keys.
+- **Safe Modifier Handling**: Fully isolated hardware scan-code events with guaranteed modifier key release in `finally` blocks to eliminate sticky keys.
 - **Instant Lock (`/lock` or buttons)**: Locks the Windows workstation session immediately.
 - **Power Management**: Put PC to sleep, turn off monitors, turn on/wake monitors (`/monitor on`), reboot, or schedule shutdown timers (15m, 30m, 60m).
 
@@ -231,6 +236,9 @@ To monitor any PC (personal laptop, gaming PC, home workstation, office desktop,
 | `/status` | View CPU, RAM, Disk, Battery, Uptime, and Active Window |
 | `/shot`, `/screenshot` | Capture high-resolution multi-monitor screenshot |
 | `/cast`, `/stream` | Start global 30 FPS Live Screen Streaming |
+| `/desktop` | Desktops & Windows switcher menu (Alt+Tab, Virtual Desktops) |
+| `/windows`, `/apps` | List open application windows with 1-tap focus buttons |
+| `/switch <name>` | Instantly bring matching application window to the front |
 | `/webcam` | Capture photo from connected webcam |
 | `/record_webcam [s]` | Record 10s or custom webcam video clip |
 | `/record_screen [s]` | Record 10s–120s of on-screen desktop video |
