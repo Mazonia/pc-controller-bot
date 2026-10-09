@@ -129,11 +129,54 @@ Traditional remote desktop tools require port forwarding, static public IPs, com
    ```
    Fill in your `FLEET_SECRET`, `TELEGRAM_BOT_TOKEN`, and `AUTHORIZED_USER_IDS`.
 
-### Step 3: Run the Fleet Commander Bot (Your Main PC / Server)
+### Step 3: Run the Fleet Commander Bot
+
+You have **three flexible ways** to run your Commander Bot 24/7:
+
+#### 📱 Option A: Android Phone (24/7 Always-On via Termux) — Recommended
+Because smartphones stay powered and connected to Wi-Fi/4G 24/7, you can run the Commander Bot directly on your Android phone!
+1. Install **[Termux](https://f-droid.org/en/packages/com.termux/)** (free from F-Droid or GitHub Releases).
+2. Open Termux and clone the repo:
+   ```bash
+   pkg update -y && pkg install -y git python
+   git clone https://github.com/Mazonia/pc-controller-bot.git
+   cd pc-controller-bot
+   ```
+3. Run the automated setup script:
+   ```bash
+   bash termux_setup.sh
+   ```
+4. Enter your `.env` tokens (`nano .env`) and launch the bot:
+   ```bash
+   nohup python bot.py > bot.log 2>&1 &
+   ```
+   *The script activates `termux-wake-lock` so Android never suspends your bot when the phone screen is off!*
+
+#### ☁️ Option B: Free Cloud Container / Docker / Linux VPS
+Host the bot on Render.com, Railway.app, Fly.io, Oracle Cloud Free Tier, or any home Linux server:
+```bash
+docker compose up -d
+```
+*Zero battery usage, zero hardware maintenance, 99.99% uptime.*
+
+#### 💻 Option C: Windows Main PC / Laptop
 Double-click **`run.bat`** (or run `python bot.py`).  
 *(To run it completely hidden in the background, double-click `start_hidden.vbs`)*.
 
 ---
+
+## 🔄 Redundancy & Offline Self-Healing
+
+What happens if your Main PC or Commander server goes offline?
+
+- **100% Autonomous Monitored PCs**: Each target PC runs `agent.py` as an independent background process. They **never depend on the main PC being turned on**. Local timers, scheduled alarms, speakers, and security rules continue functioning normally on each target PC.
+- **MQTT Retained Telemetry (`retain=True`)**: Target PCs publish heartbeats and system states with `retain=True` to the secure cloud broker.
+- **Instant Synchronization on Boot**: The exact second your Main PC (or phone) powers on and connects to the internet:
+  1. `bot.py` connects to the broker and subscribes to your fleet topic.
+  2. The cloud broker **immediately flushes the retained status of all online PCs in <50 milliseconds**.
+  3. You instantly receive a Telegram alert listing all online PCs with their live IP and network badges.
+  4. You immediately regain full interactive control over your entire fleet.
+- **Automatic Last Will & Testament (LWT)**: If any monitored PC loses power or drops offline while you are away, the broker immediately updates that PC's status to `🔴 Offline` so your bot never displays stale data.
 
 ## 💾 Deploying on Target PCs (USB Pendrive Setup)
 

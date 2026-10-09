@@ -1,0 +1,13 @@
+# PC Remote Sentinel — Fleet Commander Bot Requirements
+# Lightweight cross-platform dependencies for running bot.py on:
+# - Android Phone (via Termux)
+# - Linux Cloud / VPS (Render, Railway, Fly.io, Ubuntu, Debian)
+# - Raspberry Pi / Home Server
+# - Windows / macOS
+
+python-telegram-bot>=21.0
+paho-mqtt>=2.0.0
+cryptography>=41.0.0
+httpx>=0.25.0
+python-dotenv>=1.0.0
+loguru>=0.7.0

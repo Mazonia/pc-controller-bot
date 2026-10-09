@@ -1,0 +1,11 @@
+services:
+  sentinel-bot:
+    build: .
+    container_name: sentinel_commander
+    restart: always
+    env_file:
+      - .env
+    volumes:
+      - ./fleet.json:/app/fleet.json
+      - ./recordings:/app/recordings
+      - ./downloads:/app/downloads

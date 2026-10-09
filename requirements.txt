@@ -1,7 +1,10 @@
+# PC Remote Sentinel — Full Requirements (Windows PC Agent + Commander)
 python-telegram-bot>=21.0
 paho-mqtt>=2.0.0
 cryptography>=41.0.0
 httpx>=0.25.0
+fastapi>=0.100.0
+uvicorn>=0.23.0
 psutil>=6.0.0
 pillow>=10.0.0
 opencv-python>=4.8.0

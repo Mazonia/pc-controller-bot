@@ -18,7 +18,10 @@ from pathlib import Path
 from datetime import datetime
 from typing import Optional, Dict, Any, Callable
 
-import psutil
+try:
+    import psutil
+except ImportError:
+    psutil = None
 from loguru import logger
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 import paho.mqtt.client as mqtt
@@ -76,24 +79,25 @@ def get_network_info() -> Dict[str, str]:
 
     # Inspect network interfaces
     try:
-        for iface_name, addrs in psutil.net_if_addrs().items():
-            name_lower = iface_name.lower()
-            for addr in addrs:
-                if addr.family == socket.AF_INET and addr.address == lan_ip:
-                    if any(k in name_lower for k in ["cell", "mobile", "wwan", "lte", "modem", "tether"]):
-                        net_type = f"Mobile Data / Dongle ({lan_ip})"
-                    elif "wi-fi" in name_lower or "wireless" in name_lower or "wlan" in name_lower:
-                        if lan_ip.startswith("192.168.43.") or lan_ip.startswith("172.20.10."):
-                            net_type = f"Phone Hotspot ({lan_ip})"
+        if psutil:
+            for iface_name, addrs in psutil.net_if_addrs().items():
+                name_lower = iface_name.lower()
+                for addr in addrs:
+                    if addr.family == socket.AF_INET and addr.address == lan_ip:
+                        if any(k in name_lower for k in ["cell", "mobile", "wwan", "lte", "modem", "tether"]):
+                            net_type = f"Mobile Data / Dongle ({lan_ip})"
+                        elif "wi-fi" in name_lower or "wireless" in name_lower or "wlan" in name_lower:
+                            if lan_ip.startswith("192.168.43.") or lan_ip.startswith("172.20.10."):
+                                net_type = f"Phone Hotspot ({lan_ip})"
+                            else:
+                                net_type = f"Wi-Fi ({lan_ip})"
+                        elif "ethernet" in name_lower or "eth" in name_lower or "local area" in name_lower:
+                            net_type = f"Ethernet ({lan_ip})"
+                        elif lan_ip.startswith("100."):
+                            net_type = f"Cellular CGNAT ({lan_ip})"
                         else:
-                            net_type = f"Wi-Fi ({lan_ip})"
-                    elif "ethernet" in name_lower or "eth" in name_lower or "local area" in name_lower:
-                        net_type = f"Ethernet ({lan_ip})"
-                    elif lan_ip.startswith("100."):
-                        net_type = f"Cellular CGNAT ({lan_ip})"
-                    else:
-                        net_type = f"Network ({lan_ip})"
-                    break
+                            net_type = f"Network ({lan_ip})"
+                        break
     except Exception:
         pass
 
@@ -266,8 +270,8 @@ class FleetAgentRelay:
             "hostname": socket.gethostname(),
             "ip": net["ip"],
             "network": net["type"],
-            "cpu": psutil.cpu_percent(interval=None),
-            "ram": psutil.virtual_memory().percent,
+            "cpu": psutil.cpu_percent(interval=None) if psutil else 0.0,
+            "ram": psutil.virtual_memory().percent if psutil else 0.0,
             "timestamp": datetime.now().isoformat(),
         })
         self.client.publish(self.topic_status, payload, qos=1, retain=True)
