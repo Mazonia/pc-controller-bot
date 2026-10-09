@@ -70,9 +70,21 @@ Traditional remote desktop tools require port forwarding, static public IPs, com
 - **Desktop Screenshots (`/shot`, `/screenshot`)**: Instant high-resolution snapshot of active monitors sent directly to Telegram.
 - **Webcam Surveillance (`/webcam`, `/record_webcam`)**: Instant photo snapshot or short security video clip (10s/30s) from connected webcams.
 - **Multi-Duration Screen Recorder (`/record_screen`)**: Interactive duration picker for 10s, 20s, 30s, 40s, 50s, 1 min, or 2 mins of on-screen desktop action into an MP4 video file.
-- **Global 30 FPS Live Screen Casting (`/cast`, `/stream`)**: Launches an on-demand Cloudflare Quick Tunnel (`cloudflared.exe`) and generates a secure public HTTPS link to stream the live desktop to your phone browser at 30 FPS.
+- **Upgraded Live Screen Casting (`/cast`, `/stream`)**:
+  - **Cross-Network Global Access**: Streams reliably across separate networks, cellular data (4G/5G), and CGNAT via automated Cloudflare Quick Tunnels (`https://*.trycloudflare.com`) with zero port forwarding.
+  - **Dual-Engine Web Player**: Smooth MJPEG video streaming + resilient **Turbo Snapshot Fallback** with client-side mobile watchdog (auto-reconnects if cellular signal dips).
+  - **Interactive Remote Controls**: Control virtual desktops, inspect ping latency/FPS HUD, and capture high-res snapshots directly from your phone's browser.
+  - **In-Chat Live Radar**: Rapid refreshing photo frames streamed directly inside your Telegram chat over the cloud relay.
 
-### ⚡ Workstation & Power Controls
+### 🪟 Windows Virtual Desktop Switching
+- **Dedicated Remote Control (`/desktop`, `/desktops`)**: Switch, create, or inspect Windows Virtual Desktops with 1 tap from Telegram or the live web stream player.
+- **Hardware Key Navigation**:
+  - `[◀ Prev Desktop]` (`Win + Ctrl + Left`)
+  - `[Next Desktop ▶]` (`Win + Ctrl + Right`)
+  - `[➕ New Desktop]` (`Win + Ctrl + D`)
+  - `[🪟 Task View]` (`Win + Tab`)
+  - `[❌ Close Desktop]` (`Win + Ctrl + F4`)
+- **Safe Modifier Handling**: Fully isolated hardware scan-code events with guaranteed modifier key release to eliminate sticky keys.
 - **Instant Lock (`/lock` or buttons)**: Locks the Windows workstation session immediately.
 - **Power Management**: Put PC to sleep, turn off monitors, turn on/wake monitors (`/monitor on`), reboot, or schedule shutdown timers (15m, 30m, 60m).
 

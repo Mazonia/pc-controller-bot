@@ -103,25 +103,26 @@ def get_active_window_title() -> str:
     return "Desktop"
 
 
-# Modern Dark Glass HTML5 Web Player
+# Modern Dark Glass HTML5 Web Player with Cross-Network Auto-Reconnect & Virtual Desktop Controls
 HTML_PLAYER_TEMPLATE = """<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0, user-scalable=yes">
-    <title>PC Sentinel — Live Screen Cast</title>
+    <title>PC Sentinel — Live Remote Cast</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
     <style>
         :root {
             --bg: #090d16;
-            --surface: rgba(18, 24, 38, 0.75);
-            --surface-border: rgba(255, 255, 255, 0.08);
+            --surface: rgba(18, 24, 38, 0.85);
+            --surface-border: rgba(255, 255, 255, 0.1);
             --accent: #38bdf8;
-            --accent-glow: rgba(56, 189, 248, 0.25);
+            --accent-glow: rgba(56, 189, 248, 0.3);
             --danger: #f43f5e;
             --success: #10b981;
+            --warning: #f59e0b;
             --text-main: #f8fafc;
             --text-sub: #94a3b8;
         }
@@ -177,6 +178,19 @@ HTML_PLAYER_TEMPLATE = """<!DOCTYPE html>
             font-weight: 700;
             letter-spacing: 0.08em;
             text-transform: uppercase;
+        }
+
+        .badge-net {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            background: rgba(56, 189, 248, 0.15);
+            border: 1px solid rgba(56, 189, 248, 0.35);
+            color: #7dd3fc;
+            padding: 4px 10px;
+            border-radius: 999px;
+            font-size: 0.75rem;
+            font-weight: 600;
         }
 
         .pulse-dot {
@@ -278,6 +292,24 @@ HTML_PLAYER_TEMPLATE = """<!DOCTYPE html>
             text-overflow: ellipsis;
         }
 
+        .stream-status-overlay {
+            position: absolute;
+            bottom: 14px;
+            right: 14px;
+            z-index: 10;
+            background: rgba(15, 23, 42, 0.85);
+            backdrop-filter: blur(8px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            padding: 5px 12px;
+            border-radius: 6px;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.75rem;
+            color: #94a3b8;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
         .toolbar {
             width: 100%;
             max-width: 1280px;
@@ -287,23 +319,39 @@ HTML_PLAYER_TEMPLATE = """<!DOCTYPE html>
             border-radius: 14px;
             padding: 12px 18px;
             display: flex;
+            flex-direction: column;
+            gap: 12px;
+        }
+
+        .toolbar-row {
+            display: flex;
             flex-wrap: wrap;
             align-items: center;
             justify-content: space-between;
-            gap: 12px;
+            gap: 10px;
         }
 
         .control-group {
             display: flex;
+            flex-wrap: wrap;
             align-items: center;
             gap: 8px;
         }
 
+        .section-label {
+            font-size: 0.75rem;
+            font-weight: 600;
+            letter-spacing: 0.05em;
+            text-transform: uppercase;
+            color: var(--text-sub);
+            margin-right: 4px;
+        }
+
         .btn {
-            background: rgba(255, 255, 255, 0.05);
-            border: 1px solid rgba(255, 255, 255, 0.12);
+            background: rgba(255, 255, 255, 0.06);
+            border: 1px solid rgba(255, 255, 255, 0.14);
             color: var(--text-main);
-            padding: 8px 14px;
+            padding: 8px 13px;
             border-radius: 8px;
             font-family: inherit;
             font-size: 0.85rem;
@@ -316,9 +364,13 @@ HTML_PLAYER_TEMPLATE = """<!DOCTYPE html>
         }
 
         .btn:hover {
-            background: rgba(255, 255, 255, 0.12);
-            border-color: rgba(255, 255, 255, 0.25);
+            background: rgba(255, 255, 255, 0.14);
+            border-color: rgba(255, 255, 255, 0.3);
             transform: translateY(-1px);
+        }
+
+        .btn:active {
+            transform: translateY(0);
         }
 
         .btn-accent {
@@ -330,6 +382,18 @@ HTML_PLAYER_TEMPLATE = """<!DOCTYPE html>
         .btn-accent:hover {
             background: rgba(56, 189, 248, 0.25);
             border-color: #38bdf8;
+        }
+
+        .btn-desktop {
+            background: rgba(99, 102, 241, 0.18);
+            border-color: rgba(99, 102, 241, 0.4);
+            color: #c7d2fe;
+            font-weight: 600;
+        }
+
+        .btn-desktop:hover {
+            background: rgba(99, 102, 241, 0.3);
+            border-color: #818cf8;
         }
 
         .btn-danger {
@@ -345,7 +409,7 @@ HTML_PLAYER_TEMPLATE = """<!DOCTYPE html>
 
         select {
             background: #0f172a;
-            border: 1px solid rgba(255, 255, 255, 0.15);
+            border: 1px solid rgba(255, 255, 255, 0.18);
             color: var(--text-main);
             padding: 8px 12px;
             border-radius: 8px;
@@ -365,6 +429,34 @@ HTML_PLAYER_TEMPLATE = """<!DOCTYPE html>
             font-weight: 500;
         }
 
+        /* Toast notifications */
+        .toast {
+            position: fixed;
+            bottom: 24px;
+            left: 50%;
+            transform: translateX(-50%) translateY(100px);
+            background: rgba(15, 23, 42, 0.95);
+            border: 1px solid var(--accent);
+            color: #f8fafc;
+            padding: 10px 20px;
+            border-radius: 10px;
+            font-size: 0.9rem;
+            font-weight: 500;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.6);
+            opacity: 0;
+            transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+            z-index: 1000;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            pointer-events: none;
+        }
+
+        .toast.show {
+            transform: translateX(-50%) translateY(0);
+            opacity: 1;
+        }
+
         @media (max-width: 768px) {
             header {
                 padding: 10px 14px;
@@ -373,6 +465,9 @@ HTML_PLAYER_TEMPLATE = """<!DOCTYPE html>
                 display: none;
             }
             .toolbar {
+                padding: 12px;
+            }
+            .toolbar-row {
                 flex-direction: column;
                 align-items: stretch;
             }
@@ -380,8 +475,14 @@ HTML_PLAYER_TEMPLATE = """<!DOCTYPE html>
                 justify-content: space-between;
                 width: 100%;
             }
+            .control-group .btn {
+                flex: 1;
+                justify-content: center;
+                padding: 10px 6px;
+                font-size: 0.8rem;
+            }
             .stream-viewport-wrapper {
-                border-radius: 10px;
+                border-radius: 12px;
             }
         }
     </style>
@@ -390,10 +491,12 @@ HTML_PLAYER_TEMPLATE = """<!DOCTYPE html>
     <header>
         <div class="brand">
             <span class="badge-live"><span class="pulse-dot"></span> LIVE</span>
-            <span class="header-title">PC Sentinel Stream</span>
+            <span class="header-title">PC Sentinel Screen</span>
+            <span class="badge-net" id="badge-net">🌍 Remote Connected</span>
         </div>
         <div class="meta-stats">
             <div class="stat-item"><span>FPS:</span> <span class="stat-val" id="stat-fps">--</span></div>
+            <div class="stat-item"><span>Ping:</span> <span class="stat-val" id="stat-ping">-- ms</span></div>
             <div class="stat-item"><span>CPU:</span> <span class="stat-val" id="stat-cpu">--%</span></div>
             <div class="stat-item"><span>RAM:</span> <span class="stat-val" id="stat-ram">--%</span></div>
         </div>
@@ -402,45 +505,100 @@ HTML_PLAYER_TEMPLATE = """<!DOCTYPE html>
     <main>
         <div class="stream-viewport-wrapper" id="viewport">
             <div class="active-window-pill" id="window-pill">
-                <span>🪟</span> <span id="window-title">Loading display...</span>
+                <span>🪟</span> <span id="window-title">Initializing desktop feed...</span>
+            </div>
+            <div class="stream-status-overlay" id="status-overlay">
+                <span id="stream-mode-label">MJPEG Live</span>
             </div>
             <img id="stream-img" src="/stream.mjpg?token={{TOKEN}}" alt="Live Screen Stream" />
         </div>
 
         <div class="toolbar">
-            <div class="control-group">
-                <span class="label-text">Quality:</span>
-                <select id="sel-quality" onchange="updateSettings()">
-                    <option value="480">480p (Data Saver)</option>
-                    <option value="720" selected>720p (Fast & Crisp)</option>
-                    <option value="1080">1080p (Full HD)</option>
-                </select>
-
-                <span class="label-text" style="margin-left: 8px;">Target FPS:</span>
-                <select id="sel-fps" onchange="updateSettings()">
-                    <option value="10">10 FPS</option>
-                    <option value="15" selected>15 FPS</option>
-                    <option value="25">25 FPS</option>
-                </select>
+            <!-- Row 1: Virtual Desktop Controls -->
+            <div class="toolbar-row">
+                <div class="control-group">
+                    <span class="section-label">🪟 Desktops:</span>
+                    <button class="btn btn-desktop" onclick="switchDesktop('prev')" title="Switch to Previous Virtual Desktop (Win+Ctrl+Left)">◀ Desktop</button>
+                    <button class="btn btn-desktop" onclick="switchDesktop('next')" title="Switch to Next Virtual Desktop (Win+Ctrl+Right)">Desktop ▶</button>
+                    <button class="btn" onclick="switchDesktop('task_view')" title="Toggle Task View / Desktop Overview (Win+Tab)">🪟 Task View</button>
+                    <button class="btn" onclick="switchDesktop('new')" title="Create New Virtual Desktop (Win+Ctrl+D)">➕ New</button>
+                </div>
+                <div class="control-group">
+                    <button class="btn btn-accent" onclick="downloadSnapshot()">📸 Snapshot</button>
+                    <button class="btn" onclick="toggleFullscreen()">⛶ Fullscreen</button>
+                    <button class="btn btn-danger" onclick="stopStream()">⏹️ Stop</button>
+                </div>
             </div>
 
-            <div class="control-group">
-                <button class="btn btn-accent" onclick="downloadSnapshot()">📸 Snapshot</button>
-                <button class="btn" onclick="toggleFullscreen()">⛶ Fullscreen</button>
-                <button class="btn btn-danger" onclick="stopStream()">⏹️ Stop Stream</button>
+            <!-- Row 2: Stream Tuning & Network Modes -->
+            <div class="toolbar-row">
+                <div class="control-group">
+                    <span class="section-label">Engine:</span>
+                    <select id="sel-mode" onchange="changeMode()">
+                        <option value="mjpeg" selected>🎥 Smooth Video (MJPEG)</option>
+                        <option value="snapshot">⚡ Turbo Snapshot (Cellular / Low Latency)</option>
+                    </select>
+
+                    <span class="label-text" style="margin-left: 8px;">Resolution:</span>
+                    <select id="sel-quality" onchange="updateSettings()">
+                        <option value="480">480p (Data Saver)</option>
+                        <option value="720" selected>720p (Crisp & Fast)</option>
+                        <option value="1080">1080p (Full HD)</option>
+                    </select>
+
+                    <span class="label-text" style="margin-left: 8px;">Target FPS:</span>
+                    <select id="sel-fps" onchange="updateSettings()">
+                        <option value="10">10 FPS</option>
+                        <option value="15" selected>15 FPS</option>
+                        <option value="25">25 FPS</option>
+                    </select>
+                </div>
+                <div class="control-group">
+                    <button class="btn" onclick="forceReconnect()" title="Reconnect Video Stream">🔄 Reconnect</button>
+                </div>
             </div>
         </div>
     </main>
 
+    <div class="toast" id="toast">Notice message</div>
+
     <script>
         const token = "{{TOKEN}}";
+        let streamMode = 'mjpeg'; // 'mjpeg' or 'snapshot'
         let frameCount = 0;
         let lastTime = performance.now();
+        let lastFrameLoaded = performance.now();
+        let snapshotRunning = false;
+        let stallCount = 0;
 
-        // Calculate and render client-side FPS
         const img = document.getElementById('stream-img');
+
+        // Detect connection host
+        if (location.hostname.includes('trycloudflare.com')) {
+            document.getElementById('badge-net').textContent = '🌍 Cloudflare Global';
+        } else if (location.hostname === 'localhost' || location.hostname === '127.0.0.1') {
+            document.getElementById('badge-net').textContent = '💻 Host Loopback';
+        } else {
+            document.getElementById('badge-net').textContent = '🏠 Local LAN';
+        }
+
+        // Show Toast Notification
+        let toastTimer = null;
+        function showToast(msg, isWarn = false) {
+            const toast = document.getElementById('toast');
+            toast.textContent = msg;
+            toast.style.borderColor = isWarn ? '#f43f5e' : '#38bdf8';
+            toast.classList.add('show');
+            if (toastTimer) clearTimeout(toastTimer);
+            toastTimer = setTimeout(() => {
+                toast.classList.remove('show');
+            }, 3000);
+        }
+
+        // Frame timing and client FPS calculation
         img.onload = () => {
             frameCount++;
+            lastFrameLoaded = performance.now();
             const now = performance.now();
             if (now - lastTime >= 1000) {
                 const fps = Math.round((frameCount * 1000) / (now - lastTime));
@@ -450,11 +608,86 @@ HTML_PLAYER_TEMPLATE = """<!DOCTYPE html>
             }
         };
 
-        // Poll system status & active window
-        async function fetchStatus() {
+        // Mobile Watchdog: Auto-reconnect if MJPEG stream stalls > 3.5s
+        setInterval(() => {
+            if (streamMode === 'mjpeg') {
+                const elapsed = performance.now() - lastFrameLoaded;
+                if (elapsed > 3500) {
+                    stallCount++;
+                    document.getElementById('stream-mode-label').textContent = 'Reconnecting...';
+                    if (stallCount >= 3) {
+                        showToast('Cellular lag detected. Auto-switched to Snapshot Mode.', true);
+                        document.getElementById('sel-mode').value = 'snapshot';
+                        changeMode();
+                    } else {
+                        forceReconnect();
+                    }
+                } else {
+                    document.getElementById('stream-mode-label').textContent = 'MJPEG Live';
+                }
+            }
+        }, 1200);
+
+        // Force Stream Reconnect
+        function forceReconnect() {
+            if (streamMode === 'mjpeg') {
+                lastFrameLoaded = performance.now();
+                img.src = `/stream.mjpg?token=${token}&_t=${Date.now()}`;
+                showToast('Stream reconnected 🔄');
+            } else {
+                showToast('Snapshot refreshed 🔄');
+            }
+        }
+
+        // Switch Engine Mode: MJPEG vs Turbo Snapshot
+        function changeMode() {
+            const mode = document.getElementById('sel-mode').value;
+            streamMode = mode;
+            stallCount = 0;
+            if (mode === 'snapshot') {
+                document.getElementById('stream-mode-label').textContent = 'Turbo Snapshot';
+                showToast('Switched to Snapshot Mode (Cellular Resilient) ⚡');
+                if (!snapshotRunning) runSnapshotLoop();
+            } else {
+                snapshotRunning = false;
+                document.getElementById('stream-mode-label').textContent = 'MJPEG Live';
+                img.src = `/stream.mjpg?token=${token}&_t=${Date.now()}`;
+                lastFrameLoaded = performance.now();
+                showToast('Switched to Live MJPEG Stream 🎥');
+            }
+        }
+
+        // Turbo Snapshot Loop (Bulletproof across extreme cellular latency & CGNAT)
+        async function runSnapshotLoop() {
+            snapshotRunning = true;
+            while (snapshotRunning && streamMode === 'snapshot') {
+                const fps = parseInt(document.getElementById('sel-fps').value) || 10;
+                const delay = Math.max(40, Math.round(1000 / fps));
+                const t0 = performance.now();
+                try {
+                    const res = await fetch(`/snapshot.jpg?token=${token}&_t=${Date.now()}`);
+                    if (res.ok) {
+                        const blob = await res.blob();
+                        const oldUrl = img.src;
+                        img.src = URL.createObjectURL(blob);
+                        if (oldUrl.startsWith('blob:')) URL.revokeObjectURL(oldUrl);
+                        lastFrameLoaded = performance.now();
+                    }
+                } catch(e) {}
+                const elapsed = performance.now() - t0;
+                const waitTime = Math.max(10, delay - elapsed);
+                await new Promise(r => setTimeout(r, waitTime));
+            }
+        }
+
+        // Poll diagnostics and measure Ping latency
+        async function fetchStatusAndPing() {
+            const t0 = performance.now();
             try {
                 const res = await fetch(`/status?token=${token}`);
                 if (res.ok) {
+                    const ping = Math.round(performance.now() - t0);
+                    document.getElementById('stat-ping').textContent = ping + ' ms';
                     const data = await res.json();
                     if (data.cpu !== undefined) document.getElementById('stat-cpu').textContent = data.cpu + '%';
                     if (data.ram !== undefined) document.getElementById('stat-ram').textContent = data.ram + '%';
@@ -462,17 +695,36 @@ HTML_PLAYER_TEMPLATE = """<!DOCTYPE html>
                 }
             } catch (e) {}
         }
-        setInterval(fetchStatus, 2000);
-        fetchStatus();
+        setInterval(fetchStatusAndPing, 2000);
+        fetchStatusAndPing();
 
-        // Download full resolution snapshot
+        // Remote Virtual Desktop Switching Action
+        async function switchDesktop(action) {
+            try {
+                showToast('Switching desktop...', false);
+                const res = await fetch(`/desktop/switch?token=${token}&action=${action}`, { method: 'POST' });
+                if (res.ok) {
+                    const data = await res.json();
+                    showToast(data.msg || `Desktop action: ${action}`);
+                    if (data.active_window) document.getElementById('window-title').textContent = data.active_window;
+                    setTimeout(fetchStatusAndPing, 300);
+                } else {
+                    showToast('Failed to switch desktop', true);
+                }
+            } catch (e) {
+                showToast('Desktop switch request error: ' + e.message, true);
+            }
+        }
+
+        // Download high-resolution snapshot
         function downloadSnapshot() {
             const a = document.createElement('a');
-            a.href = `/snapshot.jpg?token=${token}&t=${Date.now()}`;
+            a.href = `/snapshot.jpg?token=${token}&q=92&_t=${Date.now()}`;
             a.download = `pc_screenshot_${Date.now()}.jpg`;
             document.body.appendChild(a);
             a.click();
             document.body.removeChild(a);
+            showToast('Snapshot downloaded 📸');
         }
 
         // Toggle Fullscreen on viewport
@@ -492,6 +744,7 @@ HTML_PLAYER_TEMPLATE = """<!DOCTYPE html>
             const fps = document.getElementById('sel-fps').value;
             try {
                 await fetch(`/config?token=${token}&res=${quality}&fps=${fps}`, { method: 'POST' });
+                showToast(`Settings updated: ${quality}p @ ${fps} FPS`);
             } catch (e) {}
         }
 
@@ -548,8 +801,18 @@ class StreamHTTPHandler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(data)
 
+        elif path == "/ping":
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Cache-Control", "no-cache")
+            self.end_headers()
+            self.wfile.write(b'{"ok": true}')
+
         elif path == "/snapshot.jpg":
-            img_bytes = self.caster.capture_single_frame(quality=85)
+            query = parse_qs(parsed.query)
+            q = int(query.get("q", ["80"])[0]) if query.get("q", ["80"])[0].isdigit() else 80
+            w = int(query.get("w", [str(self.caster.target_width)])[0]) if query.get("w", [""])[0].isdigit() else self.caster.target_width
+            img_bytes = self.caster.capture_single_frame(quality=min(max(q, 30), 95), max_w=w)
             self.send_response(200)
             self.send_header("Content-Type", "image/jpeg")
             self.send_header("Content-Length", str(len(img_bytes)))
@@ -628,6 +891,26 @@ class StreamHTTPHandler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(b"OK")
             threading.Thread(target=self.caster.stop_web_cast, daemon=True).start()
+
+        elif path == "/desktop/switch":
+            query = parse_qs(parsed.query)
+            action = query.get("action", ["next"])[0]
+            try:
+                from system_controller import SystemController
+                ok, msg = SystemController.switch_virtual_desktop(action)
+            except Exception as e:
+                ok, msg = False, str(e)
+            resp = json.dumps({
+                "ok": ok,
+                "msg": msg,
+                "action": action,
+                "active_window": get_active_window_title()
+            }).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(resp)))
+            self.end_headers()
+            self.wfile.write(resp)
 
         elif path == "/config":
             query = parse_qs(parsed.query)
@@ -773,7 +1056,7 @@ class ScreenCaster:
                 bufsize=1
             )
             t0 = time.time()
-            while self.is_web_streaming and (time.time() - t0 < 15):
+            while self.is_web_streaming and (time.time() - t0 < 30):
                 line = self.tunnel_process.stdout.readline()
                 if not line:
                     break
@@ -831,9 +1114,9 @@ class ScreenCaster:
         if enable_tunnel:
             self.tunnel_thread = threading.Thread(target=self._launch_tunnel_worker, daemon=True)
             self.tunnel_thread.start()
-            # Wait up to 5 seconds for initial tunnel generation
+            # Wait up to 9 seconds for initial tunnel generation
             t_wait = time.time()
-            while time.time() - t_wait < 5 and not self.public_url:
+            while time.time() - t_wait < 9 and not self.public_url:
                 time.sleep(0.3)
 
         logger.info(f"Screen cast active on port {self.port} with token {self.auth_token}")

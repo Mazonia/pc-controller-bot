@@ -245,6 +245,10 @@ class AgentClient:
         return r.json()
 
     async def cast_status(self) -> dict:
+        if self.is_relay_online():
+            res = await commander_relay.send_command(self.name, "cast_status", timeout=10.0)
+            if res.get("ok"):
+                return res.get("status", {})
         try:
             r = await self._get("/cast/status", timeout=5.0)
             r.raise_for_status()
@@ -253,9 +257,23 @@ class AgentClient:
             return {"is_web_streaming": False, "is_rtmp_streaming": False}
 
     async def cast_frame(self, quality: int = 60, max_width: int = 960) -> bytes:
+        if self.is_relay_online():
+            res = await commander_relay.send_command(self.name, "cast_frame", {"quality": quality, "max_width": max_width}, timeout=10.0)
+            if res.get("ok") and "frame_b64" in res:
+                import base64
+                return base64.b64decode(res["frame_b64"])
         r = await self._get(f"/cast/frame?quality={quality}&max_width={max_width}", timeout=10.0)
         r.raise_for_status()
         return r.content
+
+    async def switch_desktop(self, action: str = "next") -> dict:
+        if self.is_relay_online():
+            res = await commander_relay.send_command(self.name, "switch_desktop", {"action": action}, timeout=10.0)
+            if res.get("ok"):
+                return res
+        r = await self._post(f"/desktop/switch?action={action}", timeout=10.0)
+        r.raise_for_status()
+        return r.json()
 
     async def cast_rtmp_start(self, url: str) -> dict:
         r = await self._post("/cast/rtmp/start", data={"url": url})
@@ -724,30 +742,51 @@ def get_main_keyboard() -> InlineKeyboardMarkup:
         ],
         [
             InlineKeyboardButton("📺 Live Screen Cast", callback_data="cb_cast_menu"),
+            InlineKeyboardButton("🪟 Switch Desktops", callback_data="cb_desktop_menu"),
+        ],
+        [
             InlineKeyboardButton("🎥 Screen Video", callback_data="cb_screen_menu"),
-        ],
-        [
             InlineKeyboardButton("📷 Webcam Menu", callback_data="cb_webcam_menu"),
+        ],
+        [
             InlineKeyboardButton("⚡ Power & Sleep", callback_data="cb_power_menu"),
-        ],
-        [
             InlineKeyboardButton("🎵 Media & Volume", callback_data="cb_media_menu"),
+        ],
+        [
             InlineKeyboardButton("💻 Top Processes", callback_data="cb_top"),
-        ],
-        [
             InlineKeyboardButton("📋 Clipboard Tools", callback_data="cb_clip_menu"),
+        ],
+        [
             InlineKeyboardButton("🗣️ Speak / TTS", callback_data="cb_tts_info"),
-        ],
-        [
             InlineKeyboardButton("⏰ Alarm & Siren", callback_data="cb_alarm_menu"),
+        ],
+        [
             InlineKeyboardButton("🧹 Clean Storage", callback_data="cb_clean"),
-        ],
-        [
             InlineKeyboardButton("✏️ Rename", callback_data="cb_rename_current"),
-            InlineKeyboardButton("🔄 Refresh", callback_data="cb_menu"),
         ],
         [
+            InlineKeyboardButton("🔄 Refresh", callback_data="cb_menu"),
             InlineKeyboardButton("🔙 Switch PC", callback_data="fleet_picker"),
+        ],
+    ])
+
+
+def get_desktop_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("◀ Prev Desktop", callback_data="cb_desktop_prev"),
+            InlineKeyboardButton("Next Desktop ▶", callback_data="cb_desktop_next"),
+        ],
+        [
+            InlineKeyboardButton("➕ New Desktop", callback_data="cb_desktop_new"),
+            InlineKeyboardButton("🪟 Task View", callback_data="cb_desktop_task_view"),
+        ],
+        [
+            InlineKeyboardButton("❌ Close Desktop", callback_data="cb_desktop_close"),
+            InlineKeyboardButton("📸 Screenshot", callback_data="cb_desktop_snap"),
+        ],
+        [
+            InlineKeyboardButton("🔙 Back to Menu", callback_data="cb_menu"),
         ],
     ])
 
@@ -1415,9 +1454,12 @@ async def handle_cast(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 ])
             rows.append([
                 InlineKeyboardButton("⚡ In-Chat Live View", callback_data="cb_cast_radar_start"),
-                InlineKeyboardButton("📡 RTMP Info", callback_data="cb_cast_rtmp_info"),
+                InlineKeyboardButton("🪟 Switch Desktops", callback_data="cb_desktop_menu"),
             ])
-            rows.append([InlineKeyboardButton("🔙 Back to Menu", callback_data="cb_menu")])
+            rows.append([
+                InlineKeyboardButton("📡 RTMP Info", callback_data="cb_cast_rtmp_info"),
+                InlineKeyboardButton("🔙 Back to Menu", callback_data="cb_menu"),
+            ])
             await update.effective_message.reply_text(text, reply_markup=InlineKeyboardMarkup(rows), parse_mode="HTML")
         except Exception as e:
             await update.effective_message.reply_text(f"❌ Cast status failed: {e}")
@@ -1451,6 +1493,30 @@ async def handle_cast(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.effective_message.reply_text(f"❌ RTMP failed: {e}")
 
 
+async def handle_desktop(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await check_access(update, context):
+        return
+    agent = await require_pc(update, context)
+    if not agent:
+        return
+
+    label = pc_label(context)
+    try:
+        st = await agent.status()
+        win = html.escape(st.get("active_window", "Desktop")[:45])
+    except Exception:
+        win = "Active Desktop"
+
+    text = (
+        f"🪟 <b>VIRTUAL DESKTOPS — {html.escape(label)}</b>\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"Switch, create, or inspect Windows virtual desktops remotely.\n\n"
+        f"🖥️ <b>Active Window:</b> <code>{win}</code>\n"
+        f"⌨️ <i>Hardware Shortcuts: Win+Ctrl+Arrows, Win+Tab, Win+Ctrl+D</i>"
+    )
+    await update.effective_message.reply_text(text, reply_markup=get_desktop_keyboard(), parse_mode="HTML")
+
+
 async def execute_cast_web_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await check_access(update, context):
         return
@@ -1458,39 +1524,66 @@ async def execute_cast_web_start(update: Update, context: ContextTypes.DEFAULT_T
     if not agent:
         return
 
+    label = pc_label(context)
     if update.callback_query:
-        await update.callback_query.edit_message_text("⏳ <i>Starting web cast...</i>", parse_mode="HTML")
+        sent_msg = await update.callback_query.edit_message_text(
+            f"⏳ <i>Starting web cast & securing Cloudflare global tunnel for <b>{html.escape(label)}</b>...</i>",
+            parse_mode="HTML"
+        )
     else:
-        init_msg = await update.effective_message.reply_text("⏳ <i>Starting web cast...</i>", parse_mode="HTML")
+        sent_msg = await update.effective_message.reply_text(
+            f"⏳ <i>Starting web cast & securing Cloudflare global tunnel for <b>{html.escape(label)}</b>...</i>",
+            parse_mode="HTML"
+        )
 
     try:
         res = await agent.cast_web_start()
         lan_url = res.get("lan_url", "")
         public_url = res.get("public_url", "")
         token = res.get("token", "")
-        label = pc_label(context)
+
+        # If Cloudflare tunnel handshake is still in progress, poll for up to 8s
+        if not public_url:
+            for _ in range(5):
+                await asyncio.sleep(1.5)
+                st = await agent.cast_status()
+                if st.get("public_url"):
+                    public_url = st.get("public_url")
+                    break
 
         url_section = ""
         buttons = []
         if public_url:
-            url_section += f"🌍 <b>Global:</b>\n<code>{public_url}</code>\n\n"
+            url_section += f"🌍 <b>Global Stream (Any Network / 4G / 5G):</b>\n<code>{public_url}</code>\n\n"
             buttons.append([InlineKeyboardButton("🌍 Open Global Stream", url=public_url)])
+        else:
+            url_section += (
+                "⚠️ <b>Global Tunnel:</b> <i>Establishing Cloudflare edge connection...</i>\n"
+                "<i>Click '🔄 Refresh Link' below in a few seconds or use local link.</i>\n\n"
+            )
+
         if lan_url:
-            url_section += f"🏠 <b>Local:</b>\n<code>{lan_url}</code>\n\n"
+            url_section += f"🏠 <b>Local LAN Stream:</b>\n<code>{lan_url}</code>\n\n"
             buttons.append([InlineKeyboardButton("🏠 Open Local Stream", url=lan_url)])
+
+        buttons.append([
+            InlineKeyboardButton("🪟 Switch Desktops", callback_data="cb_desktop_menu"),
+            InlineKeyboardButton("🔄 Refresh Link", callback_data="cb_cast_web_start"),
+        ])
+        buttons.append([
+            InlineKeyboardButton("⏹️ Stop Stream", callback_data="cb_cast_web_stop"),
+            InlineKeyboardButton("🔙 Cast Menu", callback_data="cb_cast_menu"),
+        ])
+        kb = InlineKeyboardMarkup(buttons)
 
         msg_text = (
             f"📺 <b>WEB CAST ONLINE — {html.escape(label)}</b> 🔴\n"
             f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
             f"{url_section}"
             f"🔒 <b>Token:</b> <code>{token}</code>\n"
-            f"⚡ <b>FPS:</b> <code>15-25</code>"
+            f"⚡ <b>Engine:</b> <code>MJPEG + Turbo Snapshot</code>\n"
+            f"🪟 <b>Features:</b> Remote Desktops, Mobile Auto-Reconnect, Fullscreen"
         )
-        buttons.append([
-            InlineKeyboardButton("⏹️ Stop", callback_data="cb_cast_web_stop"),
-            InlineKeyboardButton("🔙 Cast Menu", callback_data="cb_cast_menu"),
-        ])
-        kb = InlineKeyboardMarkup(buttons)
 
         if update.callback_query:
             await update.callback_query.edit_message_text(msg_text, reply_markup=kb, parse_mode="HTML")
@@ -2305,9 +2398,12 @@ async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 rows.append([InlineKeyboardButton("🌐 Start Web Cast", callback_data="cb_cast_web_start")])
             rows.append([
                 InlineKeyboardButton("⚡ In-Chat Live View", callback_data="cb_cast_radar_start"),
-                InlineKeyboardButton("📡 RTMP Info", callback_data="cb_cast_rtmp_info"),
+                InlineKeyboardButton("🪟 Switch Desktops", callback_data="cb_desktop_menu"),
             ])
-            rows.append([InlineKeyboardButton("🔙 Back to Menu", callback_data="cb_menu")])
+            rows.append([
+                InlineKeyboardButton("📡 RTMP Info", callback_data="cb_cast_rtmp_info"),
+                InlineKeyboardButton("🔙 Back to Menu", callback_data="cb_menu"),
+            ])
             await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(rows), parse_mode="HTML")
         except Exception as e:
             await query.edit_message_text(f"❌ Cast status error: {e}")
@@ -2344,6 +2440,70 @@ async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Cast Menu", callback_data="cb_cast_menu")]]),
             parse_mode="HTML"
         )
+    elif data == "cb_desktop_menu":
+        agent = get_agent(context)
+        if not agent:
+            await show_pc_picker(update, context)
+            return
+        label = pc_label(context)
+        try:
+            st = await agent.status()
+            win = html.escape(st.get("active_window", "Desktop")[:45])
+        except Exception:
+            win = "Active Desktop"
+        text = (
+            f"🪟 <b>VIRTUAL DESKTOPS — {html.escape(label)}</b>\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"Switch, create, or inspect Windows virtual desktops remotely.\n\n"
+            f"🖥️ <b>Active Window:</b> <code>{win}</code>\n"
+            f"⌨️ <i>Hardware Shortcuts: Win+Ctrl+Arrows, Win+Tab, Win+Ctrl+D</i>"
+        )
+        await query.edit_message_text(text, reply_markup=get_desktop_keyboard(), parse_mode="HTML")
+    elif data.startswith("cb_desktop_"):
+        sub = data.replace("cb_desktop_", "")
+        agent = get_agent(context)
+        if not agent:
+            await query.answer("No PC selected.", show_alert=True)
+            return
+
+        if sub == "snap":
+            await query.answer("📸 Capturing screenshot...")
+            await execute_screenshot(update, context)
+            return
+
+        action_map = {
+            "prev": "prev",
+            "next": "next",
+            "new": "new",
+            "close": "close",
+            "task_view": "task_view",
+        }
+        action = action_map.get(sub, "next")
+        try:
+            res = await agent.switch_desktop(action)
+            ok = res.get("ok", False)
+            msg = res.get("msg", "Desktop action triggered")
+            win = res.get("active_window", "")
+            toast = f"✅ {msg}" if ok else f"❌ {msg}"
+            await query.answer(toast, show_alert=False)
+
+            label = pc_label(context)
+            if not win:
+                try:
+                    st = await agent.status()
+                    win = st.get("active_window", "Desktop")
+                except Exception:
+                    win = "Active Desktop"
+            text = (
+                f"🪟 <b>VIRTUAL DESKTOPS — {html.escape(label)}</b>\n"
+                f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                f"Status: <code>{html.escape(msg)}</code>\n\n"
+                f"🖥️ <b>Active Window:</b> <code>{html.escape(win[:45])}</code>\n"
+                f"⌨️ <i>Hardware Shortcuts: Win+Ctrl+Arrows, Win+Tab, Win+Ctrl+D</i>"
+            )
+            await query.edit_message_text(text, reply_markup=get_desktop_keyboard(), parse_mode="HTML")
+        except Exception as e:
+            await query.answer(f"❌ Error: {e}", show_alert=True)
     elif data == "cb_top":
         await handle_top(update, context)
     elif data == "cb_clip_menu":
@@ -2674,6 +2834,7 @@ def main():
     app.add_handler(CommandHandler("record_screen", handle_record_screen))
     app.add_handler(CommandHandler("record_webcam", handle_record_webcam))
     app.add_handler(CommandHandler(["cast", "stream"], handle_cast))
+    app.add_handler(CommandHandler(["desktop", "desktops"], handle_desktop))
     app.add_handler(CommandHandler("login", handle_login))
     app.add_handler(CommandHandler("logout", handle_logout))
     app.add_handler(CommandHandler(["setpin", "pin"], handle_setpin))

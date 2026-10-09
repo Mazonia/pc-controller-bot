@@ -209,6 +209,29 @@ def handle_relay_command(data: dict) -> dict:
         screen_caster.stop_web_cast()
         return {"ok": True, "msg": "Live stream stopped."}
 
+    elif cmd == "cast_status":
+        status = screen_caster.get_status()
+        status["pc_name"] = PC_NAME
+        return {"ok": True, "status": status}
+
+    elif cmd == "cast_frame":
+        import base64
+        quality = int(params.get("quality", 60))
+        max_width = int(params.get("max_width", 960))
+        frame = screen_caster.capture_single_frame(quality=quality, max_w=max_width)
+        return {"ok": True, "frame_b64": base64.b64encode(frame).decode("ascii")}
+
+    elif cmd == "switch_desktop":
+        action = params.get("action", "next")
+        ok, msg = SystemController.switch_virtual_desktop(action)
+        return {
+            "ok": ok,
+            "msg": msg,
+            "action": action,
+            "active_window": get_active_window_title(),
+            "pc_name": PC_NAME,
+        }
+
     # 7. POWER & LOCK
     elif cmd == "lock":
         ok, msg = SystemController.lock_workstation()
@@ -392,6 +415,43 @@ async def take_webcam():
     if ok and path.exists():
         return FileResponse(str(path), media_type="image/jpeg", filename=path.name)
     raise HTTPException(500, f"Webcam failed: {msg}")
+
+
+@app.post("/cast/web/start")
+async def api_cast_web_start():
+    res = screen_caster.start_web_cast(STREAM_PORT, enable_tunnel=True)
+    return res
+
+
+@app.post("/cast/web/stop")
+async def api_cast_web_stop():
+    screen_caster.stop_web_cast()
+    return {"ok": True, "msg": "Live stream stopped."}
+
+
+@app.get("/cast/status")
+async def api_cast_status():
+    status = screen_caster.get_status()
+    status["pc_name"] = PC_NAME
+    return status
+
+
+@app.get("/cast/frame")
+async def api_cast_frame(quality: int = 60, max_width: int = 960):
+    frame = screen_caster.capture_single_frame(quality=quality, max_w=max_width)
+    return Response(content=frame, media_type="image/jpeg")
+
+
+@app.post("/desktop/switch")
+async def api_desktop_switch(action: str = "next"):
+    ok, msg = SystemController.switch_virtual_desktop(action)
+    return {
+        "ok": ok,
+        "msg": msg,
+        "action": action,
+        "active_window": get_active_window_title(),
+        "pc_name": PC_NAME,
+    }
 
 
 # ═══════════════════════════════════════════════════════════════════════

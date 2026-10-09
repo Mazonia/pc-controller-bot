@@ -352,6 +352,71 @@ class SystemController:
         return SystemController.control_media(action)
 
     @staticmethod
+    def press_media_key(action: str) -> Tuple[bool, str]:
+        """Convenience method returning (ok, msg) tuple for media key actions."""
+        ok = SystemController.control_media(action)
+        return ok, f"Media key '{action}' triggered" if ok else f"Unknown or failed media key: {action}"
+
+    @staticmethod
+    def switch_virtual_desktop(action: str) -> Tuple[bool, str]:
+        """
+        Switch, create, or navigate Windows Virtual Desktops via hardware key events.
+        action: 'next', 'prev', 'new', 'close', 'task_view'
+        """
+        SystemController.ensure_desktop_access()
+        action = action.lower().strip()
+        KEYEVENTF_EXTENDEDKEY = 0x0001
+        KEYEVENTF_KEYUP = 0x0002
+
+        VK_LWIN = 0x5B
+        VK_CONTROL = 0x11
+        VK_RIGHT = 0x27
+        VK_LEFT = 0x25
+        VK_D = 0x44
+        VK_F4 = 0x73
+        VK_TAB = 0x09
+
+        if action in ("next", "right"):
+            primary, use_ctrl, ext, label = VK_RIGHT, True, True, "Next Desktop (Win+Ctrl+Right)"
+        elif action in ("prev", "previous", "left"):
+            primary, use_ctrl, ext, label = VK_LEFT, True, True, "Previous Desktop (Win+Ctrl+Left)"
+        elif action in ("new", "create"):
+            primary, use_ctrl, ext, label = VK_D, True, False, "New Virtual Desktop (Win+Ctrl+D)"
+        elif action in ("close", "remove"):
+            primary, use_ctrl, ext, label = VK_F4, True, False, "Close Virtual Desktop (Win+Ctrl+F4)"
+        elif action in ("task_view", "overview", "tab"):
+            primary, use_ctrl, ext, label = VK_TAB, False, False, "Task View (Win+Tab)"
+        else:
+            return False, f"Unknown desktop action '{action}'. Valid: next, prev, new, close, task_view"
+
+        try:
+            # Press Windows key
+            ctypes.windll.user32.keybd_event(VK_LWIN, 0, 0, 0)
+            time.sleep(0.02)
+            if use_ctrl:
+                ctypes.windll.user32.keybd_event(VK_CONTROL, 0, 0, 0)
+                time.sleep(0.02)
+
+            # Press primary key
+            flags = KEYEVENTF_EXTENDEDKEY if ext else 0
+            ctypes.windll.user32.keybd_event(primary, 0, flags, 0)
+            time.sleep(0.06)
+
+            # Release primary key
+            ctypes.windll.user32.keybd_event(primary, 0, flags | KEYEVENTF_KEYUP, 0)
+            time.sleep(0.02)
+        except Exception as e:
+            logger.error(f"Virtual desktop switch error: {e}")
+            return False, f"Error switching desktop: {e}"
+        finally:
+            # Always guarantee modifier keys are released to avoid sticky keys
+            if use_ctrl:
+                ctypes.windll.user32.keybd_event(VK_CONTROL, 0, KEYEVENTF_KEYUP, 0)
+            ctypes.windll.user32.keybd_event(VK_LWIN, 0, KEYEVENTF_KEYUP, 0)
+
+        return True, f"Switched desktop: {label}"
+
+    @staticmethod
     def speak_text(text: str) -> bool:
         """Speak message aloud on PC speakers using Windows Speech Synthesis."""
         try:
