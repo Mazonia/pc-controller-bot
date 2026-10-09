@@ -1,7 +1,7 @@
 """
 PC Remote Sentinel — Fleet Relay Engine
 Cross-network communication bridge using MQTT over TLS with AES-256-GCM encryption.
-Enables full remote management of cafe PCs whether on Cafe LAN, Mobile Hotspot, 4G/5G, or CGNAT.
+Enables full remote management of multiple PCs whether on Local Wi-Fi, Ethernet, Mobile Hotspot, 4G/5G, or CGNAT.
 """
 
 import os
@@ -104,13 +104,13 @@ def get_network_info() -> Dict[str, str]:
 
 
 # ═══════════════════════════════════════════════════════════════════════
-#   AGENT RELAY (Runs on each Cafe PC)
+#   AGENT RELAY (Runs on each Monitored PC)
 # ═══════════════════════════════════════════════════════════════════════
 
 class FleetAgentRelay:
     """
     Outbound MQTT bridge running on each PC.
-    Works behind CGNAT, mobile hotspots, cellular modems, or cafe LAN.
+    Works behind CGNAT, mobile hotspots, cellular modems, or local LAN.
     """
 
     def __init__(

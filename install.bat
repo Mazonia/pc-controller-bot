@@ -157,7 +157,7 @@ echo [*] Configuring agent settings for PC [%COMPUTERNAME%]...
             )
         )
     ) else (
-        echo FLEET_SECRET=sentinel-cafe-2026-secret
+        echo FLEET_SECRET=sentinel-fleet-secret-2026
         echo MQTT_BROKER=broker.emqx.io
         echo MQTT_PORT=8883
         echo MQTT_USE_TLS=true

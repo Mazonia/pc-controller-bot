@@ -27,8 +27,8 @@ By participating in this project, you agree to abide by the guidelines set out i
 1. **Fork the repository** on GitHub.
 2. **Clone your fork** locally:
    ```bash
-   git clone https://github.com/Mazonia/pc-remote-sentinel-&-command-center.git
-   cd pc-remote-sentinel-&-command-center
+   git clone https://github.com/Mazonia/pc-controller-bot.git
+   cd pc-controller-bot
    ```
 3. **Create a topic branch**:
    ```bash

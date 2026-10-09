@@ -1,8 +1,8 @@
 """
 PC Remote Sentinel — Agent
-Dual-mode agent that runs on each cafe PC:
+Dual-mode agent that runs on each monitored PC:
 1. Connects to the Fleet Cloud Relay (MQTT over TLS) — works seamlessly across
-   Mobile Hotspots, 4G/5G modems, CGNAT, and cafe LAN.
+   Wi-Fi, Ethernet, Mobile Hotspots, 4G/5G modems, and CGNAT.
 2. Exposes a local FastAPI HTTP server on port 9010 for direct LAN access.
 3. Uploads screenshots/videos directly to Telegram API for zero broker bandwidth.
 """
@@ -119,7 +119,7 @@ def send_document_to_telegram(chat_id: int, file_path: Path, caption: str = "") 
 def handle_relay_command(data: dict) -> dict:
     """
     Handle commands received via MQTT Cloud Relay.
-    Works over mobile hotspots, cellular modems, or cafe LAN.
+    Works over mobile hotspots, cellular modems, or local network.
     """
     cmd = data.get("cmd", "")
     params = data.get("params", {})

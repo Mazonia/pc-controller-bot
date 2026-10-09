@@ -1,121 +1,153 @@
-# 🛡️ PC Remote Sentinel & Command Center
+# 🛡️ PC Remote Sentinel & Multi-PC Fleet Commander
 
 [![Python](https://img.shields.io/badge/Python-3.10%2B-blue.svg?logo=python&logoColor=white)](https://www.python.org/)
 [![Platform](https://img.shields.io/badge/Platform-Windows%2010%20%7C%2011-0078D6.svg?logo=windows&logoColor=white)](https://microsoft.com/windows)
 [![Telegram](https://img.shields.io/badge/Telegram-Bot%20API%20v21%2B-2CA5E0.svg?logo=telegram&logoColor=white)](https://core.telegram.org/bots)
+[![Security: AES-256-GCM](https://img.shields.io/badge/Security-AES--256--GCM%20Encrypted-success.svg)](SECURITY.md)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![Security](https://img.shields.io/badge/Security-Whitelist%20Locked-brightgreen.svg)](SECURITY.md)
 
-> **A secure, full-duplex remote control, system monitoring, surveillance, and automation bot for Windows PC via Telegram.**  
-> Remotely capture desktop screenshots, record screen videos (up to 2 minutes), capture webcam security feeds, control media and volume, play voice notes on laptop speakers, sync clipboards, and monitor system diagnostics from your phone anywhere in the world.
+> **A secure, cross-network multi-PC remote management, surveillance, and automation system controlled entirely through a single Telegram Bot.**  
+> Monitor, control, diagnose, and automate any number of Windows computers (home desktop, work laptop, gaming rig, remote servers, or a fleet of workstations) from your phone anywhere in the world — across local LAN, mobile hotspots, 4G/5G tethering, or firewalled networks.
+
+---
+
+## 🌟 Why PC Remote Sentinel?
+
+Traditional remote desktop tools require port forwarding, static public IPs, complex VPN setups, or expensive subscription licenses. **PC Remote Sentinel** solves this with a modern, serverless architecture:
+
+1. **One Central Bot for All Your PCs (`/pcs`)**: Seamlessly switch between any registered computer with interactive Telegram inline buttons.
+2. **Works Everywhere (Cross-Network Cloud Relay)**: Built-in MQTT over TLS with AES-256-GCM encryption punches through Carrier-Grade NAT (CGNAT), phone hotspots, hotel Wi-Fi, and corporate firewalls without configuring routers.
+3. **Double-Click USB Pendrive Installer (`install.bat`)**: Plug a USB drive into any PC (even brand-new out of the box), double-click, and it automatically sets up Python, creates a silent boot task, and connects to your bot in under 15 seconds.
+4. **Completely Silent & Background Operation**: Runs invisibly via Windows Task Scheduler. No command prompt windows, no taskbar icons, and no system tray clutter.
+5. **Direct Media Transport**: High-resolution screenshots and video recordings upload directly to Telegram's cloud API, bypassing intermediary servers for lightning-fast delivery.
+
+---
+
+## 🏗️ Architecture
+
+```
+                       ┌────────────────────────┐
+                       │   Owner's Telegram     │
+                       │   (Phone or Desktop)   │
+                       └───────────▲────────────┘
+                                   │
+                     Telegram API  │  Bot Commands
+                     (Media & UI)  │  (/start, /pcs, etc.)
+                                   ▼
+                       ┌────────────────────────┐
+                       │   Central Telegram Bot │
+                       │    (Fleet Commander)   │
+                       └───────────┬────────────┘
+                                   │
+              MQTT over TLS (Port 8883 / 443 WSS)
+              AES-256-GCM Encrypted with FLEET_SECRET
+                                   │
+         ┌─────────────────────────┼─────────────────────────┐
+         ▼                         ▼                         ▼
+┌──────────────────┐     ┌──────────────────┐     ┌──────────────────┐
+│ Primary Desktop  │     │ Work Laptop      │     │ Remote Server    │
+│ Home Wi-Fi       │     │ Mobile Hotspot   │     │ 4G USB Modem     │
+│ (Local Subnet)   │     │ (CGNAT / 4G / 5G)│     │ (CGNAT / Remote) │
+└────────┬─────────┘     └────────┬─────────┘     └────────┬─────────┘
+         │                        │                        │
+         └────────────────────────┼────────────────────────┘
+                                  ▼
+                     Direct Telegram Bot API
+                     (Screenshots, Videos, Audio)
+```
 
 ---
 
 ## ✨ Features & Capabilities
 
-- 📊 **Real-time Diagnostics (`/status`)**: CPU load, RAM utilization, C: drive disk capacity, battery status, and uptime.
-- 📸 **Desktop Screenshots (`/shot`, `/screenshot`)**: High-res multi-monitor or desktop snapshots sent immediately to your chat.
-- 📺 **Live Screen Casting & Streaming (`/cast`, `/stream`)**: Stream whatever is happening on your PC live in real-time. Includes an ultra-smooth 15-25 FPS dark-mode HTML5 web player with fullscreen & quality controls, an in-chat live surveillance radar, and RTMP broadcast support for Telegram Channels.
-- 📹 **Webcam Surveillance (`/webcam`, `/record_webcam`)**: Instant photo capture or security video clip (10s/30s) from connected webcams.
-- 🎬 **Multi-Duration Screen Recorder (`/record_screen`)**: Interactive selector for 10s, 20s, 30s, 40s, 50s, 1 min, or 2 mins of on-screen desktop action into an MP4 video file.
-- ⚡ **Power & Workstation Control**:
-  - Sleep PC, Lock workstation, turn off monitors, wake/turn on monitors (`/monitor on`), shutdown timers (15m, 30m, 60m), and PC restart.
-- ⏰ **Customizable PC Alarm & Countdown Timers (`/alarm [time] [label]`)**:
-  - Set relative countdown timers (e.g. `/alarm 10m`, `/alarm 45s Stretch`, `/alarm 1.5h Deep Work`).
-  - Set specific clock-time alarms (e.g. `/alarm 07:30 Wake up workout`, `/alarm 18:30 Dinner`).
-  - Sound audible sirens and speech synthesis voice announcements through PC speakers.
-  - Interactive timer menu with 1m, 5m, 10m, 15m, 30m, and 1h quick presets.
-  - Remote alarm silencing (`/stopalarm`) and cancellation (`/cancelalarm`).
-- 🎵 **Media Player & Volume Controls**:
-  - Play/Pause toggle, Stop playback, Next track, Previous track, Volume +/- 10%, and Mute (controls Spotify, YouTube, Chrome, VLC, Edge, etc.).
-- 🔊 **Audio & Speaker Control**:
-  - 🗣️ **Direct Type-to-Speak & TTS (`/say <text>`)**: Type any message directly into chat or use `/say` to speak aloud via PC speakers using Windows speech synthesis.
-  - 🎙️ **Voice Note Speaker Playback**: Send any voice note or audio file (.ogg, .mp3, .wav) to play your actual voice directly through your laptop/PC speakers.
-  - 🚨 Alert Siren — Play loud emergency alert audio through PC speakers.
-- 📋 **Process & Task Manager**:
-  - `/top` — Interactive view of top memory & CPU consuming processes with live refresh.
-  - `/kill <name_or_pid>` — Terminate frozen or unwanted processes.
-- 📋 **Clipboard Manager**:
-  - `/clip <text>` — Push and copy text from your phone directly to the Windows clipboard.
-  - `/getclip` — Read and view the current PC clipboard text remotely.
-- 📤 **Remote File Fetcher (`/get <path>`)**: Securely download any file from your PC directly to your Telegram chat (up to 50MB).
-- 📥 **Remote File Drop**: Send any file, document, or photo to the bot to automatically save it in your PC's `downloads/` folder (with path-traversal protection).
-- 🧹 **Interactive Storage Cleaner (`/clean`)**: Audit cached recordings and downloads with file names, sizes, and ages, requiring explicit user approval before permanent deletion.
-- 🌐 **Remote Web Launch (`/open <url>`)**: Launch any website or URL in your PC's default web browser.
-- 🛡️ **Enterprise Security Architecture**:
-  - **Intruder Detection & Instant Owner Alerting**: Unrecognized Telegram users are immediately blocked and owners receive an alert with the intruder's ID, username, and attempted action.
-  - **Credential Leakage Prevention**: `/cmd` blocks access to `.env` files and masks your Telegram bot token if dumped in environment variables.
-  - **Path Traversal Protection**: Uploaded files and file fetches are strictly sanitized against directory traversal attacks.
-  - **Hardware Concurrency Locking**: Prevents overlapping camera/recording operations from overloading the CPU or crashing hardware devices.
-- 🏷️ **Dedicated Windows Process Name**: Runs as `pc-sentinel.exe` with console title `PC-Remote-Sentinel` for instant Task Manager identification.
-- ⚡ **Instant Startup Broadcast**: Automatically notifies authorized owners in Telegram with host info, IP, uptime, and the Command Center keyboard when `run.bat` starts.
+### 🖥️ Fleet Management & Multi-PC Switching
+- **Interactive PC Selector (`/pcs`, `/start`)**: View all registered machines with live online/offline indicators and connection badges (e.g. `🟢 Work-Laptop (Mobile Hotspot)` or `🟢 Home-PC (Wi-Fi)`).
+- **Auto-Discovery**: Newly installed computers automatically appear in your Telegram menu the moment they boot.
+- **Last Will & Testament (LWT)**: If a computer is unplugged or loses network connection, your bot immediately updates its status to `🔴 Offline`.
+
+### 📊 System Diagnostics & Surveillance
+- **Real-time Diagnostics (`/status`)**: CPU utilization, RAM usage, disk storage, battery state, active window title, and system uptime.
+- **Desktop Screenshots (`/shot`, `/screenshot`)**: Instant high-resolution snapshot of active monitors sent directly to Telegram.
+- **Webcam Surveillance (`/webcam`, `/record_webcam`)**: Instant photo snapshot or short security video clip (10s/30s) from connected webcams.
+- **Multi-Duration Screen Recorder (`/record_screen`)**: Interactive duration picker for 10s, 20s, 30s, 40s, 50s, 1 min, or 2 mins of on-screen desktop action into an MP4 video file.
+- **Global 30 FPS Live Screen Casting (`/cast`, `/stream`)**: Launches an on-demand Cloudflare Quick Tunnel (`cloudflared.exe`) and generates a secure public HTTPS link to stream the live desktop to your phone browser at 30 FPS.
+
+### ⚡ Workstation & Power Controls
+- **Instant Lock (`/lock` or buttons)**: Locks the Windows workstation session immediately.
+- **Power Management**: Put PC to sleep, turn off monitors, turn on/wake monitors (`/monitor on`), reboot, or schedule shutdown timers (15m, 30m, 60m).
+
+### 📋 Process Manager & Terminal
+- **Process Viewer (`/top`)**: Interactive list of top CPU and memory consuming processes with live refresh.
+- **Process Killer (`/kill <name_or_pid>`)**: Terminate frozen applications or games remotely.
+- **Remote Terminal (`/cmd <command>`)**: Execute Windows shell commands remotely with automatic token masking.
+
+### 🔊 Audio, TTS & Speaker Controls
+- **Text-to-Speech (`/say <text>`)**: Speak any message aloud through PC speakers using native Windows speech synthesis.
+- **Voice Note Speaker Playback**: Send any voice note or audio file (.ogg, .mp3, .wav) to play your actual voice directly through the PC speakers.
+- **PC Alarms & Timers (`/alarm [time] [label]`)**: Set countdown timers or specific clock alarms with siren alerts and speech synthesis.
+- **Media Player Controls**: Play, pause, skip tracks, volume up/down, and mute for Spotify, YouTube, Chrome, VLC, and media players.
+
+### 📁 Remote Files & Clipboard
+- **File Downloader (`/get <path>`)**: Fetch any file from the PC directly into Telegram (up to 50MB).
+- **File Dropper**: Send any document, photo, or script to the bot to automatically save it in the PC's `downloads/` folder.
+- **Clipboard Sync (`/clip <text>`, `/getclip`)**: Read or push text directly to and from the Windows clipboard.
+- **Storage Cleaner (`/clean`)**: Audit and clean up cached recordings and downloads with explicit confirmation.
+
+### 🔒 Enterprise Security Architecture
+- **User Whitelist Enforcement**: Only numeric Telegram user IDs configured in `AUTHORIZED_USER_IDS` can communicate with the bot.
+- **Intruder Alerts**: Unrecognized users are blocked immediately, and an alert with their Telegram ID and username is dispatched to the owner.
+- **AES-256-GCM End-to-End Encryption**: All MQTT relay messages and command payloads are encrypted with your shared `FLEET_SECRET`.
+- **Optional PIN Lock**: Require `/login <PIN>` with automatic session timeout and rate limiting.
 
 ---
 
-## 📋 Prerequisites & Setup Guide
+## 🚀 Quick Start Guide
 
-### 1. Getting a Telegram Bot Token
-1. Open Telegram and search for the official **[@BotFather](https://t.me/BotFather)**.
-2. Send `/start` and then `/newbot`.
-3. Choose a name (e.g. `My PC Sentinel`) and username (e.g. `john_pc_sentinel_bot`).
-4. Copy the HTTP API token provided by BotFather:
-   ```
-   123456789:ABCdefGHIjklMNOpqrsTUVwxyz
-   ```
+### Step 1: Set Up Your Telegram Bot
+1. Open Telegram and message **[@BotFather](https://t.me/BotFather)**.
+2. Send `/newbot`, choose a name and username, and copy your **Bot Token**.
+3. Message **[@userinfobot](https://t.me/userinfobot)** in Telegram to find your numeric **User ID** (e.g. `6513180621`).
 
-### 2. Getting Your Numeric Telegram User ID (Critical Security Step)
-To ensure only **you** can control your PC, you must configure your Telegram numeric User ID:
-1. Search for **[@userinfobot](https://t.me/userinfobot)** in Telegram.
-2. Press `/start`.
-3. Copy your numeric **Id** (e.g., `987654321`).
-4. Set this in `.env` as `AUTHORIZED_USER_IDS=987654321`.
-   *(Multiple IDs can be comma-separated: `AUTHORIZED_USER_IDS=987654321,11223344`)*
-
-### 3. Optional Hardware & Permissions
-- **Webcam access**: Requires a functional USB or built-in webcam.
-- **Administrator rights**: While basic monitoring and media controls work under standard permissions, power actions (like shutdown or sleep) may require running PowerShell/command prompt as Administrator on certain Windows editions.
-
----
-
-## 🚀 Installation & Running
-
-1. **Clone the repository**:
+### Step 2: Configure Master Settings
+1. Clone the repository:
    ```bash
    git clone https://github.com/Mazonia/pc-controller-bot.git
    cd pc-controller-bot
    ```
-
-2. **Configure your `.env` file**:
-   Copy `.env.example` to `.env`:
+2. Copy the template and edit your `.env`:
    ```bash
    cp .env.example .env
    ```
-   Fill in your tokens:
+   Fill in your values:
    ```env
    TELEGRAM_BOT_TOKEN=123456789:ABCdefGHIjklMNOpqrsTUVwxyz
-   AUTHORIZED_USER_IDS=987654321
-   RECORDINGS_DIR=./recordings
-   DOWNLOADS_DIR=./downloads
+   AUTHORIZED_USER_IDS=6513180621
    ```
-
-3. **Install dependencies**:
+3. Copy the deploy template for your USB pendrive:
    ```bash
-   pip install -r requirements.txt
+   cp deploy_config.env.example deploy_config.env
    ```
+   Fill in your `FLEET_SECRET`, `TELEGRAM_BOT_TOKEN`, and `AUTHORIZED_USER_IDS`.
 
-4. **Launch the Sentinel**:
-   - **Option A (Recommended)**: Double-click `run.bat` or run:
-     ```powershell
-     .\run.bat
-     ```
-     *(Runs as `pc-sentinel.exe` in Windows Task Manager)*
-   - **Option B**:
-     ```powershell
-     python bot.py
-     ```
+### Step 3: Run the Fleet Commander Bot (Your Main PC / Server)
+Double-click **`run.bat`** (or run `python bot.py`).  
+*(To run it completely hidden in the background, double-click `start_hidden.vbs`)*.
 
-5. **Interact in Telegram**:
-   - Send `/start` or `/menu` to open the full interactive Command Center!
+---
+
+## 💾 Deploying on Target PCs (USB Pendrive Setup)
+
+To monitor any PC (personal laptop, gaming PC, home workstation, office desktop, or brand-new unboxed PC):
+
+1. **Copy the repository folder to your USB pendrive** (ensure `install.bat`, `python-installer.exe`, and `deploy_config.env` are present).
+2. **Plug the USB pendrive into the target PC**.
+3. **Double-click `install.bat`**.
+   - Grants Windows UAC Administrator rights.
+   - Automatically installs Python (using the bundled offline installer if not already installed).
+   - Copies files to `C:\PCSentinel`.
+   - Registers a silent Task Scheduler auto-start on Windows user logon.
+   - Launches the background agent immediately.
+4. **Unplug your USB drive.** The PC is now live in your Telegram bot!
 
 ---
 
@@ -123,60 +155,48 @@ To ensure only **you** can control your PC, you must configure your Telegram num
 
 | Command | Description |
 | :--- | :--- |
-| `/start`, `/menu` | Open interactive Command Center dashboard |
-| `/login <pin>` | Authenticate with PIN to unlock Command Center |
-| `/logout` | Lock bot session immediately |
-| `/status` | View real-time CPU, RAM, Disk, Battery, Uptime, and Session state |
-| `/shot`, `/screenshot` | Capture instant high-resolution desktop screenshot |
-| `/cast`, `/stream` | Open Live Screen Cast hub (Global Web stream, In-chat radar, RTMP) |
-| `/webcam` | Capture webcam photo snapshot |
+| `/start`, `/pcs` | Open Fleet Command Center & switch between monitored PCs |
+| `/status` | View CPU, RAM, Disk, Battery, Uptime, and Active Window |
+| `/shot`, `/screenshot` | Capture high-resolution multi-monitor screenshot |
+| `/cast`, `/stream` | Start global 30 FPS Live Screen Streaming |
+| `/webcam` | Capture photo from connected webcam |
 | `/record_webcam [s]` | Record 10s or custom webcam video clip |
-| `/record_screen [s]` | Open duration selector or record screen video (10s-120s) |
+| `/record_screen [s]` | Record 10s–120s of on-screen desktop video |
+| `/lock` | Instantly lock the Windows workstation |
 | `/top` | Display top RAM & CPU consuming processes |
-| `/kill <name_or_pid>` | Terminate running process (e.g., `/kill notepad.exe`) |
-| `/say <text>` | Speak text aloud on PC speakers (or send any text directly) |
-| `/clip <text>` | Copy text from phone directly onto Windows clipboard |
-| `/getclip` | Read text currently on Windows clipboard |
-| `/get <path>` | Securely download a file from PC to Telegram chat |
-| `/alarm [time] [label]` | Set countdown timer (`10m`, `45s`, `1.5h`) or clock alarm (`18:30`, `7:00am`) |
-| `/stopalarm`, `/silence` | Silence and stop currently ringing PC alarm |
+| `/kill <name_or_pid>` | Terminate running process (e.g. `/kill notepad.exe`) |
+| `/say <text>` | Speak text aloud on PC speakers |
+| `/clip <text>` | Copy text from phone to PC clipboard |
+| `/getclip` | Read text from PC clipboard |
+| `/get <path>` | Download file from PC to Telegram chat |
+| `/alarm [time] [label]` | Set countdown timer (`10m`, `45s`, `1.5h`) or clock alarm (`18:30`) |
+| `/stopalarm`, `/silence` | Silence and stop ringing PC alarm |
 | `/cancelalarm` | Cancel pending scheduled alarm countdown |
-| `/monitor [on\|off]` | Turn PC monitors on/off or wake screens from sleep mode |
-| `/clean` | Audit & cleanup cached recordings/downloads with user approval |
+| `/monitor [on\|off]` | Turn PC monitors on/off or wake screens |
+| `/clean` | Audit and clean cached recordings/downloads |
 | `/open <url>` | Open website or app on PC |
-| `/cmd <command>` | Execute terminal command with token masking & security protection |
+| `/cmd <command>` | Execute terminal command with token masking |
+| `/login <pin>` | Authenticate PIN to unlock Command Center |
+| `/logout` | Lock bot session immediately |
+| `/reload` | Reload registered fleet registry |
 
 ---
 
-## ⚡ Headless Boot Setup & Background Running
+## 🧹 Clean Uninstallation
 
-### Run Automatically on PC Boot (Before Windows Login)
-Sentinel can run completely headless at system startup via Windows Task Scheduler:
-1. Right-click **`setup_headless_task.bat`** $\rightarrow$ **Run as administrator**.
-2. The task is registered as `SYSTEM` with `ONSTART` trigger.
-3. When the PC restarts, Sentinel starts automatically and sends a Telegram broadcast:
-   > *"🛡️ PC Remote Sentinel Online (Windows Login / Lock Screen 🔒)"*
-4. All system commands (`/status`, `/cmd`, `/top`, `/kill`, power controls) are available immediately.
-5. To uninstall: Right-click **`uninstall_headless_task.bat`** $\rightarrow$ **Run as administrator**.
-
-### Run Silently in the Background
-Double-click **`start_hidden.vbs`** to launch Sentinel silently with no command prompt window.
+To completely remove the agent from any monitored PC:
+1. Double-click **`uninstall.bat`**.
+2. Click "Yes" on the UAC prompt.
+3. All background tasks, services, and `C:\PCSentinel` files will be cleanly removed.
 
 ---
 
-## 🔒 Passcode / PIN Login Security (Optional)
-To add a PIN lock to your bot:
-1. Open `.env` and set:
-   ```env
-   BOT_PIN=1234
-   SESSION_TIMEOUT_MINS=60
-   ```
-2. When anyone accesses the bot, all commands are locked until they send `/login 1234`.
-3. The message containing your PIN is automatically deleted from chat for security.
-4. Send `/logout` at any time to immediately re-lock the Command Center.
+## 🔒 Security Policy
+
+For security guidelines, vulnerability disclosure, and details on encryption protocols, please refer to [SECURITY.md](SECURITY.md).
 
 ---
 
 ## 📄 License
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.

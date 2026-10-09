@@ -13,7 +13,7 @@ Only the latest commit on the `main` branch is actively supported with security 
 
 ## 🔒 Reporting a Vulnerability
 
-We take the security of **PC Remote Sentinel & Command Center** seriously. If you discover a security vulnerability, please report it responsibly rather than opening a public issue on GitHub.
+We take the security of **PC Remote Sentinel & Multi-PC Fleet Commander** seriously. If you discover a security vulnerability, please report it responsibly rather than opening a public issue on GitHub.
 
 ### How to Report
 1. Open a **Private Security Advisory** via the GitHub repository's Security tab, or contact the maintainer directly.
@@ -30,29 +30,35 @@ We take the security of **PC Remote Sentinel & Command Center** seriously. If yo
 ---
 
 ## ⚠️ Security Best Practices for Users
-* **Never share your Telegram Bot Token**: Anyone with this token can control your bot.
-* **Set Authorized User IDs**: Always restrict access using `AUTHORIZED_USER_IDS` in `.env` to prevent unauthorized parties from accessing bot functions.
-* **Keep `.env` in `.gitignore`**: Never push configuration files containing live secrets to public repositories.
+
+1. **Protect your Telegram Bot Token**: Anyone with access to your bot token can control your bot. Never share it or commit it to public repositories.
+2. **Configure `AUTHORIZED_USER_IDS`**: Always set your numeric Telegram ID in `.env` and `deploy_config.env`. Unlisted users are automatically rejected and logged.
+3. **Keep Live Config Files in `.gitignore`**: The files `.env`, `deploy_config.env`, and `fleet.json` contain active secrets and must remain in `.gitignore`. Use the provided `.example` files as public templates.
+4. **Choose a Strong `FLEET_SECRET`**: Set a long, random string for `FLEET_SECRET` to ensure your cross-network relay packets cannot be decrypted or forged.
 
 ---
 
 ## 🛡️ Built-in Security Controls
 
-PC Remote Sentinel implements multiple layers of defense-in-depth protection:
+PC Remote Sentinel implements defense-in-depth security mechanisms:
 
-1. **Intruder Detection & Alerting**:
-   - Any message or button interaction from an unauthorized Telegram account is rejected instantly.
-   - Authorized owners receive an immediate alert containing the intruder's ID, username, and timestamp.
-   - Built-in rate limiting prevents notification flood attacks.
+### 1. Cryptographic Relay Security (AES-256-GCM)
+- All remote telemetry, heartbeats, and commands transmitted across the Cloud Relay are encrypted using **AES-256-GCM** with a 12-byte random cryptographic nonce generated per message.
+- Cryptographic verification tags ensure that message payloads cannot be tampered with in transit.
+- **Topic Hashing**: MQTT topic paths are derived from `SHA-256(FLEET_SECRET)` to prevent eavesdropping or topic enumeration on public brokers.
 
-2. **Credential & Secret Protection**:
-   - Terminal command execution via `/cmd` strictly blocks inspection of `.env` and credential files.
-   - Bot API tokens are automatically masked from all terminal command output and logs.
+### 2. Intruder Detection & Alerting
+- Any message, callback query, or button interaction from an unauthorized Telegram account is rejected instantly.
+- Authorized owners receive an immediate notification alert containing the intruder's numeric Telegram ID, username, and attempted action.
+- Built-in cooldown timers prevent notification flooding.
 
-3. **Path Traversal & File Access Isolation**:
-   - All incoming file drops are restricted to `downloads/` with strict basename sanitization.
-   - Remote file fetching (`/get`) explicitly blacklists credential, SSH, registry, and configuration files (`.env`, `id_rsa`, `sam`, `.git`, etc.).
+### 3. Credential & Secret Protection
+- Terminal command execution via `/cmd` strictly blocks inspection of `.env`, `deploy_config.env`, and credential files.
+- Telegram Bot API tokens are masked automatically from terminal stdout, stderr, and logs.
 
-4. **Hardware Concurrency Locks**:
-   - Webcam and screen recording operations use asynchronous locks to prevent race conditions or device lock-up.
+### 4. Path Traversal & Isolation
+- Incoming file drops are restricted to the local `downloads/` directory with strict basename sanitization.
+- Remote file fetching (`/get`) blacklists sensitive system, SSH, registry, SAM, and git configuration files (`.env`, `id_rsa`, `sam`, `.git`, etc.).
 
+### 5. Hardware Concurrency Protection
+- Camera and screen recording routines utilize mutex locking to prevent hardware race conditions or device driver crashes.

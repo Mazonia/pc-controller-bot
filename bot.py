@@ -1,6 +1,6 @@
 """
 PC Remote Sentinel — Fleet Commander Bot
-Central Telegram bot that controls multiple cafe PCs through their HTTP agents.
+Central Telegram bot that controls multiple Windows PCs through their remote agents.
 """
 
 import ctypes
@@ -71,7 +71,7 @@ class AgentClient:
     """
     Hybrid client for communicating with a PC agent.
     Routes commands through Cloud Relay (MQTT over TLS) if PC is on Mobile Data / CGNAT,
-    or directly via local HTTP if on Cafe LAN.
+    or directly via local HTTP if on local LAN.
     """
 
     def __init__(self, pc_info: dict, secret: str):
@@ -550,8 +550,8 @@ async def show_pc_picker(update: Update, context: ContextTypes.DEFAULT_TYPE, pro
     if not fleet["pcs"]:
         text = (
             "⚠️ <b>NO PCs REGISTERED</b>\n\n"
-            "No cafe PCs have been connected yet.\n"
-            "Plug your USB pendrive into any PC and double-click <code>cafe_install.bat</code>.\n\n"
+            "No PCs have been registered yet.\n"
+            "Plug your USB pendrive into any PC and double-click <code>install.bat</code>.\n\n"
             "The PC will automatically register and appear here within seconds."
         )
         if update.callback_query:
@@ -2281,7 +2281,7 @@ def main():
         # Initialize and start Fleet Cloud Relay
         global commander_relay
         fleet = load_fleet()
-        secret = fleet.get("secret", "") or os.getenv("FLEET_SECRET", "sentinel-cafe-2026-secret")
+        secret = fleet.get("secret", "") or os.getenv("FLEET_SECRET", "sentinel-fleet-secret-2026")
         broker = os.getenv("MQTT_BROKER", "broker.emqx.io").strip()
         port = int(os.getenv("MQTT_PORT", "8883"))
         use_tls = os.getenv("MQTT_USE_TLS", "true").strip().lower() in ("1", "true", "yes")
