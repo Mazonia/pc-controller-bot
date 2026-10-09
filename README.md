@@ -240,6 +240,7 @@ To monitor any PC (personal laptop, gaming PC, home workstation, office desktop,
 | `/logout` | Lock bot session immediately |
 | `/setpin <pin>` | Configure or change bot security PIN (4–8 digits) |
 | `/removepin` | Disable PIN protection completely |
+| `/rename [name]` | Rename a PC with a friendly custom label |
 | `/removepc <name>` | Remove an uninstalled PC from the fleet list |
 | `/reload` | Reload registered fleet registry |
 

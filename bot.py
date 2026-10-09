@@ -615,7 +615,8 @@ def get_pc_picker_keyboard(fleet: dict, health: Dict[str, dict]) -> InlineKeyboa
         buttons.append(row)
 
     buttons.append([
-        InlineKeyboardButton("📊 Fleet Overview", callback_data="fleet_overview"),
+        InlineKeyboardButton("✏️ Rename PC", callback_data="fleet_rename_menu"),
+        InlineKeyboardButton("📊 Overview", callback_data="fleet_overview"),
         InlineKeyboardButton("🔄 Refresh", callback_data="fleet_refresh"),
     ])
     return InlineKeyboardMarkup(buttons)
@@ -658,6 +659,59 @@ async def show_pc_picker(update: Update, context: ContextTypes.DEFAULT_TYPE, pro
         await update.effective_message.reply_text(header, reply_markup=keyboard, parse_mode="HTML")
 
 
+async def show_rename_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Show PC rename selector or direct prompt."""
+    fleet = load_fleet()
+    pcs = fleet.get("pcs", [])
+    if not pcs:
+        await show_pc_picker(update, context)
+        return
+
+    if len(pcs) == 1:
+        target_pc = pcs[0]
+        context.user_data["awaiting_pc_rename"] = target_pc["name"]
+        label = target_pc.get("label", target_pc["name"])
+        prompt_text = (
+            f"✏️ <b>RENAME PC: {html.escape(label)}</b>\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"Hostname: <code>{html.escape(target_pc['name'])}</code>\n\n"
+            f"Please <b>type and send the new name</b> for this PC in this chat:\n"
+            f"<i>(e.g., 'Front Desk PC', 'Gaming Rig', 'Living Room Laptop')</i>\n\n"
+            f"<i>Send /cancel to abort.</i>"
+        )
+        cancel_kb = InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="fleet_picker")]])
+        if update.callback_query:
+            await update.callback_query.edit_message_text(prompt_text, reply_markup=cancel_kb, parse_mode="HTML")
+        else:
+            await update.effective_message.reply_text(prompt_text, reply_markup=cancel_kb, parse_mode="HTML")
+        return
+
+    buttons = []
+    row = []
+    for i, pc in enumerate(pcs):
+        name = pc["name"]
+        label = pc.get("label", name)
+        btn_text = f"✏️ {label}"
+        row.append(InlineKeyboardButton(btn_text, callback_data=f"cb_rename_pick_{i}"))
+        if len(row) == 2:
+            buttons.append(row)
+            row = []
+    if row:
+        buttons.append(row)
+
+    buttons.append([InlineKeyboardButton("🔙 Back to PC List", callback_data="fleet_picker")])
+    menu_text = (
+        "✏️ <b>SELECT A PC TO RENAME</b>\n"
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        "Tap the PC you want to give a friendly custom name:"
+    )
+    kb = InlineKeyboardMarkup(buttons)
+    if update.callback_query:
+        await update.callback_query.edit_message_text(menu_text, reply_markup=kb, parse_mode="HTML")
+    else:
+        await update.effective_message.reply_text(menu_text, reply_markup=kb, parse_mode="HTML")
+
+
 # ═══════════════════════════════════════════════════════════════════════
 #   COMMAND CENTER KEYBOARDS (same layout as before, with "Back to PCs")
 # ═══════════════════════════════════════════════════════════════════════
@@ -689,7 +743,8 @@ def get_main_keyboard() -> InlineKeyboardMarkup:
             InlineKeyboardButton("🧹 Clean Storage", callback_data="cb_clean"),
         ],
         [
-            InlineKeyboardButton("🔄 Refresh Dashboard", callback_data="cb_menu"),
+            InlineKeyboardButton("✏️ Rename", callback_data="cb_rename_current"),
+            InlineKeyboardButton("🔄 Refresh", callback_data="cb_menu"),
         ],
         [
             InlineKeyboardButton("🔙 Switch PC", callback_data="fleet_picker"),
@@ -1107,6 +1162,55 @@ async def handle_remove_pc(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"🗑️ <b>PC REMOVED</b> ✅\n\nPC '<code>{html.escape(found['name'])}</code>' has been removed from your fleet registry.",
         parse_mode="HTML"
     )
+
+
+async def handle_rename(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /rename <new_name> or /rename to open rename picker."""
+    if not await check_access(update, context):
+        return
+
+    if not context.args:
+        await show_rename_menu(update, context)
+        return
+
+    new_label = " ".join(context.args).strip()
+    if len(new_label) > 40:
+        await update.message.reply_text("⚠️ Name too long (max 40 characters).", parse_mode="HTML")
+        return
+
+    target_pc = get_selected_pc(context)
+    if not target_pc:
+        await update.message.reply_text("⚠️ No PC selected. Use <code>/pcs</code> first.", parse_mode="HTML")
+        return
+
+    target_name = target_pc["name"]
+    fleet = load_fleet()
+    for pc in fleet.get("pcs", []):
+        if pc["name"].lower() == target_name.lower():
+            pc["label"] = new_label
+            break
+    save_fleet(fleet)
+
+    if context.user_data.get("selected_pc", {}).get("name", "").lower() == target_name.lower():
+        context.user_data["selected_pc"]["label"] = new_label
+
+    await update.message.reply_text(
+        f"✨ <b>PC RENAMED SUCCESSFULLY</b> ✅\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"• PC (<code>{html.escape(target_name)}</code>) is now labeled:\n"
+        f"👉 <b>{html.escape(new_label)}</b>",
+        parse_mode="HTML"
+    )
+
+
+async def handle_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Cancel any pending operation."""
+    if "awaiting_pc_rename" in context.user_data:
+        context.user_data.pop("awaiting_pc_rename", None)
+        await update.message.reply_text("❌ Renaming cancelled.", parse_mode="HTML")
+        await show_pc_picker(update, context)
+        return
+    await update.message.reply_text("ℹ️ No active operation to cancel.", parse_mode="HTML")
 
 
 async def handle_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1915,12 +2019,55 @@ async def handle_incoming_voice(update: Update, context: ContextTypes.DEFAULT_TY
 async def handle_incoming_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_authorized(update.effective_user.id):
         return
-    agent = get_agent(context)
-    if not agent:
-        # No PC selected — don't prompt, just ignore plain text
-        return
     text = update.message.text
     if not text:
+        return
+
+    # ── Check for Pending PC Rename ──
+    rename_target = context.user_data.get("awaiting_pc_rename")
+    if rename_target:
+        new_label = text.strip()
+        if new_label.lower() in ("/cancel", "cancel"):
+            context.user_data.pop("awaiting_pc_rename", None)
+            await update.message.reply_text("❌ PC renaming cancelled.", parse_mode="HTML")
+            await show_pc_picker(update, context)
+            return
+
+        if len(new_label) > 40:
+            await update.message.reply_text("⚠️ Name too long (max 40 characters). Please send a shorter name:", parse_mode="HTML")
+            return
+
+        fleet = load_fleet()
+        updated = False
+        for pc in fleet.get("pcs", []):
+            if pc["name"].lower() == rename_target.lower():
+                pc["label"] = new_label
+                updated = True
+                break
+
+        if updated:
+            save_fleet(fleet)
+            context.user_data.pop("awaiting_pc_rename", None)
+            if context.user_data.get("selected_pc", {}).get("name", "").lower() == rename_target.lower():
+                context.user_data["selected_pc"]["label"] = new_label
+
+            await update.message.reply_text(
+                f"✨ <b>PC RENAMED SUCCESSFULLY</b> ✅\n"
+                f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                f"• PC (<code>{rename_target}</code>) is now labeled:\n"
+                f"👉 <b>{html.escape(new_label)}</b>\n\n"
+                f"<i>This custom name will now appear on all buttons and menus.</i>",
+                parse_mode="HTML"
+            )
+            await show_pc_picker(update, context)
+            return
+        else:
+            context.user_data.pop("awaiting_pc_rename", None)
+            await update.message.reply_text(f"❌ PC '<code>{html.escape(rename_target)}</code>' was not found in fleet.", parse_mode="HTML")
+            return
+
+    agent = get_agent(context)
+    if not agent:
         return
     try:
         ok = await agent.speak(text)
@@ -1968,7 +2115,7 @@ async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if config.BOT_PIN and not is_authenticated(query.from_user.id):
         # Allow fleet navigation even when locked
-        if data not in ("fleet_picker", "fleet_refresh", "fleet_overview") and not data.startswith("pc_select_"):
+        if data not in ("fleet_picker", "fleet_refresh", "fleet_overview", "fleet_rename_menu") and not data.startswith("pc_select_") and not data.startswith("cb_rename_pick_"):
             await query.answer("🔒 Locked. Send /login <PIN>", show_alert=True)
             return
 
@@ -1980,6 +2127,48 @@ async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if data == "fleet_refresh":
         await show_pc_picker(update, context)
+        return
+
+    if data == "fleet_rename_menu":
+        await show_rename_menu(update, context)
+        return
+
+    if data.startswith("cb_rename_pick_"):
+        idx = int(data.split("_")[-1])
+        fleet = load_fleet()
+        if idx < len(fleet["pcs"]):
+            target_pc = fleet["pcs"][idx]
+            context.user_data["awaiting_pc_rename"] = target_pc["name"]
+            label = target_pc.get("label", target_pc["name"])
+            prompt_text = (
+                f"✏️ <b>RENAME PC: {html.escape(label)}</b>\n"
+                f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                f"Hostname: <code>{html.escape(target_pc['name'])}</code>\n\n"
+                f"Please <b>type and send the new name</b> for this PC in this chat:\n"
+                f"<i>(e.g., 'Front Desk PC', 'Gaming Rig', 'Living Room Laptop')</i>\n\n"
+                f"<i>Send /cancel to abort.</i>"
+            )
+            cancel_kb = InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="fleet_picker")]])
+            await query.edit_message_text(prompt_text, reply_markup=cancel_kb, parse_mode="HTML")
+        return
+
+    if data == "cb_rename_current":
+        pc = get_selected_pc(context)
+        if pc:
+            context.user_data["awaiting_pc_rename"] = pc["name"]
+            label = pc.get("label", pc["name"])
+            prompt_text = (
+                f"✏️ <b>RENAME PC: {html.escape(label)}</b>\n"
+                f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                f"Hostname: <code>{html.escape(pc['name'])}</code>\n\n"
+                f"Please <b>type and send the new name</b> for this PC in this chat:\n"
+                f"<i>(e.g., 'Office Workstation', 'Gaming Rig')</i>\n\n"
+                f"<i>Send /cancel to abort.</i>"
+            )
+            cancel_kb = InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="cb_menu")]])
+            await query.edit_message_text(prompt_text, reply_markup=cancel_kb, parse_mode="HTML")
+        else:
+            await show_pc_picker(update, context)
         return
 
     if data == "fleet_overview":
@@ -2490,6 +2679,8 @@ def main():
     app.add_handler(CommandHandler(["setpin", "pin"], handle_setpin))
     app.add_handler(CommandHandler(["removepin", "unsetpin", "delpin"], handle_removepin))
     app.add_handler(CommandHandler(["removepc", "deletepc", "delpc"], handle_remove_pc))
+    app.add_handler(CommandHandler(["rename", "renamepc"], handle_rename))
+    app.add_handler(CommandHandler(["cancel", "abort"], handle_cancel))
     app.add_handler(CommandHandler("top", handle_top))
     app.add_handler(CommandHandler("kill", handle_kill))
     app.add_handler(CommandHandler("say", handle_say))
@@ -2553,6 +2744,7 @@ def main():
             BotCommand("setpin", "Configure/change security PIN"),
             BotCommand("removepin", "Disable security PIN"),
             BotCommand("removepc", "Remove PC from fleet"),
+            BotCommand("rename", "Rename PC with custom label"),
             BotCommand("status", "System Diagnostics"),
             BotCommand("shot", "Desktop Screenshot"),
             BotCommand("cast", "Live Screen Cast"),
