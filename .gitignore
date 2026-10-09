@@ -1,4 +1,7 @@
 .env
+deploy_config.env
+agent.env
+fleet.json
 recordings/
 downloads/
 __pycache__/

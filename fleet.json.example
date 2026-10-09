@@ -1,0 +1,4 @@
+{
+    "secret": "your-random-shared-secret-key-here",
+    "pcs": []
+}
