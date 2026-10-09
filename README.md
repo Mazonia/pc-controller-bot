@@ -167,9 +167,18 @@ docker compose up -d
 ```
 *Zero phone battery drain, 99.99% uptime, and instant access from anywhere via your Telegram app.*
 
-#### 💻 Option C: Windows Main PC / Laptop
-Double-click **`run.bat`** (or run `python bot.py`).  
-*(To run it completely hidden in the background, double-click `start_hidden.vbs`)*.
+#### 💻 Option C: Windows Main PC / Laptop (Auto-Start on Boot)
+Run the Commander Bot on your local Windows PC:
+
+1. **Auto-Start on Windows Boot/Logon (Recommended):**
+   - Double-click **`setup_autostart.bat`**.
+   - It automatically registers a silent Task Scheduler task and Startup shortcut.
+   - The bot will now run invisibly in the background every time Windows boots!
+   *(To disable later, double-click `remove_autostart.bat`)*.
+
+2. **Run Manually:**
+   - With visible terminal: Double-click **`run.bat`** (or `python bot.py`).
+   - Hidden background mode: Double-click **`start_hidden.vbs`**.
 
 ---
 

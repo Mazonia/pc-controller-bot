@@ -1,6 +1,12 @@
-' PC Remote Sentinel - Silent Background Launcher
-' Runs run.bat completely hidden in background without keeping terminal window open.
+' PC Remote Sentinel — Silent Background Commander Launcher
+' Launches the bot directly in the background with zero terminal window or taskbar flicker.
 Set WshShell = CreateObject("WScript.Shell")
-strCurDir = CreateObject("Scripting.FileSystemObject").GetParentFolderName(WScript.ScriptFullName)
+Set FSO = CreateObject("Scripting.FileSystemObject")
+strCurDir = FSO.GetParentFolderName(WScript.ScriptFullName)
 WshShell.CurrentDirectory = strCurDir
-WshShell.Run "cmd.exe /c run.bat", 0, False
+
+If FSO.FileExists(strCurDir & "\pc-sentinel.exe") Then
+    WshShell.Run """" & strCurDir & "\pc-sentinel.exe"" """ & strCurDir & "\bot.py""", 0, False
+Else
+    WshShell.Run "python """ & strCurDir & "\bot.py""", 0, False
+End If
