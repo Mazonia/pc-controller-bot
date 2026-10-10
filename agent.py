@@ -266,27 +266,39 @@ def handle_relay_command(data: dict) -> dict:
         }
 
     # 7. POWER & LOCK
-    elif cmd == "lock":
-        ok, msg = SystemController.lock_workstation()
-        return {"ok": ok, "msg": msg}
+    elif cmd in ("lock", "power_lock"):
+        ok = SystemController.lock_workstation()
+        return {"ok": ok, "msg": "Workstation locked." if ok else "Lock failed."}
 
-    elif cmd == "reboot":
+    elif cmd in ("sleep", "power_sleep"):
+        ok = SystemController.sleep_pc()
+        return {"ok": ok, "msg": "PC entered sleep mode." if ok else "Sleep failed."}
+
+    elif cmd in ("reboot", "restart"):
         delay = int(params.get("delay", 5))
-        ok, msg = SystemController.reboot(delay_sec=delay)
-        return {"ok": ok, "msg": msg}
+        ok = SystemController.restart_pc(seconds=delay)
+        return {"ok": ok, "msg": f"PC restarting in {delay}s." if ok else "Restart failed."}
 
     elif cmd == "shutdown":
-        delay = int(params.get("delay", 5))
-        ok, msg = SystemController.shutdown(delay_sec=delay)
-        return {"ok": ok, "msg": msg}
+        delay = int(params.get("delay", 0))
+        ok = SystemController.shutdown_pc(seconds=delay)
+        return {"ok": ok, "msg": f"PC shutting down in {delay}s." if ok else "Shutdown failed."}
 
     elif cmd == "cancel_shutdown":
-        ok, msg = SystemController.cancel_shutdown()
-        return {"ok": ok, "msg": msg}
+        ok = SystemController.cancel_shutdown()
+        return {"ok": ok, "msg": "Scheduled shutdown cancelled." if ok else "No scheduled shutdown active."}
+
+    elif cmd in ("monitor_off", "monitors_off"):
+        ok = SystemController.turn_off_monitors()
+        return {"ok": ok, "msg": "Monitors turned off." if ok else "Failed to turn off monitors."}
+
+    elif cmd in ("monitor_on", "monitors_on"):
+        ok = SystemController.turn_on_monitors()
+        return {"ok": ok, "msg": "Monitors turned on." if ok else "Failed to turn on monitors."}
 
     # 8. PROCESSES & TERMINAL
     elif cmd == "processes":
-        procs = SystemController.get_running_processes(limit=int(params.get("limit", 25)))
+        procs = SystemController.list_top_processes(count=int(params.get("limit", 25)))
         return {"ok": True, "processes": procs}
 
     elif cmd == "kill_process":
@@ -300,18 +312,17 @@ def handle_relay_command(data: dict) -> dict:
         command_str = params.get("command", "")
         if not command_str:
             return {"ok": False, "error": "No command specified."}
-        output = SystemController.execute_command(command_str)
-        return {"ok": True, "output": output}
+        rc, output = SystemController.run_cmd(command_str)
+        return {"ok": True, "output": output, "returncode": rc}
 
     # 9. VOLUME & MEDIA
     elif cmd == "volume_set":
         level = int(params.get("level", 50))
-        ok, msg = SystemController.set_volume(level)
-        return {"ok": ok, "msg": msg}
+        ok = SystemController.change_volume(level)
+        return {"ok": ok, "msg": f"Volume set to {level}%." if ok else "Volume change failed."}
 
-    elif cmd == "volume_mute":
-        mute = bool(params.get("mute", True))
-        ok, msg = SystemController.mute_volume(mute)
+    elif cmd in ("volume_mute", "mute"):
+        ok, msg = SystemController.press_media_key("mute")
         return {"ok": ok, "msg": msg}
 
     elif cmd == "media_key":
@@ -326,27 +337,28 @@ def handle_relay_command(data: dict) -> dict:
 
     elif cmd == "clipboard_set":
         text = params.get("text", "")
-        ok, msg = SystemController.set_clipboard(text)
-        return {"ok": ok, "msg": msg}
+        ok = SystemController.set_clipboard(text)
+        return {"ok": ok, "msg": "Clipboard updated." if ok else "Failed to set clipboard."}
 
     # 11. ALARM
     elif cmd == "alarm_start":
         duration = int(params.get("duration", 30))
         label = params.get("label", "Manual Telegram Alarm")
-        ok, msg = SystemController.trigger_alarm(duration_sec=duration, label=label, callback=_alarm_callback)
+        ok, msg = SystemController.set_alarm(time_input=f"{duration}s", label=label)
         return {"ok": ok, "msg": msg}
 
     elif cmd == "alarm_stop":
-        ok, msg = SystemController.stop_alarm()
-        return {"ok": ok, "msg": msg}
+        ok = SystemController.stop_alarm()
+        return {"ok": ok, "msg": "Alarm silenced." if ok else "No active alarm."}
 
     # 12. TTS
     elif cmd == "tts":
         text = params.get("text", "")
         if not text:
             return {"ok": False, "error": "No text provided for TTS."}
-        ok, msg = SystemController.speak_text(text)
-        return {"ok": ok, "msg": msg}
+        ok = SystemController.speak_text(text)
+        return {"ok": ok, "msg": "Text spoken on PC." if ok else "Text-to-speech failed."}
+
 
     # 13. FILE OPERATIONS
     elif cmd in ("dir_list", "file_browse", "browse"):
@@ -542,6 +554,100 @@ async def api_get_file(path: str):
     if p.stat().st_size > 50 * 1024 * 1024:
         raise HTTPException(400, "File exceeds 50MB limit")
     return FileResponse(str(p), filename=p.name)
+
+
+# ── Local LAN Power & Hardware Routes ────────────────────────────────
+
+@app.post("/power/lock")
+async def api_power_lock():
+    ok = await asyncio.to_thread(SystemController.lock_workstation)
+    return {"ok": ok, "success": ok, "msg": "Workstation locked" if ok else "Lock failed"}
+
+
+@app.post("/power/sleep")
+async def api_power_sleep():
+    ok = await asyncio.to_thread(SystemController.sleep_pc)
+    return {"ok": ok, "success": ok, "msg": "PC entered sleep mode" if ok else "Sleep failed"}
+
+
+@app.post("/power/shutdown")
+async def api_power_shutdown(delay: int = 0):
+    ok = await asyncio.to_thread(SystemController.shutdown_pc, delay)
+    return {"ok": ok, "success": ok, "msg": f"Shutdown scheduled in {delay}s" if ok else "Shutdown failed"}
+
+
+@app.post("/power/restart")
+async def api_power_restart(delay: int = 5):
+    ok = await asyncio.to_thread(SystemController.restart_pc, delay)
+    return {"ok": ok, "success": ok, "msg": f"Restart scheduled in {delay}s" if ok else "Restart failed"}
+
+
+@app.post("/power/cancel-shutdown")
+async def api_power_cancel_shutdown():
+    ok = await asyncio.to_thread(SystemController.cancel_shutdown)
+    return {"ok": ok, "success": ok}
+
+
+@app.post("/monitor/on")
+async def api_monitor_on():
+    ok = await asyncio.to_thread(SystemController.turn_on_monitors)
+    return {"ok": ok, "success": ok}
+
+
+@app.post("/monitor/off")
+async def api_monitor_off():
+    ok = await asyncio.to_thread(SystemController.turn_off_monitors)
+    return {"ok": ok, "success": ok}
+
+
+@app.post("/media/{action}")
+async def api_media_action(action: str):
+    ok, msg = await asyncio.to_thread(SystemController.press_media_key, action)
+    return {"ok": ok, "msg": msg}
+
+
+@app.get("/clipboard")
+async def api_get_clipboard():
+    text = await asyncio.to_thread(SystemController.get_clipboard)
+    return {"ok": True, "content": text}
+
+
+@app.post("/clipboard")
+async def api_set_clipboard(request: Request):
+    data = await request.form()
+    text = data.get("text", "")
+    ok = await asyncio.to_thread(SystemController.set_clipboard, text)
+    return {"ok": ok, "success": ok}
+
+
+@app.post("/tts")
+async def api_tts(request: Request):
+    data = await request.form()
+    text = data.get("text", "")
+    ok = await asyncio.to_thread(SystemController.speak_text, text)
+    return {"ok": ok, "success": ok}
+
+
+@app.get("/alarm/status")
+async def api_alarm_status():
+    st = await asyncio.to_thread(SystemController.get_alarm_status)
+    return {"ok": True, "status": st}
+
+
+@app.post("/alarm/set")
+async def api_alarm_set(request: Request):
+    data = await request.form()
+    seconds = int(data.get("seconds", 30))
+    label = data.get("label", "Timer Alarm")
+    ok, msg = await asyncio.to_thread(SystemController.set_alarm, f"{seconds}s", label)
+    return {"ok": ok, "msg": msg}
+
+
+@app.post("/alarm/stop")
+async def api_alarm_stop():
+    ok = await asyncio.to_thread(SystemController.stop_alarm)
+    return {"ok": ok, "success": ok}
+
 
 
 # ═══════════════════════════════════════════════════════════════════════

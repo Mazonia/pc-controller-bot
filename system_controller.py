@@ -219,20 +219,49 @@ class SystemController:
 
     @staticmethod
     def lock_workstation() -> bool:
-        """Lock Windows PC instantly."""
+        """Lock Windows PC instantly using user32 API, rundll32, or session disconnect."""
         try:
-            ctypes.windll.user32.LockWorkStation()
-            return True
+            res = ctypes.windll.user32.LockWorkStation()
+            if res != 0:
+                logger.info("Workstation locked via ctypes user32.LockWorkStation.")
+                return True
         except Exception as e:
-            logger.error(f"Lock error: {e}")
+            logger.debug(f"Direct LockWorkStation failed: {e}")
+
+        try:
+            res = subprocess.run(["rundll32.exe", "user32.dll,LockWorkStation"], shell=False, timeout=3)
+            if res.returncode == 0:
+                logger.info("Workstation locked via rundll32.")
+                return True
+        except Exception as e:
+            logger.debug(f"rundll32 LockWorkStation failed: {e}")
+
+        try:
+            res = subprocess.run(["tsdiscon"], shell=False, timeout=3)
+            if res.returncode == 0:
+                logger.info("Workstation locked via tsdiscon.")
+                return True
+        except Exception as e:
+            logger.error(f"All workstation lock strategies failed: {e}")
             return False
+        return False
 
     @staticmethod
     def sleep_pc() -> bool:
-        """Put PC into sleep state."""
+        """Put PC into sleep state using powrprof API and powershell fallback."""
         try:
-            # Uses SetSuspendState or fallback powershell
-            res = subprocess.run(["powershell", "-Command", "Add-Type -Assembly System.Windows.Forms; [System.Windows.Forms.Application]::SetSuspendState([System.Windows.Forms.PowerState]::Suspend, $false, $false)"], capture_output=True)
+            res = subprocess.run(["rundll32.exe", "powrprof.dll,SetSuspendState", "0,1,0"], shell=False, timeout=5)
+            if res.returncode == 0:
+                return True
+        except Exception as e:
+            logger.debug(f"rundll32 SetSuspendState failed: {e}")
+
+        try:
+            res = subprocess.run(
+                ["powershell", "-NoProfile", "-Command", "Add-Type -Assembly System.Windows.Forms; [System.Windows.Forms.Application]::SetSuspendState([System.Windows.Forms.PowerState]::Suspend, $false, $false)"],
+                capture_output=True,
+                timeout=5
+            )
             return res.returncode == 0
         except Exception as e:
             logger.error(f"Sleep error: {e}")
@@ -277,6 +306,13 @@ class SystemController:
             MONITOR_OFF = 2
             ctypes.windll.user32.SendMessageW(HWND_BROADCAST, WM_SYSCOMMAND, SC_MONITORPOWER, MONITOR_OFF)
             return True
+        except Exception as e:
+            logger.debug(f"Direct SendMessageW monitor off failed: {e}")
+
+        try:
+            cmd = "Add-Type -TypeDefinition 'using System; using System.Runtime.InteropServices; public class M { [DllImport(\"user32.dll\")] public static extern int SendMessage(int hWnd, int hMsg, int wParam, int lParam); }'; [M]::SendMessage(0xffff, 0x0112, 0xf170, 2)"
+            res = subprocess.run(["powershell", "-NoProfile", "-Command", cmd], capture_output=True, timeout=5)
+            return res.returncode == 0
         except Exception as e:
             logger.error(f"Monitor off error: {e}")
             return False

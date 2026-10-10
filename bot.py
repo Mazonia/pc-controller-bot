@@ -411,26 +411,33 @@ class AgentClient:
         r.raise_for_status()
         return r.json()
 
-    async def power_sleep(self):
-        await self._post("/power/sleep")
-
-    async def power_lock(self):
+    async def power_sleep(self) -> dict:
         if self.is_relay_online():
-            await commander_relay.send_command(self.name, "lock", timeout=10.0)
-            return
-        await self._post("/power/lock")
+            return await commander_relay.send_command(self.name, "sleep", timeout=10.0)
+        r = await self._post("/power/sleep")
+        r.raise_for_status()
+        return r.json()
 
-    async def power_shutdown(self, delay: int = 0):
+    async def power_lock(self) -> dict:
         if self.is_relay_online():
-            await commander_relay.send_command(self.name, "shutdown", {"delay": delay}, timeout=10.0)
-            return
-        await self._post(f"/power/shutdown?delay={delay}")
+            return await commander_relay.send_command(self.name, "lock", timeout=10.0)
+        r = await self._post("/power/lock")
+        r.raise_for_status()
+        return r.json()
 
-    async def power_restart(self, delay: int = 5):
+    async def power_shutdown(self, delay: int = 0) -> dict:
         if self.is_relay_online():
-            await commander_relay.send_command(self.name, "reboot", {"delay": delay}, timeout=10.0)
-            return
-        await self._post(f"/power/restart?delay={delay}")
+            return await commander_relay.send_command(self.name, "shutdown", {"delay": delay}, timeout=10.0)
+        r = await self._post(f"/power/shutdown?delay={delay}")
+        r.raise_for_status()
+        return r.json()
+
+    async def power_restart(self, delay: int = 5) -> dict:
+        if self.is_relay_online():
+            return await commander_relay.send_command(self.name, "restart", {"delay": delay}, timeout=10.0)
+        r = await self._post(f"/power/restart?delay={delay}")
+        r.raise_for_status()
+        return r.json()
 
     async def power_cancel_shutdown(self) -> bool:
         if self.is_relay_online():
@@ -439,11 +446,19 @@ class AgentClient:
         r = await self._post("/power/cancel-shutdown")
         return r.json().get("success", False)
 
-    async def monitor_on(self):
-        await self._post("/monitor/on")
+    async def monitor_on(self) -> dict:
+        if self.is_relay_online():
+            return await commander_relay.send_command(self.name, "monitor_on", timeout=10.0)
+        r = await self._post("/monitor/on")
+        r.raise_for_status()
+        return r.json()
 
-    async def monitor_off(self):
-        await self._post("/monitor/off")
+    async def monitor_off(self) -> dict:
+        if self.is_relay_online():
+            return await commander_relay.send_command(self.name, "monitor_off", timeout=10.0)
+        r = await self._post("/monitor/off")
+        r.raise_for_status()
+        return r.json()
 
     async def media_control(self, action: str):
         if self.is_relay_online():
@@ -2426,7 +2441,48 @@ async def handle_monitor(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"❌ Monitor control failed: {e}")
 
 
+async def handle_lock(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await check_access(update, context):
+        return
+    agent = await require_pc(update, context)
+    if not agent:
+        return
+    label = pc_label(context)
+    try:
+        res = await agent.power_lock()
+        ok = res.get("ok", True) if isinstance(res, dict) else bool(res)
+        msg = res.get("msg", "Workstation locked.") if isinstance(res, dict) else "Workstation locked."
+        if ok:
+            await update.message.reply_text(f"🔒 <b>{html.escape(label)} Workstation Locked</b> ✅\n<i>{html.escape(msg)}</i>", parse_mode="HTML")
+        else:
+            err = res.get("error", msg)
+            await update.message.reply_text(f"❌ <b>Lock failed on {html.escape(label)}:</b> {html.escape(err)}", parse_mode="HTML")
+    except Exception as e:
+        await update.message.reply_text(f"❌ Lock error on {html.escape(label)}: {e}")
+
+
+async def handle_sleep(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await check_access(update, context):
+        return
+    agent = await require_pc(update, context)
+    if not agent:
+        return
+    label = pc_label(context)
+    try:
+        res = await agent.power_sleep()
+        ok = res.get("ok", True) if isinstance(res, dict) else bool(res)
+        msg = res.get("msg", "PC entering sleep mode.") if isinstance(res, dict) else "PC entering sleep mode."
+        if ok:
+            await update.message.reply_text(f"💤 <b>{html.escape(label)} entering sleep mode...</b>\n<i>{html.escape(msg)}</i>", parse_mode="HTML")
+        else:
+            err = res.get("error", msg)
+            await update.message.reply_text(f"❌ <b>Sleep failed on {html.escape(label)}:</b> {html.escape(err)}", parse_mode="HTML")
+    except Exception as e:
+        await update.message.reply_text(f"❌ Sleep error on {html.escape(label)}: {e}")
+
+
 # ── Incoming Files, Voice, Text ────────────────────────────────────────
+
 
 async def handle_incoming_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_authorized(update.effective_user.id):
@@ -3226,87 +3282,174 @@ async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.answer("⏹️ Stopped")
     elif data == "cb_pwr_sleep":
         agent = get_agent(context)
-        if agent:
-            try:
-                await agent.power_sleep()
-            except Exception:
-                pass
-        await query.message.reply_text(f"💤 {html.escape(pc_label(context))} going to sleep...")
+        if not agent:
+            await query.answer("No PC selected.", show_alert=True)
+            return
+        label = pc_label(context)
+        try:
+            res = await agent.power_sleep()
+            ok = res.get("ok", True) if isinstance(res, dict) else bool(res)
+            msg = res.get("msg", "PC entering sleep mode.") if isinstance(res, dict) else "PC entering sleep mode."
+            if ok:
+                await query.message.reply_text(f"💤 <b>{html.escape(label)} sleep mode triggered!</b>\n<i>{html.escape(msg)}</i>", parse_mode="HTML")
+            else:
+                err = res.get("error", msg)
+                await query.message.reply_text(f"❌ <b>Sleep failed on {html.escape(label)}:</b> {html.escape(err)}", parse_mode="HTML")
+        except Exception as e:
+            await query.message.reply_text(f"❌ Sleep error on {html.escape(label)}: {e}")
+
     elif data == "cb_pwr_lock":
         agent = get_agent(context)
-        if agent:
-            try:
-                await agent.power_lock()
-            except Exception:
-                pass
-        await query.message.reply_text(f"🔒 {html.escape(pc_label(context))} locked.")
+        if not agent:
+            await query.answer("No PC selected.", show_alert=True)
+            return
+        label = pc_label(context)
+        try:
+            res = await agent.power_lock()
+            ok = res.get("ok", True) if isinstance(res, dict) else bool(res)
+            msg = res.get("msg", "Workstation locked.") if isinstance(res, dict) else "Workstation locked."
+            if ok:
+                await query.message.reply_text(f"🔒 <b>{html.escape(label)} Workstation Locked</b> ✅\n<i>{html.escape(msg)}</i>", parse_mode="HTML")
+            else:
+                err = res.get("error", msg)
+                await query.message.reply_text(f"❌ <b>Lock failed on {html.escape(label)}:</b> {html.escape(err)}", parse_mode="HTML")
+        except Exception as e:
+            await query.message.reply_text(f"❌ Lock error on {html.escape(label)}: {e}")
+
     elif data == "cb_pwr_monitor_off":
         agent = get_agent(context)
-        if agent:
-            try:
-                await agent.monitor_off()
-            except Exception:
-                pass
-        await query.message.reply_text(f"🖥️ {html.escape(pc_label(context))} monitors off.")
+        if not agent:
+            await query.answer("No PC selected.", show_alert=True)
+            return
+        label = pc_label(context)
+        try:
+            res = await agent.monitor_off()
+            ok = res.get("ok", True) if isinstance(res, dict) else bool(res)
+            if ok:
+                await query.message.reply_text(f"🖥️ <b>{html.escape(label)} monitors turned off.</b>", parse_mode="HTML")
+            else:
+                err = res.get("error", "Failed to turn off monitors.") if isinstance(res, dict) else "Failed"
+                await query.message.reply_text(f"❌ <b>Monitor off failed:</b> {html.escape(err)}", parse_mode="HTML")
+        except Exception as e:
+            await query.message.reply_text(f"❌ Monitor off error: {e}")
+
     elif data == "cb_pwr_monitor_on":
         agent = get_agent(context)
-        if agent:
-            try:
-                await agent.monitor_on()
-            except Exception:
-                pass
-        await query.message.reply_text(f"💡 {html.escape(pc_label(context))} monitors on.")
+        if not agent:
+            await query.answer("No PC selected.", show_alert=True)
+            return
+        label = pc_label(context)
+        try:
+            res = await agent.monitor_on()
+            ok = res.get("ok", True) if isinstance(res, dict) else bool(res)
+            if ok:
+                await query.message.reply_text(f"💡 <b>{html.escape(label)} monitors powered on.</b>", parse_mode="HTML")
+            else:
+                err = res.get("error", "Failed to turn on monitors.") if isinstance(res, dict) else "Failed"
+                await query.message.reply_text(f"❌ <b>Monitor on failed:</b> {html.escape(err)}", parse_mode="HTML")
+        except Exception as e:
+            await query.message.reply_text(f"❌ Monitor on error: {e}")
+
     elif data == "cb_pwr_shutdown_now":
         agent = get_agent(context)
-        if agent:
-            try:
-                await agent.power_shutdown(0)
-            except Exception:
-                pass
-        await query.message.reply_text(f"🛑 {html.escape(pc_label(context))} shutting down...")
+        if not agent:
+            await query.answer("No PC selected.", show_alert=True)
+            return
+        label = pc_label(context)
+        try:
+            res = await agent.power_shutdown(0)
+            ok = res.get("ok", True) if isinstance(res, dict) else bool(res)
+            if ok:
+                await query.message.reply_text(f"🛑 <b>{html.escape(label)} shutting down immediately...</b>", parse_mode="HTML")
+            else:
+                err = res.get("error", "Shutdown failed.") if isinstance(res, dict) else "Failed"
+                await query.message.reply_text(f"❌ <b>Shutdown failed:</b> {html.escape(err)}", parse_mode="HTML")
+        except Exception as e:
+            await query.message.reply_text(f"❌ Shutdown error: {e}")
+
     elif data == "cb_pwr_shut_15":
         agent = get_agent(context)
-        if agent:
-            try:
-                await agent.power_shutdown(900)
-            except Exception:
-                pass
-        await query.message.reply_text(f"⏳ {html.escape(pc_label(context))} shutdown in 15 min.")
+        if not agent:
+            await query.answer("No PC selected.", show_alert=True)
+            return
+        label = pc_label(context)
+        try:
+            res = await agent.power_shutdown(900)
+            ok = res.get("ok", True) if isinstance(res, dict) else bool(res)
+            if ok:
+                await query.message.reply_text(f"⏳ <b>{html.escape(label)} shutdown scheduled in 15 min.</b>", parse_mode="HTML")
+            else:
+                err = res.get("error", "Schedule failed.") if isinstance(res, dict) else "Failed"
+                await query.message.reply_text(f"❌ <b>Schedule failed:</b> {html.escape(err)}", parse_mode="HTML")
+        except Exception as e:
+            await query.message.reply_text(f"❌ Shutdown schedule error: {e}")
+
     elif data == "cb_pwr_shut_30":
         agent = get_agent(context)
-        if agent:
-            try:
-                await agent.power_shutdown(1800)
-            except Exception:
-                pass
-        await query.message.reply_text(f"⏳ {html.escape(pc_label(context))} shutdown in 30 min.")
+        if not agent:
+            await query.answer("No PC selected.", show_alert=True)
+            return
+        label = pc_label(context)
+        try:
+            res = await agent.power_shutdown(1800)
+            ok = res.get("ok", True) if isinstance(res, dict) else bool(res)
+            if ok:
+                await query.message.reply_text(f"⏳ <b>{html.escape(label)} shutdown scheduled in 30 min.</b>", parse_mode="HTML")
+            else:
+                err = res.get("error", "Schedule failed.") if isinstance(res, dict) else "Failed"
+                await query.message.reply_text(f"❌ <b>Schedule failed:</b> {html.escape(err)}", parse_mode="HTML")
+        except Exception as e:
+            await query.message.reply_text(f"❌ Shutdown schedule error: {e}")
+
     elif data == "cb_pwr_shut_60":
         agent = get_agent(context)
-        if agent:
-            try:
-                await agent.power_shutdown(3600)
-            except Exception:
-                pass
-        await query.message.reply_text(f"⏳ {html.escape(pc_label(context))} shutdown in 1 hour.")
+        if not agent:
+            await query.answer("No PC selected.", show_alert=True)
+            return
+        label = pc_label(context)
+        try:
+            res = await agent.power_shutdown(3600)
+            ok = res.get("ok", True) if isinstance(res, dict) else bool(res)
+            if ok:
+                await query.message.reply_text(f"⏳ <b>{html.escape(label)} shutdown scheduled in 1 hour.</b>", parse_mode="HTML")
+            else:
+                err = res.get("error", "Schedule failed.") if isinstance(res, dict) else "Failed"
+                await query.message.reply_text(f"❌ <b>Schedule failed:</b> {html.escape(err)}", parse_mode="HTML")
+        except Exception as e:
+            await query.message.reply_text(f"❌ Shutdown schedule error: {e}")
+
     elif data == "cb_pwr_shut_cancel":
         agent = get_agent(context)
-        if agent:
-            try:
-                ok = await agent.power_cancel_shutdown()
-                if ok:
-                    await query.message.reply_text(f"✅ {html.escape(pc_label(context))} shutdown cancelled.")
-                else:
-                    await query.message.reply_text("ℹ️ No scheduled shutdown.")
-            except Exception:
-                pass
+        if not agent:
+            await query.answer("No PC selected.", show_alert=True)
+            return
+        label = pc_label(context)
+        try:
+            ok = await agent.power_cancel_shutdown()
+            if ok:
+                await query.message.reply_text(f"✅ <b>{html.escape(label)} scheduled shutdown cancelled.</b>", parse_mode="HTML")
+            else:
+                await query.message.reply_text("ℹ️ No scheduled shutdown active.")
+        except Exception as e:
+            await query.message.reply_text(f"❌ Cancel error: {e}")
+
     elif data == "cb_pwr_restart":
         agent = get_agent(context)
-        if agent:
-            try:
-                await agent.power_restart(5)
-            except Exception:
-                pass
-        await query.message.reply_text(f"🔄 {html.escape(pc_label(context))} restarting in 5s...")
+        if not agent:
+            await query.answer("No PC selected.", show_alert=True)
+            return
+        label = pc_label(context)
+        try:
+            res = await agent.power_restart(5)
+            ok = res.get("ok", True) if isinstance(res, dict) else bool(res)
+            if ok:
+                await query.message.reply_text(f"🔄 <b>{html.escape(label)} restarting in 5s...</b>", parse_mode="HTML")
+            else:
+                err = res.get("error", "Restart failed.") if isinstance(res, dict) else "Failed"
+                await query.message.reply_text(f"❌ <b>Restart failed:</b> {html.escape(err)}", parse_mode="HTML")
+        except Exception as e:
+            await query.message.reply_text(f"❌ Restart error: {e}")
+
 
     # ── Remote File Explorer ──────────────────────────────────────
     elif data == "cb_fs_menu":
@@ -3599,6 +3742,8 @@ def main():
     app.add_handler(CommandHandler(["alarm", "timer"], handle_alarm))
     app.add_handler(CommandHandler(["stopalarm", "silence"], handle_stopalarm))
     app.add_handler(CommandHandler(["cancelalarm"], handle_cancelalarm))
+    app.add_handler(CommandHandler(["lock", "lockpc"], handle_lock))
+    app.add_handler(CommandHandler(["sleep", "sleeppc"], handle_sleep))
     app.add_handler(CommandHandler("monitor", handle_monitor))
     app.add_handler(MessageHandler(filters.VOICE | filters.AUDIO, handle_incoming_voice))
     app.add_handler(MessageHandler(filters.Document.ALL, handle_incoming_file))
@@ -3657,6 +3802,8 @@ def main():
             BotCommand("desktop", "Desktops & Windows Menu"),
             BotCommand("windows", "Switch Open Apps/Windows"),
             BotCommand("switch", "Focus App: /switch [name]"),
+            BotCommand("lock", "Lock Windows workstation"),
+            BotCommand("sleep", "Put PC to sleep"),
             BotCommand("webcam", "Webcam Snapshot"),
             BotCommand("record_screen", "Record Desktop (10s-120s)"),
             BotCommand("record_webcam", "Record Webcam"),
