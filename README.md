@@ -104,8 +104,14 @@ Traditional remote desktop tools require port forwarding, static public IPs, com
 - **PC Alarms & Timers (`/alarm [time] [label]`)**: Set countdown timers or specific clock alarms with siren alerts and speech synthesis.
 - **Media Player Controls**: Play, pause, skip tracks, volume up/down, and mute for Spotify, YouTube, Chrome, VLC, and media players.
 
-### 📁 Remote Files & Clipboard
-- **File Downloader (`/get <path>`)**: Fetch any file from the PC directly into Telegram (up to 50MB).
+### 📁 Remote File Explorer & Clipboard
+- **Interactive File Explorer (`/get`, `/files`, `/browse`, `/explore`)**:
+  - **No Need to Memorize Paths**: Sending `/get` or `/files` without arguments launches an interactive visual file browser right inside Telegram starting at your Desktop.
+  - **Visual Directory Navigation**: Tap any folder button (`[📁 Folder Name]`) to navigate inside, tap `[⬆️ Up]` to go to the parent directory, or tap `[🔄 Refresh]` to re-scan.
+  - **Smart File Identification**: Displays custom emojis for documents (`📄`), images (`🖼️`), videos (`🎥`), audio (`🎵`), archives (`📦`), executables (`💻`), and scripts (`⚙️`) with human-readable file sizes.
+  - **1-Tap Direct Downloads**: Tap any file button (`[📄 document.pdf (2.4 MB) ⬇️]`) to instantly download and deliver the file directly to your Telegram chat (with 50MB safety check).
+  - **Quick Access Shortcuts (`[🏠 Quick Access]`)**: 1-tap jump to system drive partitions (`💻 Drive (C:)`, `💻 Drive (D:)`) or core user folders (**Desktop**, **Downloads**, **Documents**, **Pictures**, **Sentinel Recordings**).
+  - **Smart Path Support**: Send `/get C:\MyFolder` to open the explorer at that folder, or `/get C:\path\file.txt` to directly fetch the file.
 - **File Dropper**: Send any document, photo, or script to the bot to automatically save it in the PC's `downloads/` folder.
 - **Clipboard Sync (`/clip <text>`, `/getclip`)**: Read or push text directly to and from the Windows clipboard.
 - **Storage Cleaner (`/clean`)**: Audit and clean up cached recordings and downloads with explicit confirmation.
@@ -248,7 +254,8 @@ To monitor any PC (personal laptop, gaming PC, home workstation, office desktop,
 | `/say <text>` | Speak text aloud on PC speakers |
 | `/clip <text>` | Copy text from phone to PC clipboard |
 | `/getclip` | Read text from PC clipboard |
-| `/get <path>` | Download file from PC to Telegram chat |
+| `/get [path]` | Open Remote File Explorer, browse directories, or download file |
+| `/files`, `/browse`, `/explore` | Launch interactive Remote File Explorer menu |
 | `/alarm [time] [label]` | Set countdown timer (`10m`, `45s`, `1.5h`) or clock alarm (`18:30`) |
 | `/stopalarm`, `/silence` | Silence and stop ringing PC alarm |
 | `/cancelalarm` | Cancel pending scheduled alarm countdown |

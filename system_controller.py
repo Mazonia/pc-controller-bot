@@ -933,6 +933,176 @@ class SystemController:
         return deleted_count, freed_bytes
 
     @staticmethod
+    def format_size(num_bytes: int) -> str:
+        """Format byte count into human-readable size string."""
+        if num_bytes <= 0:
+            return "0 B"
+        num = float(num_bytes)
+        for unit in ["B", "KB", "MB", "GB", "TB"]:
+            if abs(num) < 1024.0:
+                return f"{num:.1f} {unit}" if unit != "B" else f"{int(num)} B"
+            num /= 1024.0
+        return f"{num:.1f} PB"
+
+    @staticmethod
+    def get_system_drives() -> List[str]:
+        """Detect all active logical drive roots on Windows."""
+        drives = []
+        try:
+            for p in psutil.disk_partitions():
+                if p.device and p.device not in drives:
+                    d = p.device
+                    if not d.endswith("\\"):
+                        d += "\\"
+                    drives.append(d)
+        except Exception:
+            pass
+        if not drives:
+            drives = ["C:\\"]
+        return drives
+
+    @staticmethod
+    def get_file_icon(name: str, is_dir: bool) -> str:
+        """Return aesthetic emoji icon based on item type and file extension."""
+        if is_dir:
+            return "📁"
+        ext = Path(name).suffix.lower()
+        if ext in (".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp", ".ico", ".svg"):
+            return "🖼️"
+        elif ext in (".mp4", ".mkv", ".avi", ".mov", ".wmv", ".webm", ".m4v"):
+            return "🎥"
+        elif ext in (".mp3", ".wav", ".flac", ".aac", ".m4a", ".ogg"):
+            return "🎵"
+        elif ext in (".zip", ".rar", ".7z", ".tar", ".gz", ".iso", ".bz2", ".7zip"):
+            return "📦"
+        elif ext in (".pdf", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx", ".txt", ".md", ".csv", ".rtf"):
+            return "📄"
+        elif ext in (".py", ".js", ".html", ".css", ".json", ".ts", ".jsx", ".tsx", ".cpp", ".c", ".java", ".php", ".sh"):
+            return "💻"
+        elif ext in (".exe", ".bat", ".cmd", ".vbs", ".ps1", ".msi", ".dll"):
+            return "⚙️"
+        return "📄"
+
+    @staticmethod
+    def browse_directory(target_path: Optional[str] = None) -> Dict[str, Any]:
+        """
+        Browse and list directory contents on the PC for remote file navigation.
+        Returns normalized paths, drives, quick-access shortcuts, and sorted item list.
+        """
+        home = Path.home()
+        quick_access = {
+            "desktop": str(home / "Desktop"),
+            "downloads": str(home / "Downloads"),
+            "documents": str(home / "Documents"),
+            "pictures": str(home / "Pictures"),
+        }
+
+        # Normalize target path
+        if not target_path or not target_path.strip():
+            p = home / "Desktop" if (home / "Desktop").exists() else home
+        else:
+            t = target_path.strip()
+            if re.match(r"^[a-zA-Z]:$", t):
+                t += "\\"
+            p = Path(t)
+
+        try:
+            p = p.resolve()
+        except Exception:
+            pass
+
+        if not p.exists():
+            return {
+                "ok": False,
+                "error": f"Path not found: '{target_path}'",
+                "current_path": str(p),
+                "parent_path": str(home),
+                "drives": SystemController.get_system_drives(),
+                "quick_access": quick_access,
+                "items": [],
+            }
+
+        # If user pointed directly to a file
+        if p.is_file():
+            sz = p.stat().st_size
+            return {
+                "ok": True,
+                "is_file": True,
+                "file_path": str(p),
+                "filename": p.name,
+                "size": sz,
+                "size_fmt": SystemController.format_size(sz),
+                "current_path": str(p.parent),
+                "parent_path": str(p.parent.parent) if p.parent != p.parent.parent else None,
+                "drives": SystemController.get_system_drives(),
+                "quick_access": quick_access,
+                "items": [],
+            }
+
+        # List directory items
+        items = []
+        ignored_names = {
+            "desktop.ini", "ntuser.dat", "$recycle.bin", "system volume information",
+            "hiberfil.sys", "pagefile.sys", "swapfile.sys", "dumpstack.log", "dumpstack.log.tmp"
+        }
+        try:
+            for entry in p.iterdir():
+                try:
+                    if entry.name.lower() in ignored_names:
+                        continue
+                    is_dir = entry.is_dir()
+                    sz = entry.stat().st_size if not is_dir else 0
+                    mtime = datetime.fromtimestamp(entry.stat().st_mtime).strftime("%Y-%m-%d %H:%M")
+                    items.append({
+                        "name": entry.name,
+                        "path": str(entry),
+                        "is_dir": is_dir,
+                        "size": sz,
+                        "size_fmt": SystemController.format_size(sz) if not is_dir else "<DIR>",
+                        "icon": SystemController.get_file_icon(entry.name, is_dir),
+                        "modified": mtime,
+                    })
+                except (PermissionError, OSError):
+                    continue
+        except PermissionError as e:
+            return {
+                "ok": False,
+                "error": f"Access Denied: {e}",
+                "current_path": str(p),
+                "parent_path": str(p.parent) if p != p.parent else None,
+                "drives": SystemController.get_system_drives(),
+                "quick_access": quick_access,
+                "items": [],
+            }
+        except Exception as e:
+            return {
+                "ok": False,
+                "error": str(e),
+                "current_path": str(p),
+                "parent_path": str(p.parent) if p != p.parent else None,
+                "drives": SystemController.get_system_drives(),
+                "quick_access": quick_access,
+                "items": [],
+            }
+
+        # Sort: directories first (alphabetical), then files (alphabetical)
+        items.sort(key=lambda x: (not x["is_dir"], x["name"].lower()))
+
+        parent = str(p.parent) if p != p.parent else None
+
+        return {
+            "ok": True,
+            "is_file": False,
+            "current_path": str(p),
+            "parent_path": parent,
+            "drives": SystemController.get_system_drives(),
+            "quick_access": quick_access,
+            "items": items,
+            "total_dirs": sum(1 for x in items if x["is_dir"]),
+            "total_files": sum(1 for x in items if not x["is_dir"]),
+        }
+
+    @staticmethod
     def run_cmd(command: str, bot_token: str = "") -> Tuple[int, str]:
         """Execute terminal command securely with dangerous command blocking and token masking."""
         cmd_lower = command.lower().strip()

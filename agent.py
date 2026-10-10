@@ -349,6 +349,12 @@ def handle_relay_command(data: dict) -> dict:
         return {"ok": ok, "msg": msg}
 
     # 13. FILE OPERATIONS
+    elif cmd in ("dir_list", "file_browse", "browse"):
+        target_path = params.get("path", "")
+        data = SystemController.browse_directory(target_path)
+        data["pc_name"] = PC_NAME
+        return data
+
     elif cmd == "file_list":
         dir_name = params.get("dir", "downloads")
         target_dir = RECORDINGS_DIR if dir_name == "recordings" else DOWNLOADS_DIR
@@ -363,15 +369,27 @@ def handle_relay_command(data: dict) -> dict:
         return {"ok": True, "files": sorted(files, key=lambda x: x["modified"], reverse=True)[:30]}
 
     elif cmd == "file_download":
-        filename = params.get("name", "")
-        p1 = RECORDINGS_DIR / filename
-        p2 = DOWNLOADS_DIR / filename
-        target_file = p1 if p1.exists() else (p2 if p2.exists() else None)
-        if target_file and chat_id:
-            caption = f"📄 File from <b>{PC_NAME}</b>: <code>{target_file.name}</code>"
-            send_document_to_telegram(chat_id, target_file, caption)
-            return {"ok": True, "direct_upload": True, "msg": "File uploaded to chat."}
-        return {"ok": False, "error": f"File '{filename}' not found on PC."}
+        raw_target = params.get("path") or params.get("name") or ""
+        p = Path(raw_target)
+        if not p.is_absolute():
+            p1 = RECORDINGS_DIR / raw_target
+            p2 = DOWNLOADS_DIR / raw_target
+            p = p1 if p1.exists() else (p2 if p2.exists() else Path.home() / raw_target)
+
+        if not p.exists() or not p.is_file():
+            return {"ok": False, "error": f"File '{raw_target}' not found on PC."}
+
+        size_mb = p.stat().st_size / (1024 * 1024)
+        if size_mb > 49.5:
+            return {"ok": False, "error": f"File is too large for Telegram ({size_mb:.1f} MB exceeds 50 MB limit)."}
+
+        if chat_id:
+            caption = f"📄 File from <b>{PC_NAME}</b>: <code>{p.name}</code> (<code>{size_mb:.2f} MB</code>)"
+            ok = send_document_to_telegram(chat_id, p, caption)
+            if ok:
+                return {"ok": True, "direct_upload": True, "msg": f"File '{p.name}' uploaded to chat."}
+            return {"ok": False, "error": "Telegram upload failed."}
+        return {"ok": True, "path": str(p), "size": p.stat().st_size}
 
     return {"ok": False, "error": f"Unknown command: '{cmd}'"}
 
@@ -503,6 +521,27 @@ async def api_window_focus(target: str = ""):
 async def api_window_cycle(direction: str = "next"):
     ok, msg = SystemController.cycle_window(direction)
     return {"ok": ok, "msg": msg, "direction": direction, "active_window": get_active_window_title()}
+
+
+@app.get("/browse")
+async def api_browse(path: str = ""):
+    data = await asyncio.to_thread(SystemController.browse_directory, path)
+    data["pc_name"] = PC_NAME
+    return data
+
+
+@app.get("/file")
+async def api_get_file(path: str):
+    p = Path(path)
+    if not p.is_absolute():
+        p1 = RECORDINGS_DIR / path
+        p2 = DOWNLOADS_DIR / path
+        p = p1 if p1.exists() else (p2 if p2.exists() else Path.home() / path)
+    if not p.exists() or not p.is_file():
+        raise HTTPException(404, f"File not found: {path}")
+    if p.stat().st_size > 50 * 1024 * 1024:
+        raise HTTPException(400, "File exceeds 50MB limit")
+    return FileResponse(str(p), filename=p.name)
 
 
 # ═══════════════════════════════════════════════════════════════════════

@@ -15,6 +15,7 @@ import sys
 import io
 import html
 import json
+import math
 import asyncio
 from datetime import datetime, timezone
 from pathlib import Path
@@ -347,14 +348,28 @@ class AgentClient:
         r.raise_for_status()
         return r.json()
 
+    async def browse_directory(self, path: str = "") -> dict:
+        if self.is_relay_online():
+            res = await commander_relay.send_command(self.name, "file_browse", {"path": path}, timeout=15.0)
+            if res.get("ok") or "error" in res:
+                return res
+        try:
+            r = await self._get(f"/browse?path={urllib.parse.quote(path)}", timeout=15.0)
+            r.raise_for_status()
+            return r.json()
+        except Exception as e:
+            return {"ok": False, "error": str(e), "items": [], "current_path": path}
+
     async def get_file(self, path: str, chat_id: Optional[int] = None) -> Tuple[bytes, str]:
         if self.is_relay_online() and chat_id:
-            res = await commander_relay.send_command(self.name, "file_download", {"name": path, "chat_id": chat_id}, timeout=30.0)
+            res = await commander_relay.send_command(self.name, "file_download", {"path": path, "chat_id": chat_id}, timeout=60.0)
             if res.get("ok"):
                 return b"", "direct_upload"
-        r = await self._get(f"/file?path={path}", timeout=60.0)
+            else:
+                raise Exception(res.get("error", "File download failed over relay"))
+        r = await self._get(f"/file?path={urllib.parse.quote(path)}", timeout=60.0)
         r.raise_for_status()
-        filename = "file"
+        filename = Path(path).name or "file"
         cd = r.headers.get("content-disposition", "")
         if "filename=" in cd:
             filename = cd.split("filename=")[-1].strip('"')
@@ -793,11 +808,14 @@ def get_main_keyboard() -> InlineKeyboardMarkup:
             InlineKeyboardButton("⏰ Alarm & Siren", callback_data="cb_alarm_menu"),
         ],
         [
+            InlineKeyboardButton("📁 File Explorer", callback_data="cb_fs_menu"),
             InlineKeyboardButton("🧹 Clean Storage", callback_data="cb_clean"),
-            InlineKeyboardButton("✏️ Rename", callback_data="cb_rename_current"),
         ],
         [
+            InlineKeyboardButton("✏️ Rename PC", callback_data="cb_rename_current"),
             InlineKeyboardButton("🔄 Refresh", callback_data="cb_menu"),
+        ],
+        [
             InlineKeyboardButton("🔙 Switch PC", callback_data="fleet_picker"),
         ],
     ])
@@ -852,6 +870,149 @@ def get_windows_picker_keyboard(windows: list) -> InlineKeyboardMarkup:
         InlineKeyboardButton("🔙 Back to Menu", callback_data="cb_menu"),
     ])
     return InlineKeyboardMarkup(buttons)
+
+
+def build_file_explorer_view(
+    context: ContextTypes.DEFAULT_TYPE,
+    data: dict,
+    page: int = 0,
+    label: str = "Host PC"
+) -> Tuple[str, InlineKeyboardMarkup]:
+    """
+    Format remote file explorer message text and interactive navigation keyboard.
+    Stores directory context into context.user_data for stateful button callbacks.
+    """
+    current_path = data.get("current_path", "Desktop")
+    parent_path = data.get("parent_path")
+    items = data.get("items", [])
+    total_dirs = data.get("total_dirs", sum(1 for x in items if x.get("is_dir")))
+    total_files = data.get("total_files", sum(1 for x in items if not x.get("is_dir")))
+    drives = data.get("drives", ["C:\\"])
+    quick_access = data.get("quick_access", {})
+
+    # Persist in user session
+    context.user_data["fs_current_path"] = current_path
+    context.user_data["fs_parent_path"] = parent_path
+    context.user_data["fs_items"] = items
+    context.user_data["fs_drives"] = drives
+    context.user_data["fs_quick"] = quick_access
+
+    PAGE_SIZE = 8
+    total_pages = max(1, math.ceil(len(items) / PAGE_SIZE))
+    page = max(0, min(page, total_pages - 1))
+    context.user_data["fs_page"] = page
+
+    start_idx = page * PAGE_SIZE
+    page_items = items[start_idx : start_idx + PAGE_SIZE]
+
+    # Build directory snippet lines
+    lines = []
+    for it in page_items:
+        icon = it.get("icon", "📄")
+        name = it.get("name", "")
+        if it.get("is_dir"):
+            lines.append(f"{icon} <code>{html.escape(name)}/</code>")
+        else:
+            lines.append(f"{icon} <code>{html.escape(name)}</code> ({html.escape(it.get('size_fmt', ''))})")
+
+    content_preview = "\n".join(lines) if lines else "<i>(Empty directory)</i>"
+
+    text = (
+        f"📁 <b>REMOTE FILE EXPLORER — {html.escape(label)}</b>\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"📍 <b>Path:</b> <code>{html.escape(current_path)}</code>\n\n"
+        f"{content_preview}\n\n"
+        f"📊 <b>Contents:</b> {total_dirs} folders, {total_files} files | 📄 <b>Page:</b> {page + 1}/{total_pages}\n"
+        f"💡 <i>Tap a folder to open it, or tap any file to download it!</i>"
+    )
+
+    buttons = []
+    # Item buttons
+    for idx_offset, it in enumerate(page_items):
+        global_idx = start_idx + idx_offset
+        name = it.get("name", "item")
+        icon = it.get("icon", "📄")
+        if it.get("is_dir"):
+            btn_title = f"{icon} {name}"
+            if len(btn_title) > 36:
+                btn_title = btn_title[:33] + "…"
+            buttons.append([InlineKeyboardButton(btn_title, callback_data=f"cb_fs_open_{global_idx}")])
+        else:
+            size_fmt = it.get("size_fmt", "")
+            btn_title = f"{icon} {name} ({size_fmt}) ⬇️"
+            if len(btn_title) > 38:
+                btn_title = f"{icon} {name[:20]}… ({size_fmt}) ⬇️"
+            buttons.append([InlineKeyboardButton(btn_title, callback_data=f"cb_fs_get_{global_idx}")])
+
+    # Directory Navigation Row
+    nav_row = []
+    if parent_path:
+        nav_row.append(InlineKeyboardButton("⬆️ Up", callback_data="cb_fs_up"))
+    nav_row.append(InlineKeyboardButton("🏠 Quick Access", callback_data="cb_fs_qa"))
+    nav_row.append(InlineKeyboardButton("🔄 Refresh", callback_data="cb_fs_refresh"))
+    buttons.append(nav_row)
+
+    # Pagination Row (if more than 1 page)
+    if total_pages > 1:
+        pag_row = []
+        if page > 0:
+            pag_row.append(InlineKeyboardButton("◀️ Prev", callback_data=f"cb_fs_p_{page - 1}"))
+        else:
+            pag_row.append(InlineKeyboardButton("⏮️ First", callback_data="cb_fs_noop"))
+
+        pag_row.append(InlineKeyboardButton(f"📄 {page + 1}/{total_pages}", callback_data="cb_fs_noop"))
+
+        if page < total_pages - 1:
+            pag_row.append(InlineKeyboardButton("Next ▶️", callback_data=f"cb_fs_p_{page + 1}"))
+        else:
+            pag_row.append(InlineKeyboardButton("⏭️ End", callback_data="cb_fs_noop"))
+        buttons.append(pag_row)
+
+    buttons.append([InlineKeyboardButton("🔙 Back to Menu", callback_data="cb_menu")])
+
+    return text, InlineKeyboardMarkup(buttons)
+
+
+def build_quick_access_keyboard(context: ContextTypes.DEFAULT_TYPE, label: str = "Host PC") -> Tuple[str, InlineKeyboardMarkup]:
+    """Build Quick Access keyboard with system drives and common user locations."""
+    drives = context.user_data.get("fs_drives", ["C:\\"])
+    current_path = context.user_data.get("fs_current_path", "Desktop")
+
+    text = (
+        f"🏠 <b>QUICK ACCESS LOCATIONS — {html.escape(label)}</b>\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"Jump directly to any disk drive or primary user folder:\n\n"
+        f"📍 <b>Current:</b> <code>{html.escape(current_path)}</code>"
+    )
+
+    buttons = []
+
+    # Drives row
+    drive_btns = []
+    for d_idx, d in enumerate(drives[:4]):
+        clean_d = d.replace("\\", "")
+        drive_btns.append(InlineKeyboardButton(f"💻 Drive ({clean_d})", callback_data=f"cb_fs_drv_{d_idx}"))
+    if drive_btns:
+        buttons.append(drive_btns)
+
+    # User folders
+    buttons.append([
+        InlineKeyboardButton("🖥️ Desktop", callback_data="cb_fs_qa_desktop"),
+        InlineKeyboardButton("📥 Downloads", callback_data="cb_fs_qa_downloads"),
+    ])
+    buttons.append([
+        InlineKeyboardButton("📄 Documents", callback_data="cb_fs_qa_documents"),
+        InlineKeyboardButton("📸 Pictures", callback_data="cb_fs_qa_pictures"),
+    ])
+    buttons.append([
+        InlineKeyboardButton("🔴 Sentinel Recordings", callback_data="cb_fs_qa_recordings"),
+    ])
+    buttons.append([
+        InlineKeyboardButton("🔙 Back to Explorer", callback_data="cb_fs_refresh"),
+        InlineKeyboardButton("🔙 Main Menu", callback_data="cb_menu"),
+    ])
+
+    return text, InlineKeyboardMarkup(buttons)
 
 
 def get_screen_keyboard() -> InlineKeyboardMarkup:
@@ -1983,15 +2144,46 @@ async def handle_get_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
     agent = await require_pc(update, context)
     if not agent:
         return
+
+    label = pc_label(context)
+    chat_id = update.effective_chat.id
+
+    # If no path specified: open interactive remote File Explorer!
     if not context.args:
-        await update.message.reply_text("Usage: <code>/get C:\\path\\to\\file.txt</code>", parse_mode="HTML")
+        status_msg = await update.message.reply_text("📁 <i>Opening File Explorer...</i>", parse_mode="HTML")
+        try:
+            data = await agent.browse_directory()
+            if not data.get("ok", True) and "error" in data:
+                await status_msg.edit_text(f"❌ Could not open File Explorer: {data.get('error')}")
+                return
+            text, reply_markup = build_file_explorer_view(context, data, page=0, label=label)
+            await status_msg.edit_text(text, reply_markup=reply_markup, parse_mode="HTML")
+        except Exception as e:
+            await status_msg.edit_text(f"❌ Error accessing filesystem: {e}")
         return
-    file_path = " ".join(context.args)
-    msg = await update.message.reply_text(f"📤 <i>Fetching file...</i>", parse_mode="HTML")
+
+    target_path = " ".join(context.args).strip().strip('"').strip("'")
+    status_msg = await update.message.reply_text(f"🔍 <i>Inspecting <code>{html.escape(target_path)}</code>...</i>", parse_mode="HTML")
+
     try:
-        content, filename = await agent.get_file(file_path)
+        browse_res = await agent.browse_directory(target_path)
+        # If it's a directory, open it in the interactive File Explorer!
+        if browse_res.get("ok") and not browse_res.get("is_file"):
+            text, reply_markup = build_file_explorer_view(context, browse_res, page=0, label=label)
+            await status_msg.edit_text(text, reply_markup=reply_markup, parse_mode="HTML")
+            return
+
+        # It's a file or direct download:
+        await status_msg.edit_text(f"📤 <i>Fetching file from {html.escape(label)}...</i>", parse_mode="HTML")
+        content, filename = await agent.get_file(target_path, chat_id=chat_id)
+        if filename == "direct_upload":
+            try:
+                await status_msg.delete()
+            except Exception:
+                pass
+            return
+
         size_mb = len(content) / (1024 * 1024)
-        label = pc_label(context)
         await update.effective_chat.send_document(
             document=content,
             filename=filename,
@@ -1999,11 +2191,23 @@ async def handle_get_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parse_mode="HTML"
         )
         try:
-            await msg.delete()
+            await status_msg.delete()
         except Exception:
             pass
     except Exception as e:
-        await msg.edit_text(f"❌ File fetch failed: {e}")
+        err_msg = str(e)
+        kb = InlineKeyboardMarkup([
+            [InlineKeyboardButton("📁 Open File Explorer", callback_data="cb_fs_menu")],
+            [InlineKeyboardButton("🏠 Quick Access", callback_data="cb_fs_qa")],
+        ])
+        await status_msg.edit_text(
+            f"❌ <b>File Explorer Error — {html.escape(label)}</b>\n\n"
+            f"Could not open or download <code>{html.escape(target_path)}</code>:\n"
+            f"<i>{html.escape(err_msg)}</i>\n\n"
+            f"💡 <i>Tip: Send <code>/get</code> or <code>/files</code> without arguments to explore folders interactively!</i>",
+            reply_markup=kb,
+            parse_mode="HTML"
+        )
 
 
 async def handle_clip(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -3104,6 +3308,192 @@ async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 pass
         await query.message.reply_text(f"🔄 {html.escape(pc_label(context))} restarting in 5s...")
 
+    # ── Remote File Explorer ──────────────────────────────────────
+    elif data == "cb_fs_menu":
+        agent = get_agent(context)
+        if not agent:
+            await query.answer("No PC selected.", show_alert=True)
+            return
+        curr_path = context.user_data.get("fs_current_path", "")
+        label = pc_label(context)
+        try:
+            res = await agent.browse_directory(curr_path)
+            if not res.get("ok", True) and "error" in res:
+                res = await agent.browse_directory("")
+            text, kb = build_file_explorer_view(context, res, page=0, label=label)
+            await query.edit_message_text(text, reply_markup=kb, parse_mode="HTML")
+        except Exception as e:
+            await query.answer(f"❌ Failed to open File Explorer: {e}", show_alert=True)
+
+    elif data.startswith("cb_fs_open_"):
+        idx = int(data.split("_")[-1])
+        agent = get_agent(context)
+        if not agent:
+            await query.answer("No PC selected.", show_alert=True)
+            return
+        items = context.user_data.get("fs_items", [])
+        if idx >= len(items):
+            await query.answer("Folder item expired. Refreshing...", show_alert=False)
+            curr = context.user_data.get("fs_current_path", "")
+            res = await agent.browse_directory(curr)
+            text, kb = build_file_explorer_view(context, res, page=0, label=pc_label(context))
+            await query.edit_message_text(text, reply_markup=kb, parse_mode="HTML")
+            return
+
+        target_item = items[idx]
+        target_path = target_item.get("path")
+        label = pc_label(context)
+        try:
+            res = await agent.browse_directory(target_path)
+            if not res.get("ok", True) and "error" in res:
+                await query.answer(f"❌ Cannot open folder: {res.get('error')}", show_alert=True)
+                return
+            text, kb = build_file_explorer_view(context, res, page=0, label=label)
+            await query.edit_message_text(text, reply_markup=kb, parse_mode="HTML")
+        except Exception as e:
+            await query.answer(f"❌ Navigation error: {e}", show_alert=True)
+
+    elif data.startswith("cb_fs_get_"):
+        idx = int(data.split("_")[-1])
+        agent = get_agent(context)
+        if not agent:
+            await query.answer("No PC selected.", show_alert=True)
+            return
+        items = context.user_data.get("fs_items", [])
+        if idx >= len(items):
+            await query.answer("File item expired. Please refresh.", show_alert=True)
+            return
+        target_item = items[idx]
+        file_path = target_item.get("path", "")
+        file_name = target_item.get("name", "file")
+        size = target_item.get("size", 0)
+        size_fmt = target_item.get("size_fmt", "")
+
+        if size > 49.5 * 1024 * 1024:
+            await query.answer(f"⚠️ {file_name} is too large ({size_fmt} exceeds 50 MB limit).", show_alert=True)
+            return
+
+        await query.answer(f"⏳ Downloading {file_name}...", show_alert=False)
+        label = pc_label(context)
+        status_msg = await query.message.reply_text(
+            f"📤 <i>Fetching <code>{html.escape(file_name)}</code> ({size_fmt}) from {html.escape(label)}...</i>",
+            parse_mode="HTML"
+        )
+        try:
+            content, name = await agent.get_file(file_path, chat_id=query.message.chat_id)
+            if name != "direct_upload":
+                size_mb = len(content) / (1024 * 1024)
+                await query.message.chat.send_document(
+                    document=content,
+                    filename=name or file_name,
+                    caption=f"📄 <b>File from {html.escape(label)}:</b> <code>{html.escape(name or file_name)}</code>\n💾 <code>{size_mb:.2f} MB</code>",
+                    parse_mode="HTML"
+                )
+            try:
+                await status_msg.delete()
+            except Exception:
+                pass
+        except Exception as e:
+            await status_msg.edit_text(f"❌ Failed to download <code>{html.escape(file_name)}</code>: {e}", parse_mode="HTML")
+
+    elif data == "cb_fs_up":
+        agent = get_agent(context)
+        if not agent:
+            await query.answer("No PC selected.", show_alert=True)
+            return
+        parent_path = context.user_data.get("fs_parent_path")
+        if not parent_path:
+            await query.answer("Already at drive root 🔝", show_alert=False)
+            return
+        label = pc_label(context)
+        try:
+            res = await agent.browse_directory(parent_path)
+            text, kb = build_file_explorer_view(context, res, page=0, label=label)
+            await query.edit_message_text(text, reply_markup=kb, parse_mode="HTML")
+        except Exception as e:
+            await query.answer(f"❌ Error moving up: {e}", show_alert=True)
+
+    elif data.startswith("cb_fs_p_"):
+        target_page = int(data.replace("cb_fs_p_", ""))
+        label = pc_label(context)
+        fs_data = {
+            "current_path": context.user_data.get("fs_current_path", "Desktop"),
+            "parent_path": context.user_data.get("fs_parent_path"),
+            "items": context.user_data.get("fs_items", []),
+            "drives": context.user_data.get("fs_drives", ["C:\\"]),
+            "quick_access": context.user_data.get("fs_quick", {}),
+        }
+        text, kb = build_file_explorer_view(context, fs_data, page=target_page, label=label)
+        try:
+            await query.edit_message_text(text, reply_markup=kb, parse_mode="HTML")
+        except Exception as e:
+            if "Message is not modified" not in str(e):
+                logger.debug(f"cb_fs_p_ edit error: {e}")
+
+    elif data == "cb_fs_refresh":
+        agent = get_agent(context)
+        if not agent:
+            await query.answer("No PC selected.", show_alert=True)
+            return
+        curr_path = context.user_data.get("fs_current_path", "")
+        page = context.user_data.get("fs_page", 0)
+        label = pc_label(context)
+        try:
+            res = await agent.browse_directory(curr_path)
+            text, kb = build_file_explorer_view(context, res, page=page, label=label)
+            await query.edit_message_text(text, reply_markup=kb, parse_mode="HTML")
+            await query.answer("Directory refreshed 🔄", show_alert=False)
+        except Exception as e:
+            await query.answer(f"❌ Refresh failed: {e}", show_alert=True)
+
+    elif data == "cb_fs_qa":
+        label = pc_label(context)
+        text, kb = build_quick_access_keyboard(context, label=label)
+        await query.edit_message_text(text, reply_markup=kb, parse_mode="HTML")
+
+    elif data.startswith("cb_fs_qa_"):
+        key = data.replace("cb_fs_qa_", "")
+        agent = get_agent(context)
+        if not agent:
+            await query.answer("No PC selected.", show_alert=True)
+            return
+        qa = context.user_data.get("fs_quick", {})
+        target = qa.get(key)
+        if key == "recordings":
+            target = str(config.RECORDINGS_DIR)
+        if not target:
+            target = key
+
+        label = pc_label(context)
+        try:
+            res = await agent.browse_directory(target)
+            text, kb = build_file_explorer_view(context, res, page=0, label=label)
+            await query.edit_message_text(text, reply_markup=kb, parse_mode="HTML")
+        except Exception as e:
+            await query.answer(f"❌ Location not found: {e}", show_alert=True)
+
+    elif data.startswith("cb_fs_drv_"):
+        idx = int(data.replace("cb_fs_drv_", ""))
+        agent = get_agent(context)
+        if not agent:
+            await query.answer("No PC selected.", show_alert=True)
+            return
+        drives = context.user_data.get("fs_drives", ["C:\\"])
+        if idx >= len(drives):
+            idx = 0
+        drv = drives[idx]
+        label = pc_label(context)
+        try:
+            res = await agent.browse_directory(drv)
+            text, kb = build_file_explorer_view(context, res, page=0, label=label)
+            await query.edit_message_text(text, reply_markup=kb, parse_mode="HTML")
+        except Exception as e:
+            await query.answer(f"❌ Drive error: {e}", show_alert=True)
+
+    elif data == "cb_fs_noop":
+        await query.answer()
+
+
 
 # ═══════════════════════════════════════════════════════════════════════
 #   EVENT POLLING (alarm notifications from agents)
@@ -3202,7 +3592,7 @@ def main():
     app.add_handler(CommandHandler("say", handle_say))
     app.add_handler(CommandHandler("open", handle_open))
     app.add_handler(CommandHandler("cmd", handle_cmd))
-    app.add_handler(CommandHandler("get", handle_get_file))
+    app.add_handler(CommandHandler(["get", "files", "browse", "explore"], handle_get_file))
     app.add_handler(CommandHandler("clip", handle_clip))
     app.add_handler(CommandHandler("getclip", handle_getclip))
     app.add_handler(CommandHandler("clean", handle_clean))
@@ -3279,7 +3669,8 @@ def main():
             BotCommand("say", "Speak text on PC"),
             BotCommand("clip", "Copy to PC clipboard"),
             BotCommand("getclip", "Read PC clipboard"),
-            BotCommand("get", "Fetch file from PC"),
+            BotCommand("get", "File Explorer: /get [path]"),
+            BotCommand("files", "Browse PC Directories"),
             BotCommand("clean", "Cleanup storage"),
             BotCommand("open", "Open URL/App on PC"),
             BotCommand("cmd", "Execute command"),
