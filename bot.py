@@ -269,39 +269,43 @@ class AgentClient:
 
     async def switch_desktop(self, action: str = "next") -> dict:
         if self.is_relay_online():
-            res = await commander_relay.send_command(self.name, "switch_desktop", {"action": action}, timeout=10.0)
-            if res.get("ok"):
-                return res
-        r = await self._post(f"/desktop/switch?action={action}", timeout=10.0)
-        r.raise_for_status()
-        return r.json()
+            return await commander_relay.send_command(self.name, "switch_desktop", {"action": action}, timeout=10.0)
+        try:
+            r = await self._post(f"/desktop/switch?action={action}", timeout=10.0)
+            r.raise_for_status()
+            return r.json()
+        except Exception as e:
+            return {"ok": False, "msg": f"Desktop switch failed: {e}", "error": str(e)}
 
     async def get_open_windows(self, limit: int = 25) -> dict:
         if self.is_relay_online():
-            res = await commander_relay.send_command(self.name, "windows_list", {"limit": limit}, timeout=10.0)
-            if res.get("ok"):
-                return res
-        r = await self._get(f"/windows?limit={limit}", timeout=10.0)
-        r.raise_for_status()
-        return r.json()
+            return await commander_relay.send_command(self.name, "windows_list", {"limit": limit}, timeout=10.0)
+        try:
+            r = await self._get(f"/windows?limit={limit}", timeout=10.0)
+            r.raise_for_status()
+            return r.json()
+        except Exception as e:
+            return {"ok": False, "windows": [], "error": str(e)}
 
     async def focus_window(self, target: Any) -> dict:
         if self.is_relay_online():
-            res = await commander_relay.send_command(self.name, "window_focus", {"target": str(target)}, timeout=10.0)
-            if res.get("ok"):
-                return res
-        r = await self._post(f"/windows/focus?target={urllib.parse.quote(str(target))}", timeout=10.0)
-        r.raise_for_status()
-        return r.json()
+            return await commander_relay.send_command(self.name, "window_focus", {"target": str(target)}, timeout=10.0)
+        try:
+            r = await self._post(f"/windows/focus?target={urllib.parse.quote(str(target))}", timeout=10.0)
+            r.raise_for_status()
+            return r.json()
+        except Exception as e:
+            return {"ok": False, "msg": f"Focus failed: {e}", "error": str(e)}
 
     async def cycle_window(self, direction: str = "next") -> dict:
         if self.is_relay_online():
-            res = await commander_relay.send_command(self.name, "window_cycle", {"direction": direction}, timeout=10.0)
-            if res.get("ok"):
-                return res
-        r = await self._post(f"/windows/cycle?direction={direction}", timeout=10.0)
-        r.raise_for_status()
-        return r.json()
+            return await commander_relay.send_command(self.name, "window_cycle", {"direction": direction}, timeout=10.0)
+        try:
+            r = await self._post(f"/windows/cycle?direction={direction}", timeout=10.0)
+            r.raise_for_status()
+            return r.json()
+        except Exception as e:
+            return {"ok": False, "msg": f"Cycle window failed: {e}", "error": str(e)}
 
     async def cast_rtmp_start(self, url: str) -> dict:
         r = await self._post("/cast/rtmp/start", data={"url": url})
@@ -1560,6 +1564,39 @@ async def handle_desktop(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     label = pc_label(context)
+
+    # If user provided action argument: /desktop next, /desktop prev, /desktop new, /desktop close, /desktop task_view
+    if context.args:
+        sub_arg = context.args[0].lower().strip()
+        action_map = {
+            "next": "next", "right": "next",
+            "prev": "prev", "previous": "prev", "left": "prev",
+            "new": "new", "create": "new", "add": "new",
+            "close": "close", "remove": "close", "del": "close",
+            "task_view": "task_view", "overview": "task_view", "tab": "task_view",
+            "show_desktop": "show_desktop", "desktop": "show_desktop", "min": "show_desktop",
+        }
+        action = action_map.get(sub_arg)
+        if action:
+            try:
+                res = await agent.switch_desktop(action)
+                ok = res.get("ok", False)
+                msg = res.get("msg", "Action completed")
+                active = res.get("active_window", "")
+                icon = "✅" if ok else "❌"
+                await update.effective_message.reply_text(
+                    f"{icon} <b>Virtual Desktop — {html.escape(label)}</b>\n"
+                    f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                    f"Status: <code>{html.escape(msg)}</code>\n"
+                    f"🖥️ <b>Active Window:</b> <code>{html.escape(active[:50])}</code>",
+                    reply_markup=get_desktop_keyboard(),
+                    parse_mode="HTML"
+                )
+                return
+            except Exception as e:
+                await update.effective_message.reply_text(f"❌ Error switching desktop: {e}")
+                return
+
     try:
         st = await agent.status()
         win = html.escape(st.get("active_window", "Desktop")[:50])
@@ -1616,6 +1653,15 @@ async def handle_windows(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # No argument: Fetch open windows list and display keyboard
     try:
         data = await agent.get_open_windows(limit=15)
+        if not data.get("ok", True) and "error" in data:
+            await update.effective_message.reply_text(
+                f"❌ <b>Error Fetching Windows — {html.escape(label)}</b>\n\n"
+                f"<code>{html.escape(str(data.get('error', 'Could not reach agent')))}</code>",
+                reply_markup=get_desktop_keyboard(),
+                parse_mode="HTML"
+            )
+            return
+
         wins = data.get("windows", [])
         active = data.get("active_window", "Desktop")
         if not wins:
@@ -2577,14 +2623,20 @@ async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             win = html.escape(st.get("active_window", "Desktop")[:50])
         except Exception:
             win = "Active Desktop"
+        now_str = datetime.now().strftime("%H:%M:%S")
         text = (
             f"🪟 <b>DESKTOPS &amp; WINDOWS — {html.escape(label)}</b>\n"
             f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
             f"Switch virtual desktops or jump directly between open windows.\n\n"
             f"🖥️ <b>Active Window:</b> <code>{win}</code>\n"
-            f"⌨️ <i>Hardware Shortcuts: Alt+Tab, Win+Ctrl+Arrows, Win+Tab</i>"
+            f"⌨️ <i>Hardware Shortcuts: Alt+Tab, Win+Ctrl+Arrows, Win+Tab</i>\n"
+            f"⏱️ <i>Refreshed: {now_str}</i>"
         )
-        await query.edit_message_text(text, reply_markup=get_desktop_keyboard(), parse_mode="HTML")
+        try:
+            await query.edit_message_text(text, reply_markup=get_desktop_keyboard(), parse_mode="HTML")
+        except Exception as e:
+            if "Message is not modified" not in str(e):
+                logger.debug(f"cb_desktop_menu edit error: {e}")
     elif data.startswith("cb_desktop_"):
         sub = data.replace("cb_desktop_", "")
         agent = get_agent(context)
@@ -2594,7 +2646,7 @@ async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         if sub == "snap":
             await query.answer("📸 Capturing screenshot...")
-            await execute_screenshot(update, context)
+            await handle_screenshot(update, context)
             return
 
         action_map = {
@@ -2603,8 +2655,10 @@ async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "new": "new",
             "close": "close",
             "task_view": "task_view",
+            "show_desktop": "show_desktop",
         }
         action = action_map.get(sub, "next")
+        answered = False
         try:
             res = await agent.switch_desktop(action)
             ok = res.get("ok", False)
@@ -2612,6 +2666,7 @@ async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             win = res.get("active_window", "")
             toast = f"✅ {msg}" if ok else f"❌ {msg}"
             await query.answer(toast, show_alert=False)
+            answered = True
 
             label = pc_label(context)
             if not win:
@@ -2620,22 +2675,35 @@ async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     win = st.get("active_window", "Desktop")
                 except Exception:
                     win = "Active Desktop"
+
+            now_str = datetime.now().strftime("%H:%M:%S")
             text = (
                 f"🪟 <b>DESKTOPS &amp; WINDOWS — {html.escape(label)}</b>\n"
                 f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
                 f"Status: <code>{html.escape(msg)}</code>\n\n"
                 f"🖥️ <b>Active Window:</b> <code>{html.escape(win[:50])}</code>\n"
-                f"⌨️ <i>Hardware Shortcuts: Alt+Tab, Win+Ctrl+Arrows, Win+Tab</i>"
+                f"⌨️ <i>Hardware Shortcuts: Alt+Tab, Win+Ctrl+Arrows, Win+Tab</i>\n"
+                f"⏱️ <i>Updated: {now_str}</i>"
             )
-            await query.edit_message_text(text, reply_markup=get_desktop_keyboard(), parse_mode="HTML")
+            try:
+                await query.edit_message_text(text, reply_markup=get_desktop_keyboard(), parse_mode="HTML")
+            except Exception as e:
+                if "Message is not modified" not in str(e):
+                    logger.debug(f"cb_desktop_ edit error: {e}")
         except Exception as e:
-            await query.answer(f"❌ Error: {e}", show_alert=True)
+            if not answered:
+                try:
+                    await query.answer(f"❌ Error: {e}", show_alert=True)
+                except Exception:
+                    pass
+            logger.error(f"Desktop switch callback error: {e}")
     elif data.startswith("cb_win_cycle_"):
         direction = data.replace("cb_win_cycle_", "")
         agent = get_agent(context)
         if not agent:
             await query.answer("No PC selected.", show_alert=True)
             return
+        answered = False
         try:
             res = await agent.cycle_window(direction)
             ok = res.get("ok", False)
@@ -2643,6 +2711,7 @@ async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             win = res.get("active_window", "")
             toast = f"✅ {msg}" if ok else f"❌ {msg}"
             await query.answer(toast, show_alert=False)
+            answered = True
 
             label = pc_label(context)
             if not win:
@@ -2652,52 +2721,87 @@ async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 except Exception:
                     win = "Active Desktop"
 
+            now_str = datetime.now().strftime("%H:%M:%S")
             text = (
                 f"🪟 <b>DESKTOPS &amp; WINDOWS — {html.escape(label)}</b>\n"
                 f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
                 f"Action: <code>{html.escape(msg)}</code>\n\n"
                 f"🖥️ <b>Active Window:</b> <code>{html.escape(win[:50])}</code>\n"
-                f"⌨️ <i>Hardware Shortcuts: Alt+Tab, Win+Ctrl+Arrows, Win+Tab</i>"
+                f"⌨️ <i>Hardware Shortcuts: Alt+Tab, Win+Ctrl+Arrows, Win+Tab</i>\n"
+                f"⏱️ <i>Updated: {now_str}</i>"
             )
-            await query.edit_message_text(text, reply_markup=get_desktop_keyboard(), parse_mode="HTML")
+            try:
+                await query.edit_message_text(text, reply_markup=get_desktop_keyboard(), parse_mode="HTML")
+            except Exception as e:
+                if "Message is not modified" not in str(e):
+                    logger.debug(f"cb_win_cycle_ edit error: {e}")
         except Exception as e:
-            await query.answer(f"❌ Error: {e}", show_alert=True)
+            if not answered:
+                try:
+                    await query.answer(f"❌ Error: {e}", show_alert=True)
+                except Exception:
+                    pass
+            logger.error(f"Win cycle callback error: {e}")
     elif data == "cb_win_list":
         agent = get_agent(context)
         if not agent:
             await query.answer("No PC selected.", show_alert=True)
             return
         try:
-            await query.answer("Loading open windows...")
             data_wins = await agent.get_open_windows(limit=15)
+            await query.answer("Open windows updated 🔄", show_alert=False)
             wins = data_wins.get("windows", [])
             active = data_wins.get("active_window", "Desktop")
             label = pc_label(context)
-            if not wins:
-                await query.edit_message_text(
-                    f"🪟 <b>NO OPEN WINDOWS FOUND — {html.escape(label)}</b>\n\n"
-                    f"All application windows may be minimized or hidden.",
-                    reply_markup=get_desktop_keyboard(),
-                    parse_mode="HTML"
+            if not data_wins.get("ok", True) and "error" in data_wins:
+                text = (
+                    f"❌ <b>ERROR FETCHING WINDOWS — {html.escape(label)}</b>\n\n"
+                    f"<code>{html.escape(str(data_wins.get('error')))}</code>"
                 )
+                try:
+                    await query.edit_message_text(text, reply_markup=get_desktop_keyboard(), parse_mode="HTML")
+                except Exception:
+                    pass
                 return
 
+            if not wins:
+                text = (
+                    f"🪟 <b>NO OPEN WINDOWS FOUND — {html.escape(label)}</b>\n\n"
+                    f"All application windows may be minimized or hidden."
+                )
+                try:
+                    await query.edit_message_text(text, reply_markup=get_desktop_keyboard(), parse_mode="HTML")
+                except Exception as e:
+                    if "Message is not modified" not in str(e):
+                        logger.debug(f"cb_win_list edit error: {e}")
+                return
+
+            now_str = datetime.now().strftime("%H:%M:%S")
             text = (
                 f"🗂️ <b>OPEN APPLICATIONS — {html.escape(label)}</b>\n"
                 f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
                 f"Tap any window below to bring it directly to the foreground:\n\n"
                 f"🖥️ <b>Active Window:</b> <code>{html.escape(active[:50])}</code>\n"
-                f"📊 <b>Total Visible Windows:</b> {len(wins)}"
+                f"📊 <b>Total Visible Windows:</b> {len(wins)} | ⏱️ <i>{now_str}</i>"
             )
-            await query.edit_message_text(text, reply_markup=get_windows_picker_keyboard(wins), parse_mode="HTML")
+            try:
+                await query.edit_message_text(text, reply_markup=get_windows_picker_keyboard(wins), parse_mode="HTML")
+            except Exception as e:
+                if "Message is not modified" not in str(e):
+                    logger.debug(f"cb_win_list edit error: {e}")
         except Exception as e:
-            await query.answer(f"❌ Error: {e}", show_alert=True)
+            try:
+                await query.answer(f"❌ Error: {e}", show_alert=True)
+            except Exception:
+                pass
+            logger.error(f"Win list callback error: {e}")
     elif data.startswith("cb_win_focus_"):
         target_hwnd = data.replace("cb_win_focus_", "")
         agent = get_agent(context)
         if not agent:
             await query.answer("No PC selected.", show_alert=True)
             return
+        answered = False
         try:
             res = await agent.focus_window(target_hwnd)
             ok = res.get("ok", False)
@@ -2705,6 +2809,7 @@ async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             active = res.get("active_window", "")
             toast = f"✅ {msg}" if ok else f"❌ {msg}"
             await query.answer(toast, show_alert=False)
+            answered = True
 
             label = pc_label(context)
             data_wins = await agent.get_open_windows(limit=15)
@@ -2712,16 +2817,26 @@ async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if not active:
                 active = data_wins.get("active_window", "Desktop")
 
+            now_str = datetime.now().strftime("%H:%M:%S")
             text = (
                 f"🗂️ <b>OPEN APPLICATIONS — {html.escape(label)}</b>\n"
                 f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
                 f"Status: <code>{html.escape(msg)}</code>\n\n"
                 f"🖥️ <b>Active Window:</b> <code>{html.escape(active[:50])}</code>\n"
-                f"Tap any window below to switch to it:"
+                f"Tap any window below to switch to it | ⏱️ <i>{now_str}</i>:"
             )
-            await query.edit_message_text(text, reply_markup=get_windows_picker_keyboard(wins), parse_mode="HTML")
+            try:
+                await query.edit_message_text(text, reply_markup=get_windows_picker_keyboard(wins), parse_mode="HTML")
+            except Exception as e:
+                if "Message is not modified" not in str(e):
+                    logger.debug(f"cb_win_focus_ edit error: {e}")
         except Exception as e:
-            await query.answer(f"❌ Error: {e}", show_alert=True)
+            if not answered:
+                try:
+                    await query.answer(f"❌ Error: {e}", show_alert=True)
+                except Exception:
+                    pass
+            logger.error(f"Win focus callback error: {e}")
     elif data == "cb_top":
         await handle_top(update, context)
     elif data == "cb_clip_menu":
@@ -3030,11 +3145,32 @@ async def poll_agent_events(app: Application):
 #   MAIN
 # ═══════════════════════════════════════════════════════════════════════
 
+def ensure_single_bot_instance():
+    """Terminate any stale older instances of the bot to prevent Telegram polling conflicts."""
+    import psutil
+    cur_pid = os.getpid()
+    for p in psutil.process_iter(['pid', 'name', 'cmdline']):
+        try:
+            if p.pid == cur_pid:
+                continue
+            cmdline = p.info.get('cmdline') or []
+            cmd_str = " ".join(cmdline).lower()
+            if "bot.py" in cmd_str and ("python" in p.info.get('name', '').lower() or "pc-sentinel" in p.info.get('name', '').lower()):
+                logger.warning(f"Terminating older conflicting bot process (PID {p.pid})...")
+                p.terminate()
+                p.wait(timeout=2.0)
+        except Exception:
+            pass
+
+
 def main():
     if not config.BOT_TOKEN:
         logger.error("TELEGRAM_BOT_TOKEN is missing!")
         print("\n⚠️ Error: TELEGRAM_BOT_TOKEN is not set in .env file!")
         return
+
+    # Terminate any duplicate bot instance to avoid Telegram Conflict errors
+    ensure_single_bot_instance()
 
     # Auto-spawn local agent on Windows so Host PC is active immediately
     ensure_local_agent_running()

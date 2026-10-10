@@ -359,10 +359,29 @@ class SystemController:
         return ok, f"Media key '{action}' triggered" if ok else f"Unknown or failed media key: {action}"
 
     @staticmethod
+    def get_active_window_title_fast() -> str:
+        """Return title of current foreground window quickly without external imports."""
+        try:
+            SystemController.ensure_desktop_access()
+            user32 = ctypes.windll.user32
+            h = user32.GetForegroundWindow()
+            if h:
+                length = user32.GetWindowTextLengthW(h)
+                if length > 0:
+                    buf = ctypes.create_unicode_buffer(length + 1)
+                    user32.GetWindowTextW(h, buf, length + 1)
+                    t = buf.value.strip()
+                    if t:
+                        return t
+        except Exception:
+            pass
+        return "Desktop"
+
+    @staticmethod
     def switch_virtual_desktop(action: str) -> Tuple[bool, str]:
         """
         Switch, create, or navigate Windows Virtual Desktops via hardware key events.
-        action: 'next', 'prev', 'new', 'close', 'task_view'
+        action: 'next', 'prev', 'new', 'close', 'task_view', 'show_desktop'
         """
         SystemController.ensure_desktop_access()
         action = action.lower().strip()
@@ -387,44 +406,78 @@ class SystemController:
             primary, use_ctrl, ext, label = VK_F4, True, False, "Close Virtual Desktop (Win+Ctrl+F4)"
         elif action in ("task_view", "overview", "tab"):
             primary, use_ctrl, ext, label = VK_TAB, False, False, "Task View (Win+Tab)"
+        elif action in ("show_desktop", "desktop", "minimize_all"):
+            primary, use_ctrl, ext, label = VK_D, False, False, "Show Desktop (Win+D)"
         else:
-            return False, f"Unknown desktop action '{action}'. Valid: next, prev, new, close, task_view"
+            return False, f"Unknown desktop action '{action}'. Valid: next, prev, new, close, task_view, show_desktop"
 
+        user32 = ctypes.windll.user32
         try:
             # Press Windows key
-            ctypes.windll.user32.keybd_event(VK_LWIN, 0, 0, 0)
+            user32.keybd_event(VK_LWIN, 0, 0, 0)
             time.sleep(0.02)
             if use_ctrl:
-                ctypes.windll.user32.keybd_event(VK_CONTROL, 0, 0, 0)
+                user32.keybd_event(VK_CONTROL, 0, 0, 0)
                 time.sleep(0.02)
 
             # Press primary key
             flags = KEYEVENTF_EXTENDEDKEY if ext else 0
-            ctypes.windll.user32.keybd_event(primary, 0, flags, 0)
+            user32.keybd_event(primary, 0, flags, 0)
             time.sleep(0.06)
 
             # Release primary key
-            ctypes.windll.user32.keybd_event(primary, 0, flags | KEYEVENTF_KEYUP, 0)
-            time.sleep(0.02)
+            user32.keybd_event(primary, 0, flags | KEYEVENTF_KEYUP, 0)
+            time.sleep(0.03)
         except Exception as e:
             logger.error(f"Virtual desktop switch error: {e}")
             return False, f"Error switching desktop: {e}"
         finally:
             # Always guarantee modifier keys are released to avoid sticky keys
             if use_ctrl:
-                ctypes.windll.user32.keybd_event(VK_CONTROL, 0, KEYEVENTF_KEYUP, 0)
-            ctypes.windll.user32.keybd_event(VK_LWIN, 0, KEYEVENTF_KEYUP, 0)
+                user32.keybd_event(VK_CONTROL, 0, KEYEVENTF_KEYUP, 0)
+                time.sleep(0.01)
+            user32.keybd_event(VK_LWIN, 0, KEYEVENTF_KEYUP, 0)
 
-        return True, f"Switched desktop: {label}"
+        time.sleep(0.12)
+        active = SystemController.get_active_window_title_fast()
+        return True, f"Switched desktop: {label} (Active: {active})"
 
     @staticmethod
     def cycle_window(direction: str = "next") -> Tuple[bool, str]:
         """
-        Cycle between open application windows via Alt+Tab or Alt+Shift+Tab.
-        direction: 'next' (Alt+Tab) or 'prev' (Alt+Shift+Tab)
+        Cycle between open application windows.
+        First tries to advance sequentially through open application windows (Alt+Tab equivalent).
+        Falls back to hardware Alt+Tab key events.
         """
         SystemController.ensure_desktop_access()
         direction = direction.lower().strip()
+        is_prev = direction in ("prev", "previous", "back", "left")
+
+        # 1. Smart sequential window list cycling
+        try:
+            wins = SystemController.get_open_windows(limit=25)
+            if len(wins) > 1:
+                cur_hwnd = ctypes.windll.user32.GetForegroundWindow()
+                cur_idx = -1
+                for i, w in enumerate(wins):
+                    if w["hwnd"] == cur_hwnd:
+                        cur_idx = i
+                        break
+
+                if cur_idx == -1:
+                    target_idx = 1 if not is_prev else len(wins) - 1
+                else:
+                    target_idx = (cur_idx - 1) % len(wins) if is_prev else (cur_idx + 1) % len(wins)
+
+                target_w = wins[target_idx]
+                ok, _ = SystemController.focus_window(target_w["hwnd"])
+                if ok:
+                    lbl = "Prev Window (Alt+Shift+Tab)" if is_prev else "Next Window (Alt+Tab)"
+                    return True, f"{lbl} -> {target_w['title']}"
+        except Exception as e:
+            logger.debug(f"Smart cycle fallback: {e}")
+
+        # 2. Hardware Alt+Tab fallback
         VK_MENU = 0x12     # Alt
         VK_SHIFT = 0x10    # Shift
         VK_TAB = 0x09      # Tab
@@ -434,7 +487,7 @@ class SystemController:
         try:
             user32.keybd_event(VK_MENU, 0, 0, 0)
             time.sleep(0.02)
-            if direction in ("prev", "previous", "back", "left"):
+            if is_prev:
                 user32.keybd_event(VK_SHIFT, 0, 0, 0)
                 time.sleep(0.02)
             user32.keybd_event(VK_TAB, 0, 0, 0)
@@ -445,30 +498,20 @@ class SystemController:
             logger.error(f"Cycle window error: {e}")
             return False, f"Error cycling window: {e}"
         finally:
-            if direction in ("prev", "previous", "back", "left"):
+            if is_prev:
                 user32.keybd_event(VK_SHIFT, 0, KEYEVENTF_KEYUP, 0)
             user32.keybd_event(VK_MENU, 0, KEYEVENTF_KEYUP, 0)
 
-        time.sleep(0.1)
-        active = "Desktop"
-        try:
-            h = user32.GetForegroundWindow()
-            if h:
-                length = user32.GetWindowTextLengthW(h)
-                if length > 0:
-                    buf = ctypes.create_unicode_buffer(length + 1)
-                    user32.GetWindowTextW(h, buf, length + 1)
-                    active = buf.value.strip() or "Desktop"
-        except Exception:
-            pass
-
-        lbl = "Next Window (Alt+Tab)" if direction not in ("prev", "previous", "back", "left") else "Prev Window (Alt+Shift+Tab)"
+        time.sleep(0.12)
+        active = SystemController.get_active_window_title_fast()
+        lbl = "Prev Window (Alt+Shift+Tab)" if is_prev else "Next Window (Alt+Tab)"
         return True, f"Switched to {lbl} -> {active}"
 
     @staticmethod
-    def get_open_windows(limit: int = 20) -> List[Dict[str, Any]]:
+    def get_open_windows(limit: int = 25) -> List[Dict[str, Any]]:
         """
         Enumerate all active, visible top-level application windows with titles.
+        Includes minimized application windows so they can be brought to focus.
         Filters out invisible helper / background system utility windows.
         """
         SystemController.ensure_desktop_access()
@@ -477,40 +520,60 @@ class SystemController:
 
         ignored_titles = {
             "program manager", "settings", "windows input experience", "setup",
-            "microsoft text input application", "task switching"
+            "microsoft text input application", "task switching", "nvidia geforce overlay",
+            "desktopwindowcontentbridge", "screen clipping host"
+        }
+        ignored_processes = {
+            "applicationframehost.exe", "shellexperiencehost.exe"
         }
         windows = []
 
         def enum_cb(hwnd, lparam):
-            if user32.IsWindowVisible(hwnd):
-                length = user32.GetWindowTextLengthW(hwnd)
-                if length > 0:
-                    buff = ctypes.create_unicode_buffer(length + 1)
-                    user32.GetWindowTextW(hwnd, buff, length + 1)
-                    title = buff.value.strip()
-                    if title and title.lower() not in ignored_titles:
-                        rect = ctypes.wintypes.RECT()
-                        user32.GetWindowRect(hwnd, ctypes.byref(rect))
-                        w = rect.right - rect.left
-                        h = rect.bottom - rect.top
-                        if w > 80 and h > 80:
-                            pid = ctypes.wintypes.DWORD()
-                            user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
-                            pname = ""
-                            try:
-                                pname = psutil.Process(pid.value).name()
-                            except Exception:
-                                pass
-                            windows.append({
-                                "hwnd": hwnd,
-                                "title": title,
-                                "process": pname,
-                                "pid": pid.value,
-                            })
+            if not user32.IsWindowVisible(hwnd):
+                return True
+            length = user32.GetWindowTextLengthW(hwnd)
+            if length <= 0:
+                return True
+
+            buff = ctypes.create_unicode_buffer(length + 1)
+            user32.GetWindowTextW(hwnd, buff, length + 1)
+            title = buff.value.strip()
+            if not title or title.lower() in ignored_titles:
+                return True
+
+            is_iconic = bool(user32.IsIconic(hwnd))
+            rect = ctypes.wintypes.RECT()
+            user32.GetWindowRect(hwnd, ctypes.byref(rect))
+            w = rect.right - rect.left
+            h = rect.bottom - rect.top
+
+            # Skip tiny invisible helper windows if not minimized
+            if not is_iconic and (w < 60 or h < 60):
+                return True
+
+            pid = ctypes.wintypes.DWORD()
+            user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+            pname = ""
+            try:
+                pname = psutil.Process(pid.value).name()
+            except Exception:
+                pass
+
+            if pname.lower() in ignored_processes and title.lower() in ("settings", "start", "search"):
+                return True
+
+            windows.append({
+                "hwnd": hwnd,
+                "title": title,
+                "process": pname,
+                "pid": pid.value,
+                "is_minimized": is_iconic,
+            })
             return True
 
+        cb_proc = WNDENUMPROC(enum_cb)
         try:
-            user32.EnumWindows(WNDENUMPROC(enum_cb), 0)
+            user32.EnumWindows(cb_proc, 0)
         except Exception as e:
             logger.error(f"EnumWindows error: {e}")
 
@@ -527,7 +590,7 @@ class SystemController:
     def focus_window(target: Any) -> Tuple[bool, str]:
         """
         Bring a specific application window to the foreground by HWND or partial title search.
-        Restores window if minimized.
+        Restores window if minimized. Uses SwitchToThisWindow and input simulation to bypass Windows focus restrictions.
         """
         SystemController.ensure_desktop_access()
         user32 = ctypes.windll.user32
@@ -549,7 +612,7 @@ class SystemController:
         elif isinstance(target, str):
             q = target.lower().strip()
             for w in open_wins:
-                if q in w["title"].lower() or q in w["process"].lower():
+                if q == w["process"].lower() or q in w["title"].lower() or q in w["process"].lower():
                     target_hwnd = w["hwnd"]
                     target_title = w["title"]
                     break
@@ -558,26 +621,36 @@ class SystemController:
             return False, f"Could not find open window matching '{target}'"
 
         try:
+            # 1. Restore if minimized
             SW_RESTORE = 9
-            user32.ShowWindow(target_hwnd, SW_RESTORE)
+            SW_SHOW = 5
+            if user32.IsIconic(target_hwnd):
+                user32.ShowWindow(target_hwnd, SW_RESTORE)
+            else:
+                user32.ShowWindow(target_hwnd, SW_SHOW)
 
-            cur_thread = ctypes.windll.kernel32.GetCurrentThreadId()
-            fore_thread = user32.GetWindowThreadProcessId(user32.GetForegroundWindow(), None)
-            attached = False
-            if cur_thread != fore_thread:
-                attached = bool(user32.AttachThreadInput(cur_thread, fore_thread, True))
+            # 2. Use Microsoft SwitchToThisWindow API
+            try:
+                user32.SwitchToThisWindow(target_hwnd, True)
+            except Exception:
+                pass
 
-            user32.AllowSetForegroundWindow(-1)
+            # 3. Simulate Alt key down/up to bypass Windows SetForegroundWindow lock
+            VK_MENU = 0x12
+            KEYEVENTF_KEYUP = 0x0002
+            user32.keybd_event(VK_MENU, 0, 0, 0)
+            user32.keybd_event(VK_MENU, 0, KEYEVENTF_KEYUP, 0)
+
+            # 4. Bring window to top and set foreground
             user32.BringWindowToTop(target_hwnd)
-            ok = bool(user32.SetForegroundWindow(target_hwnd))
+            user32.SetForegroundWindow(target_hwnd)
 
-            if attached:
-                user32.AttachThreadInput(cur_thread, fore_thread, False)
-
+            time.sleep(0.08)
             return True, f"Focused: {target_title}"
         except Exception as e:
             logger.error(f"Focus window error: {e}")
             return False, f"Error focusing window: {e}"
+
 
     @staticmethod
     def speak_text(text: str) -> bool:
