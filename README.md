@@ -96,7 +96,7 @@ Traditional remote desktop tools require port forwarding, static public IPs, com
 
 ### 📋 Process Manager & Terminal
 - **Process Viewer (`/top`)**: Interactive list of top CPU and memory consuming processes with live refresh.
-- **Process Killer (`/kill <name_or_pid>`)**: Terminate frozen applications or games remotely.
+- **Process Killer (`/kill <name_or_pid>`)**: Terminate frozen applications or games remotely. Features a built-in **Process Safety Shield** that blocks blanket killing of `python.exe` by name (safeguarding your trading bots, background automation, and other Python tools) and prevents terminating critical Windows OS processes or Sentinel itself.
 - **Remote Terminal (`/cmd <command>`)**: Execute Windows shell commands remotely with automatic token masking.
 
 ### 🔊 Audio, TTS & Speaker Controls
@@ -129,6 +129,8 @@ Traditional remote desktop tools require port forwarding, static public IPs, com
 ### 🔒 Enterprise Security Architecture
 - **User Whitelist Enforcement**: Only numeric Telegram user IDs configured in `AUTHORIZED_USER_IDS` can communicate with the bot.
 - **Intruder Alerts**: Unrecognized users are blocked immediately, and an alert with their Telegram ID and username is dispatched to the owner.
+- **Process Isolation & Trading Bot Protection**: Built-in safeguards strictly prevent accidental termination of user trading bots, other running Python applications, or critical Windows OS system services (`csrss.exe`, `lsass.exe`, `smss.exe`, etc.). Blanket termination of Python by process name is strictly blocked.
+- **Strict Directory & Path Traversal Isolation**: File deletion (`/clean`) and file explorer operations strictly validate paths within whitelisted directories, preventing any access or modification to sensitive system directories or files used by other processes.
 - **AES-256-GCM End-to-End Encryption**: All MQTT relay messages and command payloads are encrypted with your shared `FLEET_SECRET`.
 - **Optional PIN Lock**: Require `/login <PIN>` with automatic session timeout and rate limiting.
 
@@ -298,6 +300,7 @@ The test suite covers:
 - **Agent Media Optimization**: Automatic JPEG compression, retry cycles on direct Telegram uploads, and failure reporting.
 - **Fleet Relay Hardening**: Automatic wait-on-reconnect, command timeout retry over QoS 1, and offline PC staleness detection.
 - **Zero-Latency Routing**: Host PC local loopback bypassing external networks.
+- **Process Isolation & Non-Interference**: Strict safeguards preventing accidental termination of trading bots, other Python scripts, OS core services, or Sentinel itself, plus path traversal checks.
 - **AES-256-GCM Cryptography**: Secure payload encryption, decryption, authentication, and nonce freshness.
 
 ---

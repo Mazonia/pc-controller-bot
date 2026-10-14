@@ -822,29 +822,69 @@ class SystemController:
 
         return top
 
+    PROTECTED_PROCESSES = {
+        "csrss.exe", "smss.exe", "services.exe", "wininit.exe",
+        "lsass.exe", "winlogon.exe", "system", "registry"
+    }
+
     @staticmethod
     def kill_process(identifier: str) -> Tuple[bool, str]:
-        """Kill process by name or PID."""
+        """
+        Kill process by name or PID with strict safety checks to prevent
+        interfering with other critical processes or trading bots.
+        """
         target = identifier.strip()
         killed = 0
+        my_pids = {os.getpid()}
+        try:
+            my_pids.add(os.getppid())
+        except Exception:
+            pass
+
+        # 1. Protect against blanket termination of Python interpreters by name
+        # to prevent terminating user trading bots or other critical Python applications.
+        if target.lower() in ("python.exe", "pythonw.exe", "python"):
+            return False, (
+                "🛡️ Safety Shield: Terminating Python by name ('python.exe') is restricted to prevent "
+                "accidentally killing other running Python applications (such as trading bots or background workers). "
+                "Please specify the exact Process PID instead: '/kill <PID>'."
+            )
+
+        # 2. Protect against terminating critical Windows system components
+        if target.lower() in SystemController.PROTECTED_PROCESSES:
+            return False, f"🛡️ Safety Shield: Cannot terminate critical Windows system process: '{target}'."
+
         if target.isdigit():
             pid = int(target)
+            if pid in (0, 4):
+                return False, f"🛡️ Safety Shield: Refusing to terminate Windows System core process (PID {pid})."
+            if pid in my_pids:
+                return False, f"🛡️ Safety Shield: Refusing to terminate Sentinel's own process (PID {pid})."
             try:
                 p = psutil.Process(pid)
+                pname = p.name().lower()
+                if pname in SystemController.PROTECTED_PROCESSES:
+                    return False, f"🛡️ Safety Shield: Cannot terminate critical Windows process: {p.name()} (PID {pid})."
                 p.kill()
                 return True, f"Killed process {p.name()} (PID {pid})"
+            except psutil.NoSuchProcess:
+                return False, f"No process found with PID {pid}."
+            except psutil.AccessDenied:
+                return False, f"Access denied trying to terminate PID {pid} (insufficient privileges)."
             except Exception as e:
                 return False, f"Could not kill PID {pid}: {e}"
         else:
-            for p in psutil.process_iter(['name']):
+            for p in psutil.process_iter(['name', 'pid']):
                 try:
+                    if p.pid in my_pids:
+                        continue
                     if p.info['name'] and p.info['name'].lower() == target.lower():
                         p.kill()
                         killed += 1
                 except (psutil.NoSuchProcess, psutil.AccessDenied):
                     continue
             if killed > 0:
-                return True, f"Terminated {killed} instances of {target}"
+                return True, f"Terminated {killed} instance{'s' if killed > 1 else ''} of '{target}'"
             return False, f"No running process found matching '{target}'"
 
     @staticmethod
