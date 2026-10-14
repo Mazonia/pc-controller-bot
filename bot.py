@@ -4021,17 +4021,20 @@ def ensure_single_bot_instance():
     import psutil
     cur_pid = os.getpid()
     cur_dir = str(config.BASE_DIR).lower()
-    for p in psutil.process_iter(['pid', 'name', 'cmdline']):
+    for p in psutil.process_iter(['pid', 'name', 'cmdline', 'exe']):
         try:
             if p.pid == cur_pid:
                 continue
             cmdline = p.info.get('cmdline') or []
             cmd_str = " ".join(cmdline).lower()
             p_name = p.info.get('name', '').lower()
-            # Only match processes that belong specifically to PC-Remote-Sentinel
-            is_our_commander = (
-                ("pc-sentinel.exe" in p_name and "agent" not in p_name)
-                or (cur_dir in cmd_str and "bot.py" in cmd_str)
+            exe_path = (p.info.get('exe') or '').lower()
+
+            # Absolute isolation: process MUST physically reside in this installation directory
+            is_in_our_dir = (cur_dir in exe_path) or (cur_dir in cmd_str)
+            is_our_commander = is_in_our_dir and (
+                ("pc-sentinel" in p_name and "agent" not in p_name)
+                or "bot.py" in cmd_str
             )
             if is_our_commander:
                 logger.warning(f"Terminating older conflicting bot process (PID {p.pid})...")
