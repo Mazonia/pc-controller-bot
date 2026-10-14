@@ -139,3 +139,35 @@ def test_handle_net_command():
 
     asyncio.run(_test())
 
+
+def test_agent_client_play_audio_local():
+    async def _test():
+        client = AgentClient({"name": "Host-PC", "ip": "127.0.0.1", "port": 9010}, secret="sec")
+        mock_resp = MagicMock()
+        mock_resp.json.return_value = {"success": True, "ok": True}
+        mock_resp.raise_for_status = MagicMock()
+
+        with patch.object(client, "_post", new_callable=AsyncMock, return_value=mock_resp) as mock_post:
+            res = await client.play_audio("voice.ogg", b"audio_bytes")
+            assert res.get("success") is True
+            mock_post.assert_called_once()
+            assert mock_post.call_args[0][0] == "/play-audio"
+
+    asyncio.run(_test())
+
+
+def test_agent_client_play_audio_relay():
+    async def _test():
+        client = AgentClient({"name": "Remote-PC", "ip": "100.64.0.1", "port": 9010}, secret="sec")
+        mock_relay = MagicMock()
+        mock_relay.send_command = AsyncMock(return_value={"ok": True, "msg": "Played"})
+        with patch.object(client, "is_relay_online", return_value=True), \
+             patch("bot.commander_relay", mock_relay):
+            res = await client.play_audio("voice.ogg", b"audio_bytes")
+            assert res.get("success") is True
+            mock_relay.send_command.assert_called_once()
+            assert mock_relay.send_command.call_args[0][1] == "play_audio"
+
+    asyncio.run(_test())
+
+

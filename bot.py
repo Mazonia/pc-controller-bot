@@ -99,19 +99,16 @@ def ensure_local_agent_running():
         if not agent_py.exists():
             return
 
-        agent_vbs = config.BASE_DIR / "start_agent_hidden.vbs"
-        if agent_vbs.exists():
-            logger.info("Auto-launching local PC Agent silently via start_agent_hidden.vbs...")
-            subprocess.Popen(["wscript.exe", str(agent_vbs)], cwd=str(config.BASE_DIR))
-        else:
-            logger.info("Auto-launching local PC Agent in background...")
-            agent_exe = config.BASE_DIR / "pc-sentinel-agent.exe"
-            exe = str(agent_exe) if agent_exe.exists() else sys.executable
-            subprocess.Popen(
-                [exe, str(agent_py)],
-                cwd=str(config.BASE_DIR),
-                creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0,
-            )
+        agent_exe = config.BASE_DIR / "pc-sentinel-agent.exe"
+        exe = str(agent_exe) if agent_exe.exists() else sys.executable
+        creation_flags = (subprocess.CREATE_NO_WINDOW | 0x00000008) if sys.platform == "win32" else 0
+        logger.info(f"Auto-launching local PC Agent silently ({Path(exe).name})...")
+        subprocess.Popen(
+            [exe, str(agent_py)],
+            cwd=str(config.BASE_DIR),
+            creationflags=creation_flags,
+            close_fds=True,
+        )
     except Exception as e:
         logger.error(f"Could not auto-start local agent: {e}")
 
@@ -450,6 +447,25 @@ class AgentClient:
         return r.content, filename
 
     async def upload_file(self, filename: str, content: bytes) -> dict:
+        import base64
+        if self.is_local:
+            try:
+                files = {"file": (filename, content)}
+                r = await self._post("/upload", files=files, timeout=60.0)
+                r.raise_for_status()
+                return r.json()
+            except Exception as e:
+                logger.debug(f"Local upload_file HTTP failed: {e}. Trying relay...")
+
+        if self.should_use_relay():
+            if len(content) > 3 * 1024 * 1024:
+                raise Exception("File too large for cloud relay (>3MB). Send smaller files or use local network.")
+            b64 = base64.b64encode(content).decode("ascii")
+            res = await commander_relay.send_command(self.name, "file_upload", {"filename": filename, "data_b64": b64}, timeout=30.0)
+            if res.get("ok"):
+                return {"success": True, "path": res.get("path", filename), "auto_played": res.get("auto_played", False)}
+            raise Exception(res.get("error", "Remote upload failed"))
+
         files = {"file": (filename, content)}
         r = await self._post("/upload", files=files, timeout=60.0)
         r.raise_for_status()
@@ -480,6 +496,23 @@ class AgentClient:
         return r.json().get("success", False)
 
     async def play_audio(self, filename: str, content: bytes) -> dict:
+        import base64
+        if self.is_local:
+            try:
+                files = {"file": (filename, content)}
+                r = await self._post("/play-audio", files=files, timeout=60.0)
+                r.raise_for_status()
+                return r.json()
+            except Exception as e:
+                logger.debug(f"Local play_audio HTTP failed: {e}. Trying relay...")
+
+        if self.should_use_relay():
+            if len(content) > 3 * 1024 * 1024:
+                return {"success": False, "ok": False, "message": "Audio file too large for cloud relay (>3MB)."}
+            b64 = base64.b64encode(content).decode("ascii")
+            res = await commander_relay.send_command(self.name, "play_audio", {"filename": filename, "data_b64": b64}, timeout=30.0)
+            return {"success": res.get("ok", False), "ok": res.get("ok", False), "message": res.get("msg", res.get("error", ""))}
+
         files = {"file": (filename, content)}
         r = await self._post("/play-audio", files=files, timeout=60.0)
         r.raise_for_status()
@@ -2685,10 +2718,12 @@ async def handle_incoming_voice(update: Update, context: ContextTypes.DEFAULT_TY
         filename = f"voice_{datetime.now().strftime('%Y%m%d_%H%M%S')}{ext}"
 
         result = await agent.play_audio(filename, bytes(file_bytes))
-        if result.get("success"):
-            await msg.edit_text(f"🔊 <b>Voice played on {html.escape(pc_label(context))}!</b> ({duration}s)", parse_mode="HTML")
+        dur_label = f" ({duration}s)" if duration else ""
+        if result.get("success") or result.get("ok"):
+            await msg.edit_text(f"🔊 <b>Voice played on {html.escape(pc_label(context))}!</b>{dur_label}", parse_mode="HTML")
         else:
-            await msg.edit_text(f"⚠️ Playback issue: {result.get('message', 'Unknown')}")
+            err_msg = result.get("message") or result.get("msg") or result.get("error", "Unknown error")
+            await msg.edit_text(f"⚠️ Playback issue: {html.escape(str(err_msg))}")
     except Exception as e:
         await msg.edit_text(f"❌ Voice playback failed: {e}")
 

@@ -480,11 +480,59 @@ def handle_relay_command(data: dict) -> dict:
         cnt, freed = SystemController.cleanup_old_files(RECORDINGS_DIR, DOWNLOADS_DIR, max_age_days=0)
         return {"ok": True, "deleted_count": cnt, "freed_bytes": freed, "pc_name": PC_NAME}
 
+    # 15. AUDIO & VOICE PLAYBACK
+    elif cmd == "play_audio":
+        import base64
+        filename = params.get("filename", f"voice_{datetime.now().strftime('%Y%m%d_%H%M%S')}.ogg")
+        data_b64 = params.get("data_b64", "")
+        if not data_b64:
+            return {"ok": False, "error": "No audio data provided."}
+        try:
+            raw_bytes = base64.b64decode(data_b64)
+            dest = DOWNLOADS_DIR / Path(filename).name
+            with open(dest, "wb") as f:
+                f.write(raw_bytes)
+            ok, msg = SystemController.play_audio_file(dest)
+            return {"ok": ok, "success": ok, "msg": msg, "path": str(dest)}
+        except Exception as e:
+            return {"ok": False, "error": f"Audio playback error: {e}"}
+
+    elif cmd in ("file_upload", "upload"):
+        import base64
+        filename = params.get("filename", f"upload_{datetime.now().strftime('%Y%m%d_%H%M%S')}.bin")
+        data_b64 = params.get("data_b64", "")
+        if not data_b64:
+            return {"ok": False, "error": "No file data provided."}
+        try:
+            raw_bytes = base64.b64decode(data_b64)
+            dest = DOWNLOADS_DIR / Path(filename).name
+            with open(dest, "wb") as f:
+                f.write(raw_bytes)
+            auto_played = False
+            if dest.suffix.lower() in (".mp3", ".wav", ".ogg", ".aac", ".m4a"):
+                try:
+                    ok, _ = SystemController.play_audio_file(dest)
+                    auto_played = ok
+                except Exception:
+                    pass
+            return {"ok": True, "success": True, "path": str(dest), "auto_played": auto_played}
+        except Exception as e:
+            return {"ok": False, "error": f"File upload error: {e}"}
+
     return {"ok": False, "error": f"Unknown command: '{cmd}'"}
 
 
+_pending_events = []
+
 def _alarm_callback(label: str, time_str: str):
     """Callback when alarm fires on this PC — pushes alert to Central Bot."""
+    global _pending_events
+    _pending_events.append({
+        "type": "alarm_triggered",
+        "label": label,
+        "time": time_str,
+        "pc_name": PC_NAME,
+    })
     if relay:
         relay.send_alert({
             "type": "alarm_triggered",
@@ -567,6 +615,21 @@ async def api_cast_web_start():
 async def api_cast_web_stop():
     screen_caster.stop_web_cast()
     return {"ok": True, "msg": "Live stream stopped."}
+
+
+@app.post("/cast/rtmp/start")
+async def api_cast_rtmp_start(request: Request):
+    data = await request.form()
+    url = data.get("url", "")
+    ok, msg = screen_caster.start_rtmp_stream(url)
+    return {"ok": ok, "msg": msg}
+
+
+@app.post("/cast/rtmp/stop")
+async def api_cast_rtmp_stop():
+    ok, msg = screen_caster.stop_rtmp_stream()
+    return {"ok": ok, "msg": msg}
+
 
 
 @app.get("/cast/status")
@@ -716,14 +779,44 @@ async def api_alarm_set(request: Request):
     data = await request.form()
     seconds = int(data.get("seconds", 30))
     label = data.get("label", "Timer Alarm")
-    ok, msg = await asyncio.to_thread(SystemController.set_alarm, f"{seconds}s", label)
-    return {"ok": ok, "msg": msg}
+    res = await asyncio.to_thread(SystemController.set_alarm, seconds, label, _alarm_callback)
+    return res if isinstance(res, dict) else {"ok": True, "target_time_str": str(res)}
 
 
 @app.post("/alarm/stop")
 async def api_alarm_stop():
     ok = await asyncio.to_thread(SystemController.stop_alarm)
     return {"ok": ok, "success": ok}
+
+
+@app.post("/alarm/cancel")
+async def api_alarm_cancel():
+    ok = await asyncio.to_thread(SystemController.cancel_alarm)
+    return {"ok": ok, "success": ok}
+
+
+@app.post("/alarm/trigger-now")
+async def api_alarm_trigger_now(request: Request):
+    data = await request.form()
+    label = data.get("label", "Instant Alert")
+    res = await asyncio.to_thread(SystemController.set_alarm, 1, label, _alarm_callback)
+    return {"ok": True, "success": True, "message": "Alarm triggered"}
+
+
+@app.post("/alarm/parse-time")
+async def api_alarm_parse_time(request: Request):
+    data = await request.form()
+    raw_input = data.get("raw_input", "")
+    seconds, label = SystemController.parse_alarm_time(raw_input)
+    return {"seconds": seconds, "label": label}
+
+
+@app.get("/events")
+async def api_get_events():
+    global _pending_events
+    events = list(_pending_events)
+    _pending_events.clear()
+    return {"events": events}
 
 
 @app.get("/clean/scan")
@@ -736,6 +829,97 @@ async def api_clean_scan():
 async def api_clean_execute():
     cnt, freed = await asyncio.to_thread(SystemController.cleanup_old_files, RECORDINGS_DIR, DOWNLOADS_DIR, 0)
     return {"ok": True, "deleted_count": cnt, "freed_bytes": freed, "pc_name": PC_NAME}
+
+
+# ── Audio & Voice Playback ───────────────────────────────────────────
+
+@app.post("/play-audio")
+async def api_play_audio(file: UploadFile = File(...)):
+    filename = Path(file.filename or f"voice_{datetime.now().strftime('%Y%m%d_%H%M%S')}.ogg").name
+    dest = DOWNLOADS_DIR / filename
+    content = await file.read()
+    with open(dest, "wb") as f:
+        f.write(content)
+
+    ok, msg = await asyncio.to_thread(SystemController.play_audio_file, dest)
+    return {"success": ok, "ok": ok, "message": msg, "path": str(dest)}
+
+
+@app.post("/upload")
+async def api_upload(file: UploadFile = File(...)):
+    filename = Path(file.filename or f"upload_{datetime.now().strftime('%Y%m%d_%H%M%S')}.bin").name
+    dest = DOWNLOADS_DIR / filename
+    content = await file.read()
+    with open(dest, "wb") as f:
+        f.write(content)
+
+    auto_played = False
+    if dest.suffix.lower() in (".mp3", ".wav", ".ogg", ".aac", ".m4a"):
+        try:
+            ok, _ = await asyncio.to_thread(SystemController.play_audio_file, dest)
+            auto_played = ok
+        except Exception:
+            pass
+
+    return {"success": True, "ok": True, "path": str(dest), "auto_played": auto_played}
+
+
+# ── System Processes & Terminal ──────────────────────────────────────
+
+@app.get("/processes")
+async def api_processes(count: int = 25):
+    procs = await asyncio.to_thread(SystemController.list_top_processes, count)
+    return {"ok": True, "processes": procs}
+
+
+@app.post("/kill")
+async def api_kill(request: Request):
+    data = await request.form()
+    target = data.get("target", "")
+    ok, msg = await asyncio.to_thread(SystemController.kill_process, target)
+    return {"ok": ok, "success": ok, "message": msg}
+
+
+@app.post("/cmd")
+async def api_cmd(request: Request):
+    data = await request.form()
+    command = data.get("command", "")
+    rc, output = await asyncio.to_thread(SystemController.run_cmd, command)
+    return {"ok": True, "output": output, "returncode": rc}
+
+
+@app.post("/open")
+async def api_open(request: Request):
+    data = await request.form()
+    target = data.get("target", "")
+    ok = await asyncio.to_thread(SystemController.open_target, target)
+    return {"ok": ok, "success": ok}
+
+
+# ── Media Recording ──────────────────────────────────────────────────
+
+@app.post("/record/screen")
+async def api_record_screen(duration: int = 10):
+    duration = min(max(duration, 3), 60)
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    path = RECORDINGS_DIR / f"screen_{ts}_{duration}s.mp4"
+    with hardware_lock:
+        ok, msg = await asyncio.to_thread(SystemController.record_screen_video, path, duration)
+    if ok and path.exists():
+        return FileResponse(str(path), media_type="video/mp4", filename=path.name)
+    raise HTTPException(500, f"Screen recording failed: {msg}")
+
+
+@app.post("/record/webcam")
+async def api_record_webcam(duration: int = 10):
+    duration = min(max(duration, 3), 60)
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    path = RECORDINGS_DIR / f"webcam_{ts}_{duration}s.mp4"
+    with hardware_lock:
+        ok, msg = await asyncio.to_thread(SystemController.record_webcam_video, path, duration)
+    if ok and path.exists():
+        return FileResponse(str(path), media_type="video/mp4", filename=path.name)
+    raise HTTPException(500, f"Webcam recording failed: {msg}")
 
 
 

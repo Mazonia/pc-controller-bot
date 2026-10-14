@@ -94,3 +94,37 @@ def test_handle_relay_command_clean_execute():
         assert res["ok"] is True
         assert res["deleted_count"] == 5
         assert res["freed_bytes"] == 5242880
+
+
+def test_handle_relay_command_play_audio(tmp_path):
+    import base64
+    audio_data = b"dummy_audio_bytes"
+    b64_str = base64.b64encode(audio_data).decode("ascii")
+
+    with patch("agent.DOWNLOADS_DIR", tmp_path):
+        with patch("agent.SystemController.play_audio_file", return_value=(True, "Audio played")):
+            res = handle_relay_command({
+                "cmd": "play_audio",
+                "params": {"filename": "test_voice.ogg", "data_b64": b64_str},
+            })
+            assert res["ok"] is True
+            assert res["success"] is True
+            assert (tmp_path / "test_voice.ogg").exists()
+            assert (tmp_path / "test_voice.ogg").read_bytes() == audio_data
+
+
+def test_api_play_audio(tmp_path):
+    from fastapi.testclient import TestClient
+    from agent import app
+
+    client = TestClient(app)
+    with patch("agent.DOWNLOADS_DIR", tmp_path):
+        with patch("agent.SystemController.play_audio_file", return_value=(True, "Audio played")):
+            files = {"file": ("voice_test.ogg", b"fake_voice_data", "audio/ogg")}
+            response = client.post("/play-audio", files=files)
+            assert response.status_code == 200
+            data = response.json()
+            assert data["success"] is True
+            assert data["ok"] is True
+            assert (tmp_path / "voice_test.ogg").exists()
+
