@@ -71,46 +71,106 @@ relay: Optional[FleetAgentRelay] = None
 # ═══════════════════════════════════════════════════════════════════════
 
 def send_photo_to_telegram(chat_id: int, photo_path: Path, caption: str = "") -> bool:
-    """Upload photo directly to Telegram chat."""
+    """Upload photo directly to Telegram chat with automatic JPEG compression and retries."""
     if not TELEGRAM_BOT_TOKEN:
         logger.warning("Cannot upload to Telegram: TELEGRAM_BOT_TOKEN not configured")
         return False
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendPhoto"
+
+    # Optimize PNG or large images to JPEG to drastically speed up transmission on poor internet
+    upload_path = photo_path
+    temp_jpg = None
     try:
-        with open(photo_path, "rb") as f:
-            r = httpx.post(url, data={"chat_id": chat_id, "caption": caption}, files={"photo": f}, timeout=25.0)
-            return r.status_code == 200
+        if photo_path.suffix.lower() == ".png" or photo_path.stat().st_size > 400 * 1024:
+            from PIL import Image
+            temp_jpg = photo_path.with_suffix(".opt.jpg")
+            with Image.open(photo_path) as img:
+                rgb = img.convert("RGB")
+                rgb.save(temp_jpg, "JPEG", quality=85, optimize=True)
+            upload_path = temp_jpg
     except Exception as e:
-        logger.error(f"Telegram photo upload error: {e}")
-        return False
+        logger.debug(f"Could not convert image to JPEG: {e}")
+        upload_path = photo_path
+
+    for attempt in range(1, 4):
+        try:
+            with open(upload_path, "rb") as f:
+                r = httpx.post(
+                    url,
+                    data={"chat_id": chat_id, "caption": caption, "parse_mode": "HTML"},
+                    files={"photo": f},
+                    timeout=50.0,
+                )
+                if r.status_code == 200:
+                    logger.info(f"Photo successfully uploaded to Telegram (attempt {attempt})")
+                    if temp_jpg and temp_jpg.exists():
+                        try:
+                            temp_jpg.unlink()
+                        except Exception:
+                            pass
+                    return True
+                else:
+                    logger.warning(f"Telegram upload attempt {attempt} returned {r.status_code}: {r.text[:200]}")
+        except Exception as e:
+            logger.warning(f"Telegram photo upload attempt {attempt} error: {e}")
+
+        if attempt < 3:
+            time.sleep(2.0 * attempt)
+
+    if temp_jpg and temp_jpg.exists():
+        try:
+            temp_jpg.unlink()
+        except Exception:
+            pass
+    return False
 
 
 def send_video_to_telegram(chat_id: int, video_path: Path, caption: str = "") -> bool:
-    """Upload video directly to Telegram chat."""
+    """Upload video directly to Telegram chat with retries."""
     if not TELEGRAM_BOT_TOKEN:
         return False
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendVideo"
-    try:
-        with open(video_path, "rb") as f:
-            r = httpx.post(url, data={"chat_id": chat_id, "caption": caption}, files={"video": f}, timeout=60.0)
-            return r.status_code == 200
-    except Exception as e:
-        logger.error(f"Telegram video upload error: {e}")
-        return False
+    for attempt in range(1, 4):
+        try:
+            with open(video_path, "rb") as f:
+                r = httpx.post(
+                    url,
+                    data={"chat_id": chat_id, "caption": caption, "parse_mode": "HTML"},
+                    files={"video": f},
+                    timeout=90.0,
+                )
+                if r.status_code == 200:
+                    return True
+                logger.warning(f"Telegram video upload attempt {attempt} returned {r.status_code}")
+        except Exception as e:
+            logger.warning(f"Telegram video upload attempt {attempt} error: {e}")
+        if attempt < 3:
+            time.sleep(2.0 * attempt)
+    return False
 
 
 def send_document_to_telegram(chat_id: int, file_path: Path, caption: str = "") -> bool:
-    """Upload document directly to Telegram chat."""
+    """Upload document directly to Telegram chat with retries."""
     if not TELEGRAM_BOT_TOKEN:
         return False
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendDocument"
-    try:
-        with open(file_path, "rb") as f:
-            r = httpx.post(url, data={"chat_id": chat_id, "caption": caption}, files={"document": f}, timeout=60.0)
-            return r.status_code == 200
-    except Exception as e:
-        logger.error(f"Telegram doc upload error: {e}")
-        return False
+    for attempt in range(1, 4):
+        try:
+            with open(file_path, "rb") as f:
+                r = httpx.post(
+                    url,
+                    data={"chat_id": chat_id, "caption": caption, "parse_mode": "HTML"},
+                    files={"document": f},
+                    timeout=90.0,
+                )
+                if r.status_code == 200:
+                    return True
+                logger.warning(f"Telegram doc upload attempt {attempt} returned {r.status_code}")
+        except Exception as e:
+            logger.warning(f"Telegram doc upload attempt {attempt} error: {e}")
+        if attempt < 3:
+            time.sleep(2.0 * attempt)
+    return False
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -145,8 +205,10 @@ def handle_relay_command(data: dict) -> dict:
         if ok and path.exists():
             if chat_id:
                 caption = f"📸 Screenshot from <b>{PC_NAME}</b>\n⏱️ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
-                send_photo_to_telegram(chat_id, path, caption)
-                return {"ok": True, "direct_upload": True, "msg": "Screenshot uploaded to chat."}
+                if send_photo_to_telegram(chat_id, path, caption):
+                    return {"ok": True, "direct_upload": True, "msg": "Screenshot uploaded to chat."}
+                else:
+                    return {"ok": False, "error": "Screenshot captured, but Telegram upload timed out due to unstable internet connection."}
             return {"ok": True, "path": str(path)}
         return {"ok": False, "error": f"Screenshot failed: {msg}"}
 
@@ -159,8 +221,10 @@ def handle_relay_command(data: dict) -> dict:
         if ok and path.exists():
             if chat_id:
                 caption = f"🎥 Webcam capture from <b>{PC_NAME}</b>\n⏱️ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
-                send_photo_to_telegram(chat_id, path, caption)
-                return {"ok": True, "direct_upload": True, "msg": "Webcam photo uploaded to chat."}
+                if send_photo_to_telegram(chat_id, path, caption):
+                    return {"ok": True, "direct_upload": True, "msg": "Webcam photo uploaded to chat."}
+                else:
+                    return {"ok": False, "error": "Webcam captured, but Telegram upload timed out due to unstable internet connection."}
             return {"ok": True, "path": str(path)}
         return {"ok": False, "error": f"Webcam capture failed: {msg}"}
 
@@ -174,8 +238,10 @@ def handle_relay_command(data: dict) -> dict:
         if ok and path.exists():
             if chat_id:
                 caption = f"🔴 Screen recording ({duration}s) from <b>{PC_NAME}</b>"
-                send_video_to_telegram(chat_id, path, caption)
-                return {"ok": True, "direct_upload": True, "msg": "Screen video uploaded to chat."}
+                if send_video_to_telegram(chat_id, path, caption):
+                    return {"ok": True, "direct_upload": True, "msg": "Screen video uploaded to chat."}
+                else:
+                    return {"ok": False, "error": "Screen video recorded, but Telegram upload timed out due to unstable internet connection."}
             return {"ok": True, "path": str(path)}
         return {"ok": False, "error": f"Screen recording failed: {msg}"}
 
@@ -189,8 +255,10 @@ def handle_relay_command(data: dict) -> dict:
         if ok and path.exists():
             if chat_id:
                 caption = f"📹 Webcam recording ({duration}s) from <b>{PC_NAME}</b>"
-                send_video_to_telegram(chat_id, path, caption)
-                return {"ok": True, "direct_upload": True, "msg": "Webcam video uploaded to chat."}
+                if send_video_to_telegram(chat_id, path, caption):
+                    return {"ok": True, "direct_upload": True, "msg": "Webcam video uploaded to chat."}
+                else:
+                    return {"ok": False, "error": "Webcam video recorded, but Telegram upload timed out due to unstable internet connection."}
             return {"ok": True, "path": str(path)}
         return {"ok": False, "error": f"Webcam recording failed: {msg}"}
 
@@ -402,6 +470,15 @@ def handle_relay_command(data: dict) -> dict:
                 return {"ok": True, "direct_upload": True, "msg": f"File '{p.name}' uploaded to chat."}
             return {"ok": False, "error": "Telegram upload failed."}
         return {"ok": True, "path": str(p), "size": p.stat().st_size}
+
+    # 14. CLEANUP
+    elif cmd in ("clean_scan", "storage_scan"):
+        candidates = SystemController.scan_storage_candidates(RECORDINGS_DIR, DOWNLOADS_DIR)
+        return {"ok": True, "candidates": candidates, "pc_name": PC_NAME}
+
+    elif cmd in ("clean_execute", "storage_clean"):
+        cnt, freed = SystemController.cleanup_old_files(RECORDINGS_DIR, DOWNLOADS_DIR, max_age_days=0)
+        return {"ok": True, "deleted_count": cnt, "freed_bytes": freed, "pc_name": PC_NAME}
 
     return {"ok": False, "error": f"Unknown command: '{cmd}'"}
 
@@ -647,6 +724,19 @@ async def api_alarm_set(request: Request):
 async def api_alarm_stop():
     ok = await asyncio.to_thread(SystemController.stop_alarm)
     return {"ok": ok, "success": ok}
+
+
+@app.get("/clean/scan")
+async def api_clean_scan():
+    candidates = await asyncio.to_thread(SystemController.scan_storage_candidates, RECORDINGS_DIR, DOWNLOADS_DIR)
+    return {"ok": True, "candidates": candidates, "pc_name": PC_NAME}
+
+
+@app.post("/clean/execute")
+async def api_clean_execute():
+    cnt, freed = await asyncio.to_thread(SystemController.cleanup_old_files, RECORDINGS_DIR, DOWNLOADS_DIR, 0)
+    return {"ok": True, "deleted_count": cnt, "freed_bytes": freed, "pc_name": PC_NAME}
+
 
 
 

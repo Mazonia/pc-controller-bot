@@ -165,11 +165,11 @@ class FleetAgentRelay:
         self.client.on_connect = self._on_connect
         self.client.on_disconnect = self._on_disconnect
         self.client.on_message = self._on_message
-        self.client.reconnect_delay_set(min_delay=1, max_delay=15)
+        self.client.reconnect_delay_set(min_delay=2, max_delay=30)
 
         try:
             logger.info(f"Connecting Fleet Relay to {self.broker}:{self.port} (TLS={self.use_tls})...")
-            self.client.connect_async(self.broker, self.port, keepalive=30)
+            self.client.connect_async(self.broker, self.port, keepalive=60)
             self.client.loop_start()
         except Exception as e:
             logger.error(f"Relay connect error: {e}")
@@ -277,9 +277,9 @@ class FleetAgentRelay:
         self.client.publish(self.topic_status, payload, qos=1, retain=True)
 
     def _heartbeat_worker(self):
-        """Periodic telemetry heartbeat every 30 seconds."""
+        """Periodic telemetry heartbeat every 20 seconds to keep connection alive."""
         while self._running:
-            time.sleep(30)
+            time.sleep(20)
             if self.is_connected:
                 try:
                     self.publish_status("online")
@@ -335,11 +335,11 @@ class FleetCommanderRelay:
         self.client.on_connect = self._on_connect
         self.client.on_disconnect = self._on_disconnect
         self.client.on_message = self._on_message
-        self.client.reconnect_delay_set(min_delay=1, max_delay=15)
+        self.client.reconnect_delay_set(min_delay=2, max_delay=30)
 
         try:
             logger.info(f"Connecting Fleet Commander Relay to {self.broker}:{self.port}...")
-            self.client.connect_async(self.broker, self.port, keepalive=30)
+            self.client.connect_async(self.broker, self.port, keepalive=60)
             self.client.loop_start()
         except Exception as e:
             logger.error(f"Commander relay connect error: {e}")
@@ -400,38 +400,63 @@ class FleetCommanderRelay:
             logger.error(f"Commander on_message error: {e}")
 
     async def send_command(
-        self, pc_name: str, cmd: str, params: Optional[dict] = None, timeout: float = 20.0
+        self, pc_name: str, cmd: str, params: Optional[dict] = None, timeout: float = 30.0, retries: int = 1
     ) -> dict:
         """
         Send encrypted command to a PC and await response.
         Works across mobile data, LAN, or any network.
+        Gracefully handles network jitter, brief disconnects, and packet loss.
         """
+        # If briefly disconnected, wait up to 6s for auto-reconnect before giving up
         if not self.is_connected:
-            return {"ok": False, "error": "Relay broker not connected. Please check internet connection."}
+            logger.info(f"Relay temporarily disconnected. Waiting up to 6s for reconnect before sending '{cmd}'...")
+            wait_start = time.time()
+            while not self.is_connected and (time.time() - wait_start < 6.0):
+                await asyncio.sleep(0.3)
 
-        req_id = uuid.uuid4().hex[:8]
-        payload_dict = {
-            "id": req_id,
-            "cmd": cmd,
-            "params": params or {},
-            "timestamp": datetime.now().isoformat(),
-        }
+        if not self.is_connected:
+            return {
+                "ok": False,
+                "error": "Relay broker not connected. Network connection may be down or severely unstable.",
+            }
 
-        future = self._loop.create_future()
-        self._pending_requests[req_id] = future
-
+        last_error = ""
         topic = f"{self.prefix}/cmd/{pc_name}"
-        raw_payload = self.crypto.encrypt(payload_dict)
 
-        try:
-            self.client.publish(topic, raw_payload, qos=1)
-            return await asyncio.wait_for(future, timeout=timeout)
-        except asyncio.TimeoutError:
-            self._pending_requests.pop(req_id, None)
-            return {"ok": False, "error": f"PC '{pc_name}' did not respond within {int(timeout)}s (may be sleeping or offline)."}
-        except Exception as e:
-            self._pending_requests.pop(req_id, None)
-            return {"ok": False, "error": f"Failed to send command: {e}"}
+        for attempt in range(retries + 1):
+            req_id = uuid.uuid4().hex[:8]
+            payload_dict = {
+                "id": req_id,
+                "cmd": cmd,
+                "params": params or {},
+                "timestamp": datetime.now().isoformat(),
+            }
+
+            future = self._loop.create_future()
+            self._pending_requests[req_id] = future
+            raw_payload = self.crypto.encrypt(payload_dict)
+
+            try:
+                self.client.publish(topic, raw_payload, qos=1)
+                return await asyncio.wait_for(future, timeout=timeout)
+            except asyncio.TimeoutError:
+                self._pending_requests.pop(req_id, None)
+                last_error = f"PC '{pc_name}' did not respond within {int(timeout)}s (unstable connection or PC is busy/sleeping)."
+                if attempt < retries:
+                    logger.warning(f"Command '{cmd}' to '{pc_name}' timed out after {timeout}s. Retrying once...")
+                    await asyncio.sleep(1.0)
+                    continue
+                return {"ok": False, "error": last_error}
+            except Exception as e:
+                self._pending_requests.pop(req_id, None)
+                last_error = f"Failed to send command: {e}"
+                if attempt < retries:
+                    logger.warning(f"Command '{cmd}' to '{pc_name}' failed with {e}. Retrying...")
+                    await asyncio.sleep(1.0)
+                    continue
+                return {"ok": False, "error": last_error}
+
+        return {"ok": False, "error": last_error or "Command failed"}
 
     def get_pc_list(self) -> Dict[str, dict]:
         """Return dict of all registered PCs and their live status."""

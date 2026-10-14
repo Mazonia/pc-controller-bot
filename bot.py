@@ -13,6 +13,7 @@ except Exception:
 import os
 import sys
 import io
+import time
 import html
 import json
 import math
@@ -25,6 +26,7 @@ import urllib.parse
 import httpx
 from loguru import logger
 
+import telegram.error
 from telegram import (
     InlineKeyboardButton,
     InlineKeyboardMarkup,
@@ -32,6 +34,8 @@ from telegram import (
     BotCommand,
     InputMediaPhoto,
 )
+from telegram.constants import ChatAction
+from telegram.request import HTTPXRequest
 from telegram.ext import (
     Application,
     ApplicationBuilder,
@@ -154,12 +158,31 @@ class AgentClient:
         self.base_url = f"http://{self.ip}:{self.port}"
         self.secret = secret
 
+    @property
+    def is_local(self) -> bool:
+        """True if target PC is local host (127.0.0.1 or localhost) - bypasses internet/cloud entirely."""
+        return self.ip in ("127.0.0.1", "localhost", "::1")
+
+    @property
+    def is_local(self) -> bool:
+        """Check if PC agent is running locally on the same host machine."""
+        return self.ip in ("127.0.0.1", "localhost", "::1")
+
     def is_relay_online(self) -> bool:
         """Check if PC is connected to the Cloud Relay."""
         if commander_relay and commander_relay.is_connected:
             pcs = commander_relay.get_pc_list()
             return self.name in pcs and pcs[self.name].get("status") == "online"
         return False
+
+    def should_use_relay(self) -> bool:
+        """
+        Only route through Cloud Relay (MQTT) if the PC is truly remote.
+        For local host PC (127.0.0.1), always use 0-latency direct local HTTP first.
+        """
+        if self.is_local:
+            return False
+        return self.is_relay_online()
 
     def _headers(self) -> dict:
         return {"X-Agent-Secret": self.secret}
@@ -173,7 +196,15 @@ class AgentClient:
             return await client.post(f"{self.base_url}{path}", headers=self._headers(), **kwargs)
 
     async def health(self) -> Optional[dict]:
-        if self.is_relay_online():
+        # For local PC, query direct loopback in milliseconds
+        if self.is_local:
+            try:
+                r = await self._get("/health", timeout=2.0)
+                r.raise_for_status()
+                return r.json()
+            except Exception:
+                pass
+        if self.should_use_relay():
             info = commander_relay.get_pc_list().get(self.name, {})
             return {"status": "online", "network": info.get("network", "Remote")}
         try:
@@ -184,52 +215,95 @@ class AgentClient:
             return None
 
     async def status(self) -> dict:
-        if self.is_relay_online():
-            res = await commander_relay.send_command(self.name, "status", timeout=12.0)
+        # Prioritize local HTTP if on host PC for instant diagnostics without internet
+        if self.is_local:
+            try:
+                r = await self._get("/status", timeout=5.0)
+                r.raise_for_status()
+                return r.json()
+            except Exception as e:
+                logger.debug(f"Local status HTTP failed: {e}. Trying cloud relay...")
+        if self.should_use_relay():
+            res = await commander_relay.send_command(self.name, "status", timeout=30.0)
             if res.get("ok") and "stats" in res:
                 return res["stats"]
-        r = await self._get("/status")
+            elif "error" in res:
+                raise Exception(res["error"])
+        r = await self._get("/status", timeout=15.0)
         r.raise_for_status()
         return r.json()
 
     async def screenshot(self, chat_id: Optional[int] = None) -> Any:
-        if self.is_relay_online() and chat_id:
-            res = await commander_relay.send_command(self.name, "screenshot", {"chat_id": chat_id}, timeout=25.0)
+        # If local host PC, capture screenshot directly via fast local loopback
+        if self.is_local:
+            try:
+                r = await self._get("/screenshot", timeout=20.0)
+                r.raise_for_status()
+                return r.content
+            except Exception as e:
+                logger.debug(f"Local screenshot HTTP failed: {e}. Trying relay...")
+        if self.should_use_relay() and chat_id:
+            res = await commander_relay.send_command(self.name, "screenshot", {"chat_id": chat_id}, timeout=50.0)
             if res.get("ok"):
                 return {"direct_upload": True}
-        r = await self._get("/screenshot", timeout=20.0)
+            raise Exception(res.get("error", "Remote screenshot failed"))
+        r = await self._get("/screenshot", timeout=30.0)
         r.raise_for_status()
         return r.content
 
     async def webcam(self, chat_id: Optional[int] = None) -> Any:
-        if self.is_relay_online() and chat_id:
-            res = await commander_relay.send_command(self.name, "webcam", {"chat_id": chat_id}, timeout=25.0)
+        if self.is_local:
+            try:
+                r = await self._get("/webcam", timeout=20.0)
+                r.raise_for_status()
+                return r.content
+            except Exception as e:
+                logger.debug(f"Local webcam HTTP failed: {e}. Trying relay...")
+        if self.should_use_relay() and chat_id:
+            res = await commander_relay.send_command(self.name, "webcam", {"chat_id": chat_id}, timeout=50.0)
             if res.get("ok"):
                 return {"direct_upload": True}
-        r = await self._get("/webcam", timeout=20.0)
+            raise Exception(res.get("error", "Remote webcam failed"))
+        r = await self._get("/webcam", timeout=30.0)
         r.raise_for_status()
         return r.content
 
     async def record_screen(self, duration: int, chat_id: Optional[int] = None) -> Any:
-        if self.is_relay_online() and chat_id:
-            res = await commander_relay.send_command(self.name, "record_screen", {"duration": duration, "chat_id": chat_id}, timeout=duration + 35.0)
+        if self.is_local:
+            try:
+                r = await self._post(f"/record/screen?duration={duration}", timeout=duration + 35.0)
+                r.raise_for_status()
+                return r.content
+            except Exception as e:
+                logger.debug(f"Local screen record HTTP failed: {e}. Trying relay...")
+        if self.should_use_relay() and chat_id:
+            res = await commander_relay.send_command(self.name, "record_screen", {"duration": duration, "chat_id": chat_id}, timeout=duration + 60.0)
             if res.get("ok"):
                 return {"direct_upload": True}
-        r = await self._post(f"/record/screen?duration={duration}", timeout=duration + 30)
+            raise Exception(res.get("error", "Remote screen recording failed"))
+        r = await self._post(f"/record/screen?duration={duration}", timeout=duration + 45.0)
         r.raise_for_status()
         return r.content
 
     async def record_webcam(self, duration: int, chat_id: Optional[int] = None) -> Any:
-        if self.is_relay_online() and chat_id:
-            res = await commander_relay.send_command(self.name, "record_webcam", {"duration": duration, "chat_id": chat_id}, timeout=duration + 35.0)
+        if self.is_local:
+            try:
+                r = await self._post(f"/record/webcam?duration={duration}", timeout=duration + 35.0)
+                r.raise_for_status()
+                return r.content
+            except Exception as e:
+                logger.debug(f"Local webcam record HTTP failed: {e}. Trying relay...")
+        if self.should_use_relay() and chat_id:
+            res = await commander_relay.send_command(self.name, "record_webcam", {"duration": duration, "chat_id": chat_id}, timeout=duration + 60.0)
             if res.get("ok"):
                 return {"direct_upload": True}
-        r = await self._post(f"/record/webcam?duration={duration}", timeout=duration + 30)
+            raise Exception(res.get("error", "Remote webcam recording failed"))
+        r = await self._post(f"/record/webcam?duration={duration}", timeout=duration + 45.0)
         r.raise_for_status()
         return r.content
 
     async def cast_web_start(self) -> dict:
-        if self.is_relay_online():
+        if self.should_use_relay():
             res = await commander_relay.send_command(self.name, "cast_start", timeout=25.0)
             if res.get("ok"):
                 return res
@@ -238,7 +312,7 @@ class AgentClient:
         return r.json()
 
     async def cast_web_stop(self) -> dict:
-        if self.is_relay_online():
+        if self.should_use_relay():
             res = await commander_relay.send_command(self.name, "cast_stop", timeout=10.0)
             if res.get("ok"):
                 return res
@@ -247,7 +321,7 @@ class AgentClient:
         return r.json()
 
     async def cast_status(self) -> dict:
-        if self.is_relay_online():
+        if self.should_use_relay():
             res = await commander_relay.send_command(self.name, "cast_status", timeout=10.0)
             if res.get("ok"):
                 return res.get("status", {})
@@ -259,7 +333,7 @@ class AgentClient:
             return {"is_web_streaming": False, "is_rtmp_streaming": False}
 
     async def cast_frame(self, quality: int = 60, max_width: int = 960) -> bytes:
-        if self.is_relay_online():
+        if self.should_use_relay():
             res = await commander_relay.send_command(self.name, "cast_frame", {"quality": quality, "max_width": max_width}, timeout=10.0)
             if res.get("ok") and "frame_b64" in res:
                 import base64
@@ -269,7 +343,7 @@ class AgentClient:
         return r.content
 
     async def switch_desktop(self, action: str = "next") -> dict:
-        if self.is_relay_online():
+        if self.should_use_relay():
             return await commander_relay.send_command(self.name, "switch_desktop", {"action": action}, timeout=10.0)
         try:
             r = await self._post(f"/desktop/switch?action={action}", timeout=10.0)
@@ -279,7 +353,7 @@ class AgentClient:
             return {"ok": False, "msg": f"Desktop switch failed: {e}", "error": str(e)}
 
     async def get_open_windows(self, limit: int = 25) -> dict:
-        if self.is_relay_online():
+        if self.should_use_relay():
             return await commander_relay.send_command(self.name, "windows_list", {"limit": limit}, timeout=10.0)
         try:
             r = await self._get(f"/windows?limit={limit}", timeout=10.0)
@@ -289,7 +363,7 @@ class AgentClient:
             return {"ok": False, "windows": [], "error": str(e)}
 
     async def focus_window(self, target: Any) -> dict:
-        if self.is_relay_online():
+        if self.should_use_relay():
             return await commander_relay.send_command(self.name, "window_focus", {"target": str(target)}, timeout=10.0)
         try:
             r = await self._post(f"/windows/focus?target={urllib.parse.quote(str(target))}", timeout=10.0)
@@ -299,7 +373,7 @@ class AgentClient:
             return {"ok": False, "msg": f"Focus failed: {e}", "error": str(e)}
 
     async def cycle_window(self, direction: str = "next") -> dict:
-        if self.is_relay_online():
+        if self.should_use_relay():
             return await commander_relay.send_command(self.name, "window_cycle", {"direction": direction}, timeout=10.0)
         try:
             r = await self._post(f"/windows/cycle?direction={direction}", timeout=10.0)
@@ -319,7 +393,7 @@ class AgentClient:
         return r.json()
 
     async def processes(self, count: int = 15) -> dict:
-        if self.is_relay_online():
+        if self.should_use_relay():
             res = await commander_relay.send_command(self.name, "processes", {"limit": count}, timeout=12.0)
             if res.get("ok"):
                 return {"processes": res.get("processes", [])}
@@ -328,7 +402,7 @@ class AgentClient:
         return r.json()
 
     async def kill_process(self, target: str) -> dict:
-        if self.is_relay_online():
+        if self.should_use_relay():
             res = await commander_relay.send_command(self.name, "kill_process", {"target": target}, timeout=10.0)
             return {"success": res.get("ok", False), "message": res.get("msg", "")}
         r = await self._post("/kill", data={"target": target})
@@ -336,7 +410,7 @@ class AgentClient:
         return r.json()
 
     async def run_cmd(self, command: str) -> dict:
-        if self.is_relay_online():
+        if self.should_use_relay():
             res = await commander_relay.send_command(self.name, "cmd", {"command": command}, timeout=40.0)
             return {"output": res.get("output", "")}
         r = await self._post("/cmd", data={"command": command}, timeout=60.0)
@@ -349,7 +423,7 @@ class AgentClient:
         return r.json()
 
     async def browse_directory(self, path: str = "") -> dict:
-        if self.is_relay_online():
+        if self.should_use_relay():
             res = await commander_relay.send_command(self.name, "file_browse", {"path": path}, timeout=15.0)
             if res.get("ok") or "error" in res:
                 return res
@@ -361,7 +435,7 @@ class AgentClient:
             return {"ok": False, "error": str(e), "items": [], "current_path": path}
 
     async def get_file(self, path: str, chat_id: Optional[int] = None) -> Tuple[bytes, str]:
-        if self.is_relay_online() and chat_id:
+        if self.should_use_relay() and chat_id:
             res = await commander_relay.send_command(self.name, "file_download", {"path": path, "chat_id": chat_id}, timeout=60.0)
             if res.get("ok"):
                 return b"", "direct_upload"
@@ -382,7 +456,7 @@ class AgentClient:
         return r.json()
 
     async def get_clipboard(self) -> str:
-        if self.is_relay_online():
+        if self.should_use_relay():
             res = await commander_relay.send_command(self.name, "clipboard_get", timeout=10.0)
             return res.get("text", "")
         r = await self._get("/clipboard")
@@ -390,7 +464,7 @@ class AgentClient:
         return r.json().get("content", "")
 
     async def set_clipboard(self, text: str) -> bool:
-        if self.is_relay_online():
+        if self.should_use_relay():
             res = await commander_relay.send_command(self.name, "clipboard_set", {"text": text}, timeout=10.0)
             return res.get("ok", False)
         r = await self._post("/clipboard", data={"text": text})
@@ -398,7 +472,7 @@ class AgentClient:
         return r.json().get("success", False)
 
     async def speak(self, text: str) -> bool:
-        if self.is_relay_online():
+        if self.should_use_relay():
             res = await commander_relay.send_command(self.name, "tts", {"text": text}, timeout=15.0)
             return res.get("ok", False)
         r = await self._post("/tts", data={"text": text})
@@ -412,56 +486,56 @@ class AgentClient:
         return r.json()
 
     async def power_sleep(self) -> dict:
-        if self.is_relay_online():
+        if self.should_use_relay():
             return await commander_relay.send_command(self.name, "sleep", timeout=10.0)
         r = await self._post("/power/sleep")
         r.raise_for_status()
         return r.json()
 
     async def power_lock(self) -> dict:
-        if self.is_relay_online():
+        if self.should_use_relay():
             return await commander_relay.send_command(self.name, "lock", timeout=10.0)
         r = await self._post("/power/lock")
         r.raise_for_status()
         return r.json()
 
     async def power_shutdown(self, delay: int = 0) -> dict:
-        if self.is_relay_online():
+        if self.should_use_relay():
             return await commander_relay.send_command(self.name, "shutdown", {"delay": delay}, timeout=10.0)
         r = await self._post(f"/power/shutdown?delay={delay}")
         r.raise_for_status()
         return r.json()
 
     async def power_restart(self, delay: int = 5) -> dict:
-        if self.is_relay_online():
+        if self.should_use_relay():
             return await commander_relay.send_command(self.name, "restart", {"delay": delay}, timeout=10.0)
         r = await self._post(f"/power/restart?delay={delay}")
         r.raise_for_status()
         return r.json()
 
     async def power_cancel_shutdown(self) -> bool:
-        if self.is_relay_online():
+        if self.should_use_relay():
             res = await commander_relay.send_command(self.name, "cancel_shutdown", timeout=10.0)
             return res.get("ok", False)
         r = await self._post("/power/cancel-shutdown")
         return r.json().get("success", False)
 
     async def monitor_on(self) -> dict:
-        if self.is_relay_online():
+        if self.should_use_relay():
             return await commander_relay.send_command(self.name, "monitor_on", timeout=10.0)
         r = await self._post("/monitor/on")
         r.raise_for_status()
         return r.json()
 
     async def monitor_off(self) -> dict:
-        if self.is_relay_online():
+        if self.should_use_relay():
             return await commander_relay.send_command(self.name, "monitor_off", timeout=10.0)
         r = await self._post("/monitor/off")
         r.raise_for_status()
         return r.json()
 
     async def media_control(self, action: str):
-        if self.is_relay_online():
+        if self.should_use_relay():
             await commander_relay.send_command(self.name, "media_key", {"action": action}, timeout=10.0)
             return
         await self._post(f"/media/{action}")
@@ -477,7 +551,7 @@ class AgentClient:
         return r.json()
 
     async def alarm_stop(self) -> bool:
-        if self.is_relay_online():
+        if self.should_use_relay():
             res = await commander_relay.send_command(self.name, "alarm_stop", timeout=10.0)
             return res.get("ok", False)
         r = await self._post("/alarm/stop")
@@ -488,7 +562,7 @@ class AgentClient:
         return r.json().get("success", False)
 
     async def alarm_trigger_now(self, label: str = "Instant Alert") -> dict:
-        if self.is_relay_online():
+        if self.should_use_relay():
             res = await commander_relay.send_command(self.name, "alarm_start", {"duration": 30, "label": label}, timeout=10.0)
             return {"success": res.get("ok", False), "message": res.get("msg", "")}
         r = await self._post("/alarm/trigger-now", data={"label": label})
@@ -499,10 +573,14 @@ class AgentClient:
         return r.json()
 
     async def clean_scan(self) -> dict:
+        if self.should_use_relay():
+            return await commander_relay.send_command(self.name, "clean_scan", timeout=25.0)
         r = await self._get("/clean/scan")
         return r.json()
 
     async def clean_execute(self) -> dict:
+        if self.should_use_relay():
+            return await commander_relay.send_command(self.name, "clean_execute", timeout=25.0)
         r = await self._post("/clean/execute")
         return r.json()
 
@@ -831,6 +909,7 @@ def get_main_keyboard() -> InlineKeyboardMarkup:
             InlineKeyboardButton("🔄 Refresh", callback_data="cb_menu"),
         ],
         [
+            InlineKeyboardButton("🌐 Network Ping", callback_data="cb_net_ping"),
             InlineKeyboardButton("🔙 Switch PC", callback_data="fleet_picker"),
         ],
     ])
@@ -1497,10 +1576,23 @@ async def handle_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     agent = await require_pc(update, context)
     if not agent:
         return
+
+    chat_id = update.effective_chat.id
+    label = pc_label(context)
+    await safe_send_chat_action(context.bot, chat_id, ChatAction.TYPING)
+
+    status_msg = None
+    if not update.callback_query:
+        status_msg = await safe_reply(update, f"📊 <i>Querying hardware diagnostics from {html.escape(label)}...</i>", parse_mode="HTML")
+    else:
+        try:
+            await update.callback_query.edit_message_text(f"📊 <i>Querying hardware diagnostics from {html.escape(label)}...</i>", parse_mode="HTML")
+        except Exception:
+            pass
+
     try:
         stats = await agent.status()
         cores_str = ", ".join([f"{c:.0f}%" for c in stats.get('per_core', [])[:8]])
-        label = pc_label(context)
         text = (
             f"📊 <b>PC HARDWARE DIAGNOSTICS — {html.escape(label)}</b>\n"
             f"{'━' * 28}\n\n"
@@ -1514,15 +1606,19 @@ async def handle_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"📅 <b>Boot:</b> <code>{stats['boot_time']}</code>"
         )
         if update.callback_query:
-            await update.callback_query.edit_message_text(text, reply_markup=get_main_keyboard(), parse_mode="HTML")
+            await safe_telegram_call(update.callback_query.edit_message_text, text, reply_markup=get_main_keyboard(), parse_mode="HTML")
+        elif status_msg:
+            await safe_edit_text(status_msg, text, reply_markup=get_main_keyboard(), parse_mode="HTML")
         else:
-            await update.message.reply_text(text, reply_markup=get_main_keyboard(), parse_mode="HTML")
+            await safe_reply(update, text, reply_markup=get_main_keyboard(), parse_mode="HTML")
     except Exception as e:
-        err = f"❌ Failed to reach <b>{html.escape(pc_label(context))}</b>: <code>{html.escape(str(e)[:200])}</code>"
+        err = f"❌ Failed to reach <b>{html.escape(label)}</b>: <code>{html.escape(str(e)[:250])}</code>\n\n💡 <i>Internet connection may be unstable. Try /net to check latency.</i>"
         if update.callback_query:
-            await update.callback_query.edit_message_text(err, reply_markup=get_main_keyboard(), parse_mode="HTML")
+            await safe_telegram_call(update.callback_query.edit_message_text, err, reply_markup=get_main_keyboard(), parse_mode="HTML")
+        elif status_msg:
+            await safe_edit_text(status_msg, err, reply_markup=get_main_keyboard(), parse_mode="HTML")
         else:
-            await update.effective_message.reply_text(err, parse_mode="HTML")
+            await safe_reply(update, err, parse_mode="HTML")
 
 
 async def handle_screenshot(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1533,21 +1629,34 @@ async def handle_screenshot(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     label = pc_label(context)
     chat_id = update.effective_chat.id
-    msg = await update.effective_message.reply_text(f"📸 <i>Capturing screenshot from {html.escape(label)}...</i>", parse_mode="HTML")
+
+    await safe_send_chat_action(context.bot, chat_id, ChatAction.UPLOAD_PHOTO)
+    msg = await safe_reply(
+        update,
+        f"📸 <i>Capturing screenshot from {html.escape(label)}...</i>\n<small>⏳ Connecting over network...</small>",
+        parse_mode="HTML"
+    )
     try:
         res = await agent.screenshot(chat_id=chat_id)
         if isinstance(res, bytes):
-            await update.effective_chat.send_photo(
+            await safe_send_photo(
+                context.bot,
+                chat_id=chat_id,
                 photo=res,
                 caption=f"🖥️ <b>Screenshot — {html.escape(label)}</b>\n📅 {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
                 parse_mode="HTML"
             )
-        try:
-            await msg.delete()
-        except Exception:
-            pass
+        if msg:
+            try:
+                await msg.delete()
+            except Exception:
+                pass
     except Exception as e:
-        await msg.edit_text(f"❌ Screenshot failed: {e}")
+        err_text = f"❌ <b>Screenshot failed:</b> <code>{html.escape(str(e))}</code>\n\n💡 <i>Tip: Send /net to test connection ping.</i>"
+        if msg:
+            await safe_edit_text(msg, err_text, parse_mode="HTML")
+        else:
+            await safe_reply(update, err_text, parse_mode="HTML")
 
 
 async def handle_webcam(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1558,21 +1667,34 @@ async def handle_webcam(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     label = pc_label(context)
     chat_id = update.effective_chat.id
-    msg = await update.effective_message.reply_text(f"📷 <i>Accessing webcam on {html.escape(label)}...</i>", parse_mode="HTML")
+
+    await safe_send_chat_action(context.bot, chat_id, ChatAction.UPLOAD_PHOTO)
+    msg = await safe_reply(
+        update,
+        f"📷 <i>Accessing webcam on {html.escape(label)}...</i>\n<small>⏳ Connecting over network...</small>",
+        parse_mode="HTML"
+    )
     try:
         res = await agent.webcam(chat_id=chat_id)
         if isinstance(res, bytes):
-            await update.effective_chat.send_photo(
+            await safe_send_photo(
+                context.bot,
+                chat_id=chat_id,
                 photo=res,
                 caption=f"📷 <b>Webcam — {html.escape(label)}</b>\n📅 {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
                 parse_mode="HTML"
             )
-        try:
-            await msg.delete()
-        except Exception:
-            pass
+        if msg:
+            try:
+                await msg.delete()
+            except Exception:
+                pass
     except Exception as e:
-        await msg.edit_text(f"❌ Webcam failed: {e}")
+        err_text = f"❌ <b>Webcam failed:</b> <code>{html.escape(str(e))}</code>\n\n💡 <i>Tip: Send /net to test connection ping.</i>"
+        if msg:
+            await safe_edit_text(msg, err_text, parse_mode="HTML")
+        else:
+            await safe_reply(update, err_text, parse_mode="HTML")
 
 
 async def execute_screen_recording(update: Update, context: ContextTypes.DEFAULT_TYPE, duration: int = 10):
@@ -2137,20 +2259,35 @@ async def handle_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not agent:
         return
     if not context.args:
-        await update.message.reply_text("Usage: <code>/cmd ipconfig</code>", parse_mode="HTML")
+        await safe_reply(update, "Usage: <code>/cmd ipconfig</code>", parse_mode="HTML")
         return
     command = " ".join(context.args)
+    label = pc_label(context)
+    chat_id = update.effective_chat.id
+
+    await safe_send_chat_action(context.bot, chat_id, ChatAction.TYPING)
+    status_msg = await safe_reply(
+        update,
+        f"⚡ <i>Executing command on {html.escape(label)}...</i>\n<code>{html.escape(command[:80])}</code>",
+        parse_mode="HTML"
+    )
     try:
         result = await agent.run_cmd(command)
         code = result.get("exit_code", -1)
         output = result.get("output", "")
         emoji = "✅" if code == 0 else "⚠️"
         truncated = output[:3500] if len(output) > 3500 else output
-        label = pc_label(context)
-        text = f"{emoji} <b>{html.escape(label)} — Code {code}:</b>\n<pre>{html.escape(truncated)}</pre>"
-        await update.message.reply_text(text, parse_mode="HTML")
+        text = f"{emoji} <b>{html.escape(label)} — Code {code}:</b>\n<pre>{html.escape(truncated or '(No output)')}</pre>"
+        if status_msg:
+            await safe_edit_text(status_msg, text, parse_mode="HTML")
+        else:
+            await safe_reply(update, text, parse_mode="HTML")
     except Exception as e:
-        await update.message.reply_text(f"❌ Command failed: {e}")
+        err_text = f"❌ Command execution failed on <b>{html.escape(label)}</b>: <code>{html.escape(str(e))}</code>\n\n💡 <i>Try /net to check connectivity.</i>"
+        if status_msg:
+            await safe_edit_text(status_msg, err_text, parse_mode="HTML")
+        else:
+            await safe_reply(update, err_text, parse_mode="HTML")
 
 
 async def handle_get_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2265,12 +2402,19 @@ async def handle_clean(update: Update, context: ContextTypes.DEFAULT_TYPE):
     agent = await require_pc(update, context)
     if not agent:
         return
+    label = pc_label(context)
+    chat_id = update.effective_chat.id
+    await safe_send_chat_action(context.bot, chat_id, ChatAction.TYPING)
+
+    status_msg = None
+    if not update.callback_query:
+        status_msg = await safe_reply(update, f"🧹 <i>Scanning storage on {html.escape(label)}...</i>", parse_mode="HTML")
+
     try:
         result = await agent.clean_scan()
         candidates = result.get("candidates", [])
-        label = pc_label(context)
         if not candidates:
-            text = f"🧹 <b>STORAGE CLEAN — {html.escape(label)}</b>\n\n✨ <b>Already clean!</b>"
+            text = f"🧹 <b>STORAGE CLEAN — {html.escape(label)}</b>\n\n✨ <b>Already clean! No temporary or old files found.</b>"
             kb = InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back to Menu", callback_data="cb_menu")]])
         else:
             total_mb = round(sum(c.get("size_bytes", 0) for c in candidates) / (1024 * 1024), 2)
@@ -2286,11 +2430,19 @@ async def handle_clean(update: Update, context: ContextTypes.DEFAULT_TYPE):
                  InlineKeyboardButton("🔙 Menu", callback_data="cb_menu")],
             ])
         if update.callback_query:
-            await update.callback_query.edit_message_text(text, reply_markup=kb, parse_mode="HTML")
+            await safe_telegram_call(update.callback_query.edit_message_text, text, reply_markup=kb, parse_mode="HTML")
+        elif status_msg:
+            await safe_edit_text(status_msg, text, reply_markup=kb, parse_mode="HTML")
         else:
-            await update.message.reply_text(text, reply_markup=kb, parse_mode="HTML")
+            await safe_reply(update, text, reply_markup=kb, parse_mode="HTML")
     except Exception as e:
-        await update.effective_message.reply_text(f"❌ Storage scan failed: {e}")
+        err = f"❌ Storage scan failed on <b>{html.escape(label)}</b>: <code>{html.escape(str(e))}</code>"
+        if update.callback_query:
+            await safe_telegram_call(update.callback_query.edit_message_text, err, parse_mode="HTML")
+        elif status_msg:
+            await safe_edit_text(status_msg, err, parse_mode="HTML")
+        else:
+            await safe_reply(update, err, parse_mode="HTML")
 
 
 async def handle_alarm(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2604,19 +2756,198 @@ async def handle_incoming_text(update: Update, context: ContextTypes.DEFAULT_TYP
         await update.message.reply_text(f"❌ TTS error: {e}")
 
 
+# ═══════════════════════════════════════════════════════════════════════
+#   RESILIENT TELEGRAM CALLS & NETWORK SHIELD
+# ═══════════════════════════════════════════════════════════════════════
+
+async def safe_telegram_call(coro_fn, *args, retries: int = 3, **kwargs) -> Any:
+    """
+    Execute a Telegram API coroutine with automatic retry and backoff
+    for transient network errors (TimedOut, NetworkError, RetryAfter).
+    Prevents bot from failing to respond under bad/unstable internet conditions.
+    """
+    for attempt in range(1, retries + 1):
+        try:
+            return await coro_fn(*args, **kwargs)
+        except telegram.error.RetryAfter as e:
+            wait_time = max(float(e.retry_after), 1.0) + 0.5
+            logger.warning(f"Telegram flood control: waiting {wait_time}s...")
+            await asyncio.sleep(wait_time)
+        except telegram.error.BadRequest as e:
+            if "message is not modified" in str(e).lower():
+                return None
+            raise
+        except (telegram.error.TimedOut, telegram.error.NetworkError) as e:
+            if attempt == retries:
+                logger.error(f"Telegram API call failed after {retries} retries: {e}")
+                raise
+            backoff = 1.0 * (1.5 ** (attempt - 1))
+            logger.warning(f"Telegram network glitch ({e}). Retrying in {backoff:.1f}s (attempt {attempt}/{retries})...")
+            await asyncio.sleep(backoff)
+        except Exception:
+            raise
+
+
+async def safe_reply(update: Update, text: str, **kwargs) -> Optional[Any]:
+    """Safely reply to an update message with retries."""
+    if not update or not update.effective_message:
+        return None
+    try:
+        return await safe_telegram_call(update.effective_message.reply_text, text, **kwargs)
+    except Exception as e:
+        logger.error(f"safe_reply failed: {e}")
+        return None
+
+
+async def safe_edit_text(message: Any, text: str, **kwargs) -> Optional[Any]:
+    """Safely edit a message with retries."""
+    if not message:
+        return None
+    try:
+        return await safe_telegram_call(message.edit_text, text, **kwargs)
+    except Exception as e:
+        logger.error(f"safe_edit_text failed: {e}")
+        return None
+
+
+async def safe_send_photo(bot, chat_id: int, photo: Any, **kwargs) -> Optional[Any]:
+    """Safely send photo with retries."""
+    try:
+        return await safe_telegram_call(bot.send_photo, chat_id=chat_id, photo=photo, **kwargs)
+    except Exception as e:
+        logger.error(f"safe_send_photo failed: {e}")
+        return None
+
+
+async def safe_send_message(bot, chat_id: int, text: str, **kwargs) -> Optional[Any]:
+    """Safely send message with retries."""
+    try:
+        return await safe_telegram_call(bot.send_message, chat_id=chat_id, text=text, **kwargs)
+    except Exception as e:
+        logger.error(f"safe_send_message failed: {e}")
+        return None
+
+
+async def safe_send_chat_action(bot, chat_id: int, action: str):
+    """Safely send chat action without raising on network glitches."""
+    try:
+        await bot.send_chat_action(chat_id=chat_id, action=action)
+    except Exception:
+        pass
+
+
+async def handle_net(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Network connection diagnostics: checks latency, broker, and local agent."""
+    if not await check_access(update, context):
+        return
+
+    chat_id = update.effective_chat.id
+    await safe_send_chat_action(context.bot, chat_id, ChatAction.TYPING)
+    status_msg = await safe_reply(update, "📡 <i>Running network diagnostics...</i>", parse_mode="HTML")
+
+    # 1. Measure Telegram API roundtrip latency
+    t0 = time.time()
+    tg_ok = False
+    tg_ms = 0
+    try:
+        await context.bot.get_me()
+        tg_ms = int((time.time() - t0) * 1000)
+        tg_ok = True
+    except Exception:
+        tg_ms = int((time.time() - t0) * 1000)
+
+    # 2. Check Cloud Relay (MQTT) status
+    relay_status = "Disconnected 🔴"
+    broker_info = "N/A"
+    online_pcs = 0
+    if commander_relay:
+        broker_info = f"{commander_relay.broker}:{commander_relay.port}"
+        if commander_relay.is_connected:
+            relay_status = "Connected 🟢"
+            pcs = commander_relay.get_pc_list()
+            online_pcs = sum(1 for p in pcs.values() if p.get("status") == "online")
+        else:
+            relay_status = "Reconnecting 🟡"
+
+    # 3. Check selected PC / Local Agent latency
+    agent = get_agent(context)
+    pc_name = pc_label(context)
+    agent_status = "Unknown ⚪"
+    agent_ms = 0
+    if agent:
+        t_agent = time.time()
+        try:
+            h = await agent.health()
+            agent_ms = int((time.time() - t_agent) * 1000)
+            if h:
+                net_type = h.get("network", "Online")
+                agent_status = f"Online 🟢 ({agent_ms}ms) [{net_type}]"
+            else:
+                agent_status = "Offline / Unreachable 🔴"
+        except Exception as e:
+            agent_status = f"Error 🔴 ({e})"
+
+    # Rating
+    if tg_ok and tg_ms < 250:
+        overall = "🟢 <b>Optimal Connection</b>"
+    elif tg_ok and tg_ms < 700:
+        overall = "🟡 <b>Moderate Latency (Jitter / Mobile Data)</b>"
+    elif tg_ok:
+        overall = "🟠 <b>High Latency / Slow Connection</b>"
+    else:
+        overall = "🔴 <b>Severely Degraded Connection</b>"
+
+    text = (
+        f"🌐 <b>NETWORK CONNECTIVITY DIAGNOSTICS</b>\n"
+        f"{'━' * 32}\n\n"
+        f"📊 <b>Connection Health:</b> {overall}\n\n"
+        f"✈️ <b>Telegram API Ping:</b> <code>{tg_ms} ms</code> {'🟢' if tg_ok and tg_ms < 300 else ('🟡' if tg_ok else '🔴')}\n"
+        f"☁️ <b>Cloud Relay:</b> {relay_status}\n"
+        f"   • <b>Broker:</b> <code>{broker_info}</code>\n"
+        f"   • <b>Fleet PCs Online:</b> <code>{online_pcs}</code>\n\n"
+        f"🖥️ <b>Target PC ({html.escape(pc_name)}):</b>\n"
+        f"   • <b>Status:</b> {agent_status}\n\n"
+        f"🛡️ <i>Sentinel Anti-Timeout Shield is Active:</i>\n"
+        f"• Auto-retry on packet loss (up to 3x)\n"
+        f"• HTTP timeouts extended to 60s\n"
+        f"• Direct local HTTP routing prioritized\n"
+        f"• Automatic screenshot JPEG compression"
+    )
+
+    kb = InlineKeyboardMarkup([
+        [InlineKeyboardButton("🔄 Re-test Ping", callback_data="cb_net_ping")],
+        [InlineKeyboardButton("🔙 Main Menu", callback_data="cb_menu")],
+    ])
+
+    if status_msg:
+        await safe_edit_text(status_msg, text, reply_markup=kb, parse_mode="HTML")
+    else:
+        await safe_reply(update, text, reply_markup=kb, parse_mode="HTML")
+
+
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
-    logger.error(f"Exception while handling update: {context.error}")
+    err = context.error
+    if not err:
+        return
+    err_str = str(err)
+    err_type = type(err).__name__
+
+    # Network hiccups on unstable internet — log gently and avoid crashing/spamming
+    if "TimedOut" in err_type or "NetworkError" in err_type or "ConnectError" in err_str:
+        logger.warning(f"Telegram network latency hiccup (auto-retrying): {err}")
+        return
+
+    logger.error(f"Exception while handling update: {err}")
     if isinstance(update, Update):
         if update.callback_query:
             try:
-                await update.callback_query.answer("⚠️ Error occurred.")
+                await update.callback_query.answer("⚠️ Request delayed by network.")
             except Exception:
                 pass
         if update.effective_message:
             try:
-                err_msg = str(context.error)
-                if "Message is not modified" not in err_msg:
-                    await update.effective_message.reply_text(f"⚠️ <code>{html.escape(err_msg[:300])}</code>", parse_mode="HTML")
+                if "Message is not modified" not in err_str:
+                    await update.effective_message.reply_text(f"⚠️ <code>{html.escape(err_str[:300])}</code>", parse_mode="HTML")
             except Exception:
                 pass
 
@@ -2629,7 +2960,10 @@ async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     if not query:
         return
-    await query.answer()
+    try:
+        await query.answer()
+    except Exception:
+        pass
 
     if not is_authorized(query.from_user.id):
         await query.message.reply_text("⛔ Unauthorized.")
@@ -2637,6 +2971,10 @@ async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # Allow fleet picker without PIN (but not PC commands)
     data = query.data
+
+    if data == "cb_net_ping":
+        await handle_net(update, context)
+        return
 
     if config.BOT_PIN and not is_authenticated(query.from_user.id):
         # Allow fleet navigation even when locked
@@ -3679,16 +4017,23 @@ async def poll_agent_events(app: Application):
 # ═══════════════════════════════════════════════════════════════════════
 
 def ensure_single_bot_instance():
-    """Terminate any stale older instances of the bot to prevent Telegram polling conflicts."""
+    """Terminate any stale older instances of THIS bot to prevent Telegram polling conflicts."""
     import psutil
     cur_pid = os.getpid()
+    cur_dir = str(config.BASE_DIR).lower()
     for p in psutil.process_iter(['pid', 'name', 'cmdline']):
         try:
             if p.pid == cur_pid:
                 continue
             cmdline = p.info.get('cmdline') or []
             cmd_str = " ".join(cmdline).lower()
-            if "bot.py" in cmd_str and ("python" in p.info.get('name', '').lower() or "pc-sentinel" in p.info.get('name', '').lower()):
+            p_name = p.info.get('name', '').lower()
+            # Only match processes that belong specifically to PC-Remote-Sentinel
+            is_our_commander = (
+                ("pc-sentinel.exe" in p_name and "agent" not in p_name)
+                or (cur_dir in cmd_str and "bot.py" in cmd_str)
+            )
+            if is_our_commander:
                 logger.warning(f"Terminating older conflicting bot process (PID {p.pid})...")
                 p.terminate()
                 p.wait(timeout=2.0)
@@ -3708,11 +4053,25 @@ def main():
     # Auto-spawn local agent on Windows so Host PC is active immediately
     ensure_local_agent_running()
 
-    app = ApplicationBuilder().token(config.BOT_TOKEN).build()
+    request = HTTPXRequest(
+        connection_pool_size=32,
+        connect_timeout=30.0,
+        read_timeout=60.0,
+        write_timeout=60.0,
+        pool_timeout=30.0,
+    )
+    app = (
+        ApplicationBuilder()
+        .token(config.BOT_TOKEN)
+        .request(request)
+        .get_updates_request(request)
+        .build()
+    )
     app.add_error_handler(error_handler)
 
     # Register handlers
     app.add_handler(CommandHandler(["start", "menu"], handle_start))
+    app.add_handler(CommandHandler(["net", "ping", "network"], handle_net))
     app.add_handler(CommandHandler("pcs", handle_pcs))
     app.add_handler(CommandHandler("reload", handle_reload))
     app.add_handler(CommandHandler("status", handle_status))
@@ -3821,6 +4180,7 @@ def main():
             BotCommand("clean", "Cleanup storage"),
             BotCommand("open", "Open URL/App on PC"),
             BotCommand("cmd", "Execute command"),
+            BotCommand("net", "Network Latency & Connectivity Diagnostics"),
         ]
         try:
             await application.bot.set_my_commands(cmds)
@@ -3861,7 +4221,12 @@ def main():
 
     app.post_init = post_init
     logger.info("🛡️ Fleet Commander Bot is running...")
-    app.run_polling()
+    app.run_polling(
+        poll_interval=0.5,
+        timeout=30,
+        bootstrap_retries=-1,
+        drop_pending_updates=False,
+    )
 
 
 if __name__ == "__main__":
