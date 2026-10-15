@@ -21,11 +21,46 @@ if %errorlevel% neq 0 (
 )
 
 :: 2. Ensure dedicated executables exist for Task Manager visibility
-for /f "delims=" %%i in ('where python') do set "PYTHON_BIN=%%i" & goto :found_py
-:found_py
+set "PYTHON_BIN="
+for /f "delims=" %%i in ('python -c "import sys; print(sys.executable)" 2^>nul') do (
+    set "CANDIDATE=%%i"
+    if exist "!CANDIDATE!" (
+        echo !CANDIDATE! | findstr /i "WindowsApps" >nul 2>&1
+        if errorlevel 1 set "PYTHON_BIN=!CANDIDATE!"
+    )
+)
+if not defined PYTHON_BIN (
+    for /f "delims=" %%i in ('py -3 -c "import sys; print(sys.executable)" 2^>nul') do (
+        set "CANDIDATE=%%i"
+        if exist "!CANDIDATE!" set "PYTHON_BIN=!CANDIDATE!"
+    )
+)
+if not defined PYTHON_BIN (
+    for %%p in (
+        "C:\Program Files\Python314\python.exe"
+        "C:\Program Files\Python313\python.exe"
+        "C:\Program Files\Python312\python.exe"
+        "C:\Program Files\Python311\python.exe"
+        "C:\Program Files\Python310\python.exe"
+        "C:\Python314\python.exe"
+        "C:\Python313\python.exe"
+        "C:\Python312\python.exe"
+        "C:\Python311\python.exe"
+        "C:\Python310\python.exe"
+        "%LOCALAPPDATA%\Programs\Python\Python314\python.exe"
+        "%LOCALAPPDATA%\Programs\Python\Python313\python.exe"
+        "%LOCALAPPDATA%\Programs\Python\Python312\python.exe"
+        "%LOCALAPPDATA%\Programs\Python\Python311\python.exe"
+        "%LOCALAPPDATA%\Programs\Python\Python310\python.exe"
+    ) do (
+        if not defined PYTHON_BIN (
+            if exist %%p set "PYTHON_BIN=%%~p"
+        )
+    )
+)
 if defined PYTHON_BIN (
-    if not exist "%~dp0pc-sentinel.exe" copy "!PYTHON_BIN!" "%~dp0pc-sentinel.exe" >nul
-    if not exist "%~dp0pc-sentinel-agent.exe" copy "!PYTHON_BIN!" "%~dp0pc-sentinel-agent.exe" >nul
+    if not exist "%~dp0pc-sentinel.exe" copy "!PYTHON_BIN!" "%~dp0pc-sentinel.exe" >nul 2>&1
+    if not exist "%~dp0pc-sentinel-agent.exe" copy "!PYTHON_BIN!" "%~dp0pc-sentinel-agent.exe" >nul 2>&1
 )
 
 :: 3. Register Resilient Windows Task Scheduler Tasks (No battery limits, auto-restart)

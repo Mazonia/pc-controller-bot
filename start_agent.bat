@@ -1,23 +1,65 @@
 @echo off
+setlocal enabledelayedexpansion
 title PC-Sentinel-Agent
 cd /d "%~dp0"
 
-echo ==============================================
-echo     PC REMOTE SENTINEL AGENT — Starting
-echo ==============================================
-echo.
+set "PY_CMD="
 
-:: Create dedicated named executable so Task Manager shows 'pc-sentinel-agent.exe'
-for /f "delims=" %%i in ('where python') do set PYTHON_BIN=%%i & goto :found_py
-:found_py
+:: Check direct python
+for /f "delims=" %%i in ('python -c "import sys; print(sys.executable)" 2^>nul') do (
+    set "CANDIDATE=%%i"
+    if exist "!CANDIDATE!" (
+        echo !CANDIDATE! | findstr /i "WindowsApps" >nul 2>&1
+        if errorlevel 1 set "PY_CMD=!CANDIDATE!"
+    )
+)
+if defined PY_CMD goto :found_py
 
-if not exist pc-sentinel-agent.exe (
-    copy "%PYTHON_BIN%" pc-sentinel-agent.exe >nul
+:: Check py launcher
+if not defined PY_CMD (
+    for /f "delims=" %%i in ('py -3 -c "import sys; print(sys.executable)" 2^>nul') do (
+        set "CANDIDATE=%%i"
+        if exist "!CANDIDATE!" set "PY_CMD=!CANDIDATE!"
+    )
+)
+if defined PY_CMD goto :found_py
+
+:: Check common paths
+if not defined PY_CMD (
+    for %%p in (
+        "C:\Program Files\Python314\python.exe"
+        "C:\Program Files\Python313\python.exe"
+        "C:\Program Files\Python312\python.exe"
+        "C:\Program Files\Python311\python.exe"
+        "C:\Program Files\Python310\python.exe"
+        "C:\Python314\python.exe"
+        "C:\Python313\python.exe"
+        "C:\Python312\python.exe"
+        "C:\Python311\python.exe"
+        "C:\Python310\python.exe"
+        "%LOCALAPPDATA%\Programs\Python\Python314\python.exe"
+        "%LOCALAPPDATA%\Programs\Python\Python313\python.exe"
+        "%LOCALAPPDATA%\Programs\Python\Python312\python.exe"
+        "%LOCALAPPDATA%\Programs\Python\Python311\python.exe"
+        "%LOCALAPPDATA%\Programs\Python\Python310\python.exe"
+    ) do (
+        if not defined PY_CMD (
+            if exist %%p set "PY_CMD=%%~p"
+        )
+    )
+)
+if defined PY_CMD goto :found_py
+
+:: Check local named executable if present
+if exist "%~dp0pc-sentinel-agent.exe" (
+    set "PY_CMD=%~dp0pc-sentinel-agent.exe"
+    goto :found_py
 )
 
+set "PY_CMD=python"
+
+:found_py
 :run_loop
-echo [%TIME%] Starting PC Sentinel Agent as [pc-sentinel-agent.exe]...
-pc-sentinel-agent.exe agent.py
-echo [%TIME%] [!] Agent stopped (exit code %errorlevel%). Auto-restarting in 3 seconds...
+"%PY_CMD%" agent.py
 timeout /t 3 /nobreak >nul
 goto :run_loop

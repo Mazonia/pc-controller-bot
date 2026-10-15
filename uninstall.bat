@@ -32,10 +32,11 @@ timeout /t 1 /nobreak >nul
 echo [*] Removing Task Scheduler entry...
 schtasks /delete /tn "PCSentinelAgent" /f >nul 2>&1
 
-:: 4. Remove Startup fallback
+:: 4. Remove Startup fallback and Registry Run
 if exist "C:\ProgramData\Microsoft\Windows\Start Menu\Programs\Startup\PCSentinelAgent.vbs" (
     del /f /q "C:\ProgramData\Microsoft\Windows\Start Menu\Programs\Startup\PCSentinelAgent.vbs" >nul 2>&1
 )
+reg delete "HKCU\Software\Microsoft\Windows\CurrentVersion\Run" /v "PCSentinelAgent" /f >nul 2>&1
 
 :: 5. Remove Windows Firewall Rule
 netsh advfirewall firewall delete rule name="PCSentinelAgent" >nul 2>&1

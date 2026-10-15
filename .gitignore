@@ -7,3 +7,5 @@ downloads/
 __pycache__/
 *.pyc
 *.exe
+fleet_deploy_log.json
+*.log

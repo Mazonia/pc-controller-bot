@@ -230,19 +230,37 @@ What happens if your Main PC or Commander server goes offline?
   4. You immediately regain full interactive control over your entire fleet.
 - **Automatic Last Will & Testament (LWT)**: If any monitored PC loses power or drops offline while you are away, the broker immediately updates that PC's status to `🔴 Offline` so your bot never displays stale data.
 
-## 💾 Deploying on Target PCs (USB Pendrive Setup)
+## 💾 Deploying on Target PCs (Two Effortless Methods)
 
-To monitor any PC (personal laptop, gaming PC, home workstation, office desktop, or brand-new unboxed PC):
+You can easily deploy PC-Remote-Sentinel to any number of target Windows PCs (personal laptops, office desktops, gaming rigs, or brand-new PCs) using either **WiFi Network Deployment** or a **Clean USB Pendrive**.
 
-1. **Copy the repository folder to your USB pendrive** (ensure `install.bat`, `python-installer.exe`, and `deploy_config.env` are present).
-2. **Plug the USB pendrive into the target PC**.
-3. **Double-click `install.bat`**.
-   - Grants Windows UAC Administrator rights.
-   - Automatically installs Python (using the bundled offline installer if not already installed).
-   - Copies files to `C:\PCSentinel`.
-   - Registers a silent Task Scheduler auto-start on Windows user logon.
-   - Launches the background agent immediately.
-4. **Unplug your USB drive.** The PC is now live in your Telegram bot!
+Target PCs only receive the lightweight agent runtime (~250 KB). Master bot code (`bot.py`), configurations, and credentials are never deployed to target machines.
+
+### 🌐 Method 1: Over-the-Air Network Deployment (Recommended for 1–100+ PCs)
+
+Deploy to any PC on your local Wi-Fi or LAN without touching a USB drive:
+
+1. On your Main PC, double-click **`deploy_network.bat`** (Run as Administrator).
+2. It launches the local deployment server and copies the install command to your clipboard.
+3. On any target PC on the same Wi-Fi:
+   - Press **`Win + R`** (Windows Run prompt).
+   - Paste the one-liner command:
+     ```powershell
+     powershell -ep bypass -c "irm http://<YOUR_IP>:9090/install | iex"
+     ```
+   - Press **Enter** and walk away!
+4. The target PC automatically elevates, installs the agent in `C:\PCSentinel`, sets up silent autostart on logon, and immediately connects to your Telegram Bot.
+
+### 🔌 Method 2: Clean USB Pendrive Setup (~250 KB)
+
+If target PCs are on different networks or have no internet during initial setup:
+
+1. Insert your USB pendrive into your main computer.
+2. Double-click **`prepare_usb.bat`** and enter your USB drive letter (e.g. `E:`).
+3. The script copies **ONLY** the necessary agent files (~250 KB) to the USB drive. It leaves behind all bot files, tests, and master secrets. You can also optionally include the offline `python-installer.exe` for PCs without internet.
+4. Plug the USB into the target PC and double-click **`install.bat`**.
+5. Once complete, unplug the USB drive. The agent is now running silently in the background!
+
 
 ---
 

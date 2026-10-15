@@ -3,6 +3,12 @@ setlocal enabledelayedexpansion
 title PC Remote Sentinel - Universal Auto Installer
 color 0B
 
+:: Check for /SILENT flag (used by network deployer)
+set "SILENT_MODE=0"
+for %%a in (%*) do (
+    if /i "%%a"=="/SILENT" set "SILENT_MODE=1"
+)
+
 echo ==============================================================
 echo       PC REMOTE SENTINEL — UNIVERSAL PC AUTO INSTALLER
 echo ==============================================================
@@ -12,7 +18,11 @@ echo.
 net session >nul 2>&1
 if %errorlevel% neq 0 (
     echo [!] Requesting Administrator privileges...
-    powershell -Command "Start-Process '%~f0' -Verb RunAs"
+    if "%SILENT_MODE%"=="1" (
+        powershell -Command "Start-Process '%~f0' -ArgumentList '/SILENT' -Verb RunAs -Wait"
+    ) else (
+        powershell -Command "Start-Process '%~f0' -Verb RunAs"
+    )
     exit /b
 )
 
@@ -29,34 +39,65 @@ echo.
 echo [*] Checking Python environment...
 set "PY_CMD="
 
-:: Check if python in PATH is actual working python (not MS Store stub)
-for /f "delims=" %%i in ('where python 2^>nul') do (
-    "%%i" -c "import sys; print(sys.version)" >nul 2>&1
-    if !errorlevel! equ 0 (
-        set "PY_CMD=%%i"
-        goto :py_found
+:: Method 1: Check if python in PATH is working (not MS Store stub)
+for /f "delims=" %%i in ('python -c "import sys; print(sys.executable)" 2^>nul') do (
+    set "CANDIDATE=%%i"
+    if exist "!CANDIDATE!" (
+        echo !CANDIDATE! | findstr /i "WindowsApps" >nul 2>&1
+        if errorlevel 1 set "PY_CMD=!CANDIDATE!"
     )
 )
+if defined PY_CMD goto :py_found
 
-:: Check common standard Python install paths
-for %%p in (
-    "C:\Program Files\Python311\python.exe"
-    "C:\Program Files\Python312\python.exe"
-    "C:\Program Files\Python313\python.exe"
-    "C:\Program Files\Python314\python.exe"
-    "%LOCALAPPDATA%\Programs\Python\Python311\python.exe"
-    "%LOCALAPPDATA%\Programs\Python\Python312\python.exe"
-    "%LOCALAPPDATA%\Programs\Python\Python313\python.exe"
-    "%LOCALAPPDATA%\Programs\Python\Python314\python.exe"
-) do (
-    if exist %%p (
-        %%p -c "import sys" >nul 2>&1
-        if !errorlevel! equ 0 (
-            set "PY_CMD=%%~p"
-            goto :py_found
+:: Method 2: Check py launcher
+if not defined PY_CMD (
+    for /f "delims=" %%i in ('py -3 -c "import sys; print(sys.executable)" 2^>nul') do (
+        set "CANDIDATE=%%i"
+        if exist "!CANDIDATE!" set "PY_CMD=!CANDIDATE!"
+    )
+)
+if defined PY_CMD goto :py_found
+
+:: Method 3: Check standard Python install directories
+if not defined PY_CMD (
+    for %%p in (
+        "C:\Program Files\Python314\python.exe"
+        "C:\Program Files\Python313\python.exe"
+        "C:\Program Files\Python312\python.exe"
+        "C:\Program Files\Python311\python.exe"
+        "C:\Program Files\Python310\python.exe"
+        "C:\Python314\python.exe"
+        "C:\Python313\python.exe"
+        "C:\Python312\python.exe"
+        "C:\Python311\python.exe"
+        "C:\Python310\python.exe"
+        "%LOCALAPPDATA%\Programs\Python\Python314\python.exe"
+        "%LOCALAPPDATA%\Programs\Python\Python313\python.exe"
+        "%LOCALAPPDATA%\Programs\Python\Python312\python.exe"
+        "%LOCALAPPDATA%\Programs\Python\Python311\python.exe"
+        "%LOCALAPPDATA%\Programs\Python\Python310\python.exe"
+    ) do (
+        if not defined PY_CMD (
+            if exist %%p (
+                %%p -c "import sys" >nul 2>&1
+                if !errorlevel! equ 0 set "PY_CMD=%%~p"
+            )
         )
     )
 )
+if defined PY_CMD goto :py_found
+
+:: Method 4: PowerShell query
+if not defined PY_CMD (
+    for /f "delims=" %%i in ('powershell -NoProfile -Command "(Get-Command python -ErrorAction SilentlyContinue).Source" 2^>nul') do (
+        set "CANDIDATE=%%i"
+        if exist "!CANDIDATE!" (
+            echo !CANDIDATE! | findstr /i "WindowsApps" >nul 2>&1
+            if errorlevel 1 set "PY_CMD=!CANDIDATE!"
+        )
+    )
+)
+if defined PY_CMD goto :py_found
 
 :: Python not installed - Perform silent automated installation
 echo [!] Working Python not found on this PC.
@@ -69,7 +110,7 @@ if exist "%SRC_DIR%python-installer.exe" (
     timeout /t 10 /nobreak >nul
 ) else (
     :: Priority B: Download official installer silently via PowerShell
-    echo [*] Downloading official Python 64-bit installer...
+    echo [*] Downloading official Python installer...
     powershell -Command "[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; (New-Object Net.WebClient).DownloadFile('https://www.python.org/ftp/python/3.11.9/python-3.11.9-amd64.exe', '%TEMP%\python-installer.exe')"
     if exist "%TEMP%\python-installer.exe" (
         echo [*] Installing Python silently...
@@ -86,28 +127,37 @@ if exist "%SRC_DIR%python-installer.exe" (
 
 :: Re-verify Python after installation
 for %%p in (
-    "C:\Program Files\Python311\python.exe"
+    "C:\Program Files\Python314\python.exe"
+    "C:\Program Files\Python313\python.exe"
     "C:\Program Files\Python312\python.exe"
-    "%LOCALAPPDATA%\Programs\Python\Python311\python.exe"
+    "C:\Program Files\Python311\python.exe"
+    "%LOCALAPPDATA%\Programs\Python\Python314\python.exe"
+    "%LOCALAPPDATA%\Programs\Python\Python313\python.exe"
     "%LOCALAPPDATA%\Programs\Python\Python312\python.exe"
+    "%LOCALAPPDATA%\Programs\Python\Python311\python.exe"
 ) do (
-    if exist %%p (
-        set "PY_CMD=%%~p"
-        goto :py_found
+    if not defined PY_CMD (
+        if exist %%p (
+            set "PY_CMD=%%~p"
+            goto :py_found
+        )
     )
 )
 
-for /f "delims=" %%i in ('where python 2^>nul') do (
-    "%%i" -c "import sys" >nul 2>&1
-    if !errorlevel! equ 0 (
-        set "PY_CMD=%%i"
-        goto :py_found
+for /f "delims=" %%i in ('python -c "import sys; print(sys.executable)" 2^>nul') do (
+    set "CANDIDATE=%%i"
+    if exist "!CANDIDATE!" (
+        echo !CANDIDATE! | findstr /i "WindowsApps" >nul 2>&1
+        if errorlevel 1 (
+            set "PY_CMD=!CANDIDATE!"
+            goto :py_found
+        )
     )
 )
 
 echo [X] Error: Could not automatically install Python.
-echo     Please run python-installer.exe on the USB drive manually.
-pause
+echo     Please install Python from https://www.python.org/downloads/
+if not "%SILENT_MODE%"=="1" pause
 exit /b 1
 
 :py_found
@@ -126,8 +176,8 @@ if not exist "%DEST_DIR%" mkdir "%DEST_DIR%"
 if not exist "%DEST_DIR%\recordings" mkdir "%DEST_DIR%\recordings"
 if not exist "%DEST_DIR%\downloads" mkdir "%DEST_DIR%\downloads"
 
-:: 5. Copy necessary files from USB
-echo [*] Copying agent files from USB drive...
+:: 5. Copy ONLY essential agent files (minimal footprint ~250KB)
+echo [*] Copying necessary agent files...
 copy /y "%SRC_DIR%agent.py" "%DEST_DIR%\" >nul
 copy /y "%SRC_DIR%fleet_relay.py" "%DEST_DIR%\" >nul
 copy /y "%SRC_DIR%system_controller.py" "%DEST_DIR%\" >nul
@@ -136,9 +186,8 @@ copy /y "%SRC_DIR%requirements_agent.txt" "%DEST_DIR%\" >nul
 copy /y "%SRC_DIR%start_agent.bat" "%DEST_DIR%\" >nul
 copy /y "%SRC_DIR%start_agent_hidden.vbs" "%DEST_DIR%\" >nul
 
-if exist "%SRC_DIR%cloudflared.exe" (
-    echo [*] Copying cloudflared.exe for global streaming...
-    copy /y "%SRC_DIR%cloudflared.exe" "%DEST_DIR%\" >nul
+if exist "%SRC_DIR%uninstall.bat" (
+    copy /y "%SRC_DIR%uninstall.bat" "%DEST_DIR%\" >nul
 )
 
 :: 6. Generate agent.env
@@ -236,4 +285,9 @@ echo    This PC is now live and reporting to your Telegram Bot!
 echo    You can safely unplug your USB pendrive now.
 echo ==============================================================
 echo.
+if "%SILENT_MODE%"=="1" (
+    echo [*] Silent network install complete. Exiting...
+    exit /b 0
+)
 timeout /t 5
+
