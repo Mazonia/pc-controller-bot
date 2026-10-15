@@ -25,6 +25,9 @@ if not exist pc-sentinel-agent.exe (
     copy "%PYTHON_BIN%" pc-sentinel-agent.exe >nul
 )
 
-echo Starting PC Remote Sentinel Bot as [pc-sentinel.exe]...
+:run_loop
+echo [%TIME%] Starting PC Remote Sentinel Bot as [pc-sentinel.exe]...
 pc-sentinel.exe bot.py
-pause
+echo [%TIME%] [!] Bot stopped (exit code %errorlevel%). Auto-restarting in 3 seconds...
+timeout /t 3 /nobreak >nul
+goto :run_loop

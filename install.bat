@@ -184,13 +184,17 @@ echo [*] Configuring Windows Defender Firewall permissions...
 netsh advfirewall firewall delete rule name="PCSentinelAgent" >nul 2>&1
 netsh advfirewall firewall add rule name="PCSentinelAgent" dir=in action=allow program="%DEST_DIR%\pc-sentinel-agent.exe" enable=yes profile=any >nul 2>&1
 
-:: 10. Register Task Scheduler auto-start (Runs completely silent on user logon)
+:: 10. Register Task Scheduler auto-start (Runs completely silent on user logon with battery resilience)
 echo [*] Registering auto-start background task in Windows Task Scheduler...
-schtasks /delete /tn "PCSentinelAgent" /f >nul 2>&1
-schtasks /create /tn "PCSentinelAgent" /tr "wscript.exe \"%DEST_DIR%\start_agent_hidden.vbs\"" /sc ONLOGON /rl HIGHEST /f >nul
+powershell -NoProfile -ExecutionPolicy Bypass -Command "& { $trig = New-ScheduledTaskTrigger -AtLogOn; $set = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Days 0) -StartWhenAvailable -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1); $princ = New-ScheduledTaskPrincipal -UserId \"$env:USERDOMAIN\$env:USERNAME\" -LogonType Interactive -RunLevel Highest; $act = New-ScheduledTaskAction -Execute 'wscript.exe' -Argument '\"%DEST_DIR%\start_agent_hidden.vbs\"' -WorkingDirectory '%DEST_DIR%'; Register-ScheduledTask -TaskName 'PCSentinelAgent' -Action $act -Trigger $trig -Settings $set -Principal $princ -Force | Out-Null; }" >nul 2>&1
+if %errorlevel% neq 0 (
+    schtasks /delete /tn "PCSentinelAgent" /f >nul 2>&1
+    schtasks /create /tn "PCSentinelAgent" /tr "wscript.exe \"%DEST_DIR%\start_agent_hidden.vbs\"" /sc ONLOGON /rl HIGHEST /f >nul 2>&1
+)
 
-:: Common Startup folder fallback
+:: Startup folder & Registry Run fallbacks
 copy /y "%DEST_DIR%\start_agent_hidden.vbs" "C:\ProgramData\Microsoft\Windows\Start Menu\Programs\Startup\PCSentinelAgent.vbs" >nul 2>&1
+reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\Run" /v "PCSentinelAgent" /t REG_SZ /d "wscript.exe \"%DEST_DIR%\start_agent_hidden.vbs\"" /f >nul 2>&1
 
 :: 10. Register in USB fleet.json if available
 if exist "%SRC_DIR%fleet.json" (

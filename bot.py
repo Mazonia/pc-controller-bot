@@ -108,6 +108,9 @@ def ensure_local_agent_running():
             cwd=str(config.BASE_DIR),
             creationflags=creation_flags,
             close_fds=True,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
         )
     except Exception as e:
         logger.error(f"Could not auto-start local agent: {e}")
@@ -1324,10 +1327,13 @@ async def handle_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # If a PC is already selected, show its command center
     pc = get_selected_pc(context)
     if pc:
+        label = pc.get("label", pc.get("name", "Host PC"))
         agent = get_agent(context)
         try:
+            # If target PC is local host and agent is offline, revive it silently
+            if agent and agent.is_local:
+                ensure_local_agent_running()
             stats = await agent.status()
-            label = pc.get("label", pc["name"])
             text = (
                 f"🛡️ <b>CONTROLLING: {html.escape(label)}</b> ⚡\n"
                 f"<b>CPU:</b> <code>{stats['cpu_percent']:.1f}%</code> | "
@@ -1338,6 +1344,9 @@ async def handle_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             await update.message.reply_text(text, reply_markup=get_main_keyboard(), parse_mode="HTML")
         except Exception:
+            # Auto-revive local host agent if down
+            if pc.get("is_host") or pc.get("ip") in ("127.0.0.1", "localhost"):
+                ensure_local_agent_running()
             context.user_data.pop("selected_pc", None)
             await show_pc_picker(update, context, prompt=f"⚠️ <b>{html.escape(label)} is offline.</b>\nSelect another PC:")
         return
@@ -4047,6 +4056,20 @@ async def poll_agent_events(app: Application):
             logger.debug(f"Event poll error: {e}")
 
 
+async def local_agent_watchdog():
+    """Background watchdog to ensure local Host PC agent stays alive across sleep/wake."""
+    if sys.platform != "win32":
+        return
+    while True:
+        try:
+            await asyncio.sleep(15)
+            await asyncio.to_thread(ensure_local_agent_running)
+        except asyncio.CancelledError:
+            break
+        except Exception as e:
+            logger.debug(f"Local agent watchdog error: {e}")
+
+
 # ═══════════════════════════════════════════════════════════════════════
 #   MAIN
 # ═══════════════════════════════════════════════════════════════════════
@@ -4256,6 +4279,9 @@ def main():
 
         # Start event polling background task (LAN fallback)
         asyncio.create_task(poll_agent_events(application))
+
+        # Start watchdog to keep local host agent alive across sleep/wake
+        asyncio.create_task(local_agent_watchdog())
 
     app.post_init = post_init
     logger.info("🛡️ Fleet Commander Bot is running...")

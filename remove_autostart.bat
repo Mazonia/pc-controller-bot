@@ -16,37 +16,37 @@ if %errorlevel% neq 0 (
     exit /b
 )
 
-:: 2. Remove Task Scheduler Task
-echo [1/2] Removing Windows Task Scheduler task...
+:: 2. Remove Task Scheduler Tasks
+echo [1/3] Removing Windows Task Scheduler tasks...
 schtasks /delete /tn "PC-Sentinel-Commander" /f >nul 2>&1
-if %errorlevel% equ 0 (
-    echo     [+] Task Scheduler task removed.
-) else (
-    echo     [-] Task was not found in Task Scheduler (or already removed).
-)
+schtasks /delete /tn "PC-Sentinel-Agent" /f >nul 2>&1
+echo     [+] Task Scheduler tasks removed.
 
-:: 3. Remove Startup Folder Shortcut
-echo [2/2] Removing Windows Startup folder shortcut...
+:: 3. Remove Startup Folder Shortcuts
+echo [2/3] Removing Windows Startup folder shortcuts...
 set "STARTUP_DIR=%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup"
-set "SHORTCUT_PATH=%STARTUP_DIR%\PC-Sentinel-Commander.lnk"
-if exist "%SHORTCUT_PATH%" (
-    del /f /q "%SHORTCUT_PATH%" >nul 2>&1
-    echo     [+] Startup shortcut deleted.
-) else (
-    echo     [-] Shortcut was not found in Startup folder.
-)
+if exist "%STARTUP_DIR%\PC-Sentinel-Commander.lnk" del /f /q "%STARTUP_DIR%\PC-Sentinel-Commander.lnk" >nul 2>&1
+if exist "%STARTUP_DIR%\PC-Sentinel-Agent.lnk" del /f /q "%STARTUP_DIR%\PC-Sentinel-Agent.lnk" >nul 2>&1
+echo     [+] Startup shortcuts deleted.
 
-:: 4. Option to stop running process
+:: 4. Remove Registry Run Entries
+echo [3/3] Removing CurrentUser Run registry entries...
+reg delete "HKCU\Software\Microsoft\Windows\CurrentVersion\Run" /v "PC-Sentinel-Commander" /f >nul 2>&1
+reg delete "HKCU\Software\Microsoft\Windows\CurrentVersion\Run" /v "PC-Sentinel-Agent" /f >nul 2>&1
+echo     [+] Registry Run entries deleted.
+
+:: 5. Option to stop running processes
 echo.
-set /p STOP_NOW="Do you want to stop any currently running bot processes? (Y/N): "
+set /p STOP_NOW="Do you want to stop any currently running Sentinel processes? (Y/N): "
 if /i "%STOP_NOW%"=="Y" (
     taskkill /f /im pc-sentinel.exe >nul 2>&1
-    echo [+] Bot process stopped.
+    taskkill /f /im pc-sentinel-agent.exe >nul 2>&1
+    echo [+] Sentinel processes stopped.
 )
 
 echo.
 echo =======================================================
-echo    SUCCESS! Auto-start has been disabled.
+echo    SUCCESS! Auto-start has been completely disabled.
 echo =======================================================
 echo.
 pause

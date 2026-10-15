@@ -7,9 +7,9 @@ echo =======================================================
 echo    PC REMOTE SENTINEL — AUTO-START INSTALLER
 echo =======================================================
 echo.
-echo This will configure your PC to automatically launch the
-echo Central Commander Bot in the background whenever you boot
-echo or log into Windows.
+echo This will configure your PC to automatically launch both
+echo the Central Commander Bot and the Local Agent silently
+echo whenever Windows boots, restarts, or you log in.
 echo.
 
 :: 1. Auto-elevate to Administrator via UAC
@@ -28,43 +28,50 @@ if defined PYTHON_BIN (
     if not exist "%~dp0pc-sentinel-agent.exe" copy "!PYTHON_BIN!" "%~dp0pc-sentinel-agent.exe" >nul
 )
 
-:: 3. Register Task Scheduler Task (runs elevated at logon)
-echo [1/2] Registering Windows Task Scheduler startup task...
-schtasks /create /tn "PC-Sentinel-Commander" /tr "wscript.exe \"%~dp0start_hidden.vbs\"" /sc onlogon /rl highest /f >nul 2>&1
+:: 3. Register Resilient Windows Task Scheduler Tasks (No battery limits, auto-restart)
+echo [1/3] Registering Task Scheduler tasks with battery resilience...
+powershell -NoProfile -ExecutionPolicy Bypass -Command "& { $dir = '%~dp0'.TrimEnd('\'); $trig = New-ScheduledTaskTrigger -AtLogOn; $set = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Days 0) -StartWhenAvailable -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1); $princ = New-ScheduledTaskPrincipal -UserId \"$env:USERDOMAIN\$env:USERNAME\" -LogonType Interactive -RunLevel Highest; $botAct = New-ScheduledTaskAction -Execute 'wscript.exe' -Argument ('\"' + $dir + '\start_hidden.vbs\"') -WorkingDirectory $dir; Register-ScheduledTask -TaskName 'PC-Sentinel-Commander' -Action $botAct -Trigger $trig -Settings $set -Principal $princ -Force | Out-Null; $agentAct = New-ScheduledTaskAction -Execute 'wscript.exe' -Argument ('\"' + $dir + '\start_agent_hidden.vbs\"') -WorkingDirectory $dir; Register-ScheduledTask -TaskName 'PC-Sentinel-Agent' -Action $agentAct -Trigger $trig -Settings $set -Principal $princ -Force | Out-Null; }" >nul 2>&1
 
 if %errorlevel% equ 0 (
-    echo     [+] Task Scheduler task 'PC-Sentinel-Commander' registered successfully!
+    echo     [+] Task Scheduler tasks (Commander + Agent) configured with 24/7 battery resilience!
 ) else (
-    echo     [!] Warning: Task Scheduler registration returned code %errorlevel%.
+    echo     [!] Note: Falling back to schtasks /create...
+    schtasks /create /tn "PC-Sentinel-Commander" /tr "wscript.exe \"%~dp0start_hidden.vbs\"" /sc onlogon /rl highest /f >nul 2>&1
+    schtasks /create /tn "PC-Sentinel-Agent" /tr "wscript.exe \"%~dp0start_agent_hidden.vbs\"" /sc onlogon /rl highest /f >nul 2>&1
 )
 
-:: 4. Create Windows Startup Folder shortcut as backup redundancy
-echo [2/2] Creating Windows Startup folder shortcut...
+:: 4. Create Windows Startup Folder shortcuts (Layer 2 redundancy)
+echo [2/3] Creating Windows Startup folder shortcuts...
 set "STARTUP_DIR=%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup"
-set "SHORTCUT_PATH=%STARTUP_DIR%\PC-Sentinel-Commander.lnk"
 
-powershell -Command "$ws = New-Object -ComObject WScript.Shell; $s = $ws.CreateShortcut('%SHORTCUT_PATH%'); $s.TargetPath = 'wscript.exe'; $s.Arguments = '\"%~dp0start_hidden.vbs\"'; $s.WorkingDirectory = '%~dp0'; $s.Description = 'PC Remote Sentinel Fleet Commander'; $s.Save()" >nul 2>&1
+powershell -NoProfile -ExecutionPolicy Bypass -Command "& { $ws = New-Object -ComObject WScript.Shell; $s1 = $ws.CreateShortcut('%STARTUP_DIR%\PC-Sentinel-Commander.lnk'); $s1.TargetPath = 'wscript.exe'; $s1.Arguments = '\"%~dp0start_hidden.vbs\"'; $s1.WorkingDirectory = '%~dp0'; $s1.Description = 'PC Remote Sentinel Fleet Commander'; $s1.Save(); $s2 = $ws.CreateShortcut('%STARTUP_DIR%\PC-Sentinel-Agent.lnk'); $s2.TargetPath = 'wscript.exe'; $s2.Arguments = '\"%~dp0start_agent_hidden.vbs\"'; $s2.WorkingDirectory = '%~dp0'; $s2.Description = 'PC Remote Sentinel Local Agent'; $s2.Save(); }" >nul 2>&1
 
-if exist "%SHORTCUT_PATH%" (
-    echo     [+] Startup folder shortcut created successfully!
-)
+echo     [+] Startup folder shortcuts created for Commander and Agent!
+
+:: 5. Register in Windows Registry Run (Layer 3 redundancy)
+echo [3/3] Registering in Windows CurrentUser Run registry...
+reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\Run" /v "PC-Sentinel-Commander" /t REG_SZ /d "wscript.exe \"%~dp0start_hidden.vbs\"" /f >nul 2>&1
+reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\Run" /v "PC-Sentinel-Agent" /t REG_SZ /d "wscript.exe \"%~dp0start_agent_hidden.vbs\"" /f >nul 2>&1
+echo     [+] Registry Run entries registered!
 
 echo.
 echo =======================================================
-echo    SUCCESS! Auto-Start is fully configured.
+echo    SUCCESS! Triple-layer Auto-Start is configured.
 echo =======================================================
 echo.
-echo The Commander Bot will now start silently in the background
-echo every time Windows boots or you log in.
+echo Both the Commander Bot and Local Agent will now start silently
+echo in the background whenever Windows boots, restarts, wakes up,
+echo or logs in, even while on battery.
 echo.
 
-:: 5. Option to launch right now
-set /p LAUNCH_NOW="Do you want to launch the Commander Bot in the background right now? (Y/N): "
+:: 6. Option to launch right now
+set /p LAUNCH_NOW="Do you want to launch both Sentinel Bot & Agent in the background now? (Y/N): "
 if /i "%LAUNCH_NOW%"=="Y" (
-    echo Starting Commander Bot...
+    echo Starting Commander Bot and Agent...
     wscript.exe "%~dp0start_hidden.vbs"
+    wscript.exe "%~dp0start_agent_hidden.vbs"
     timeout /t 2 >nul
-    echo [+] Bot is running in the background!
+    echo [+] Sentinel Bot and Agent are running in the background!
 )
 
 echo.

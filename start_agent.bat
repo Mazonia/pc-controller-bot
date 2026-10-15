@@ -15,9 +15,9 @@ if not exist pc-sentinel-agent.exe (
     copy "%PYTHON_BIN%" pc-sentinel-agent.exe >nul
 )
 
-echo Starting PC Sentinel Agent as [pc-sentinel-agent.exe]...
+:run_loop
+echo [%TIME%] Starting PC Sentinel Agent as [pc-sentinel-agent.exe]...
 pc-sentinel-agent.exe agent.py
-if errorlevel 1 (
-    echo [!] Agent exited with error code %errorlevel%.
-    timeout /t 5 >nul
-)
+echo [%TIME%] [!] Agent stopped (exit code %errorlevel%). Auto-restarting in 3 seconds...
+timeout /t 3 /nobreak >nul
+goto :run_loop

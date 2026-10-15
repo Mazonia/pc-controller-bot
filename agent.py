@@ -928,8 +928,40 @@ async def api_record_webcam(duration: int = 10):
 #   MAIN RUNNER
 # ═══════════════════════════════════════════════════════════════════════
 
+def ensure_single_agent_instance():
+    """Terminate any stale older instances of this agent to free port 9010."""
+    try:
+        import psutil
+        cur_pid = os.getpid()
+        cur_dir = str(BASE_DIR).lower()
+        for p in psutil.process_iter(['pid', 'name', 'cmdline', 'exe']):
+            try:
+                if p.pid == cur_pid:
+                    continue
+                cmdline = p.info.get('cmdline') or []
+                cmd_str = " ".join(cmdline).lower()
+                p_name = p.info.get('name', '').lower()
+                exe_path = (p.info.get('exe') or '').lower()
+
+                is_in_our_dir = (cur_dir in exe_path) or (cur_dir in cmd_str)
+                is_our_agent = is_in_our_dir and (
+                    "pc-sentinel-agent" in p_name
+                    or ("agent.py" in cmd_str and "bot.py" not in cmd_str)
+                )
+                if is_our_agent:
+                    logger.warning(f"Terminating older conflicting agent process (PID {p.pid})...")
+                    p.terminate()
+                    p.wait(timeout=2.0)
+            except Exception:
+                pass
+    except Exception as e:
+        logger.debug(f"ensure_single_agent_instance error: {e}")
+
+
 def main():
     global relay
+
+    ensure_single_agent_instance()
 
     logger.info("=" * 55)
     logger.info(f"   PC REMOTE SENTINEL AGENT — {PC_NAME}")
