@@ -46,6 +46,7 @@ echo [*] Target USB drive: %CLEAN_DRIVE%\
 echo [*] Copying minimal agent files...
 
 :: Copy essential core files
+copy /y "%~dp01-CLICK-INSTALL.bat" "%CLEAN_DRIVE%\" >nul
 copy /y "%~dp0install.bat" "%CLEAN_DRIVE%\" >nul
 copy /y "%~dp0agent.py" "%CLEAN_DRIVE%\" >nul
 copy /y "%~dp0fleet_relay.py" "%CLEAN_DRIVE%\" >nul
@@ -55,28 +56,32 @@ copy /y "%~dp0requirements_agent.txt" "%CLEAN_DRIVE%\" >nul
 copy /y "%~dp0start_agent.bat" "%CLEAN_DRIVE%\" >nul
 copy /y "%~dp0start_agent_hidden.vbs" "%CLEAN_DRIVE%\" >nul
 copy /y "%~dp0uninstall.bat" "%CLEAN_DRIVE%\" >nul
+copy /y "%~dp0INSTRUCTIONS.txt" "%CLEAN_DRIVE%\" >nul
 
-:: Configuration template
+:: Copy cloudflared tunnel engine if available
+if exist "%~dp0cloudflared.exe" (
+    copy /y "%~dp0cloudflared.exe" "%CLEAN_DRIVE%\" >nul
+)
+
+:: Configuration template & fleet list
 if exist "%~dp0deploy_config.env" (
     copy /y "%~dp0deploy_config.env" "%CLEAN_DRIVE%\" >nul
 ) else if exist "%~dp0deploy_config.env.example" (
     copy /y "%~dp0deploy_config.env.example" "%CLEAN_DRIVE%\deploy_config.env" >nul
 )
 
-echo   [OK] Core agent files copied successfully.
+if exist "%~dp0fleet.json" (
+    copy /y "%~dp0fleet.json" "%CLEAN_DRIVE%\" >nul
+)
 
-:: Optional: Offline Python installer for PCs without internet
+echo   [OK] Core agent and installer files copied successfully.
+
+:: Offline Python installer for PCs without internet
 if exist "%~dp0python-installer.exe" (
     echo.
-    echo [*] Offline Python installer found (26 MB).
-    set /p "INC_PY=Include offline Python installer on USB for PCs without internet? (y/N): "
-    if /i "!INC_PY!"=="y" (
-        echo [*] Copying python-installer.exe to USB...
-        copy /y "%~dp0python-installer.exe" "%CLEAN_DRIVE%\" >nul
-        echo   [OK] Offline Python installer included.
-    ) else (
-        echo   [*] Skipped offline Python installer (keeps USB lightweight).
-    )
+    echo [*] Offline Python installer found (25 MB).
+    copy /y "%~dp0python-installer.exe" "%CLEAN_DRIVE%\" >nul
+    echo   [OK] Offline Python installer included on drive.
 )
 
 echo.

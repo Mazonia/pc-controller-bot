@@ -1,0 +1,41 @@
+================================================================================
+          PC REMOTE SENTINEL — PORTABLE SSD / USB AUTO-INSTALLER
+================================================================================
+
+HOW TO USE THIS PACKAGE:
+--------------------------------------------------------------------------------
+1. COPY TO YOUR SSD OR USB FLASH DRIVE:
+   - Copy all files and folders inside this directory directly onto your
+     external SSD or USB thumb drive (to the root or any folder).
+
+2. CONNECTING TO ANOTHER DEVICE / PC:
+   - Plug your SSD / USB drive into the target Windows PC.
+   - Open the drive in File Explorer.
+   - Double-click "1-CLICK-INSTALL.bat" (or right-click and "Run as administrator").
+
+3. WHAT HAPPENS AUTOMATICALLY (Takes ~10-15 seconds):
+   - Python Auto-Install: If Python is missing, it silently installs the bundled
+     official Python installer (python-installer.exe).
+   - Agent Setup: Installs the background agent into C:\PCSentinel.
+   - Cloud Relay & Telegram: Auto-configures encrypted TLS MQTT relay and Telegram token.
+   - Firewall Rules: Automatically allows the agent in Windows Defender Firewall.
+   - Auto-Start on Boot: Registers a silent Windows Task Scheduler background task
+     that runs on every system startup / user login, even on battery power.
+   - Silent Execution: Launches the agent immediately in the background with no
+     visible console window.
+   - Fleet Tracking: Records the new PC's hostname in fleet.json.
+
+4. CHECK YOUR TELEGRAM BOT:
+   - Within seconds, your Telegram bot will detect the new PC.
+   - You can immediately use the Ghost Mouse Trackpad, type from your phone,
+     capture screenshots/webcam, control volume/apps, and switch virtual desktops.
+
+5. UNPLUG & GO:
+   - Once the installer says [OK], you can safely unplug your SSD / USB drive.
+   - The PC Sentinel Agent stays permanently active on that PC.
+
+TO UNINSTALL FROM A PC (OPTIONAL):
+--------------------------------------------------------------------------------
+   - Run "uninstall.bat" as administrator. It cleanly removes all files,
+     terminates background processes, and deletes startup/task scheduler entries.
+================================================================================

@@ -186,6 +186,10 @@ copy /y "%SRC_DIR%requirements_agent.txt" "%DEST_DIR%\" >nul
 copy /y "%SRC_DIR%start_agent.bat" "%DEST_DIR%\" >nul
 copy /y "%SRC_DIR%start_agent_hidden.vbs" "%DEST_DIR%\" >nul
 
+if exist "%SRC_DIR%cloudflared.exe" (
+    copy /y "%SRC_DIR%cloudflared.exe" "%DEST_DIR%\" >nul
+)
+
 if exist "%SRC_DIR%uninstall.bat" (
     copy /y "%SRC_DIR%uninstall.bat" "%DEST_DIR%\" >nul
 )
@@ -222,8 +226,20 @@ if not exist "%DEST_DIR%\pc-sentinel-agent.exe" (
 
 :: 8. Install Python pip requirements
 echo [*] Installing required Python packages...
+"%PY_CMD%" -m ensurepip --upgrade >nul 2>&1
 "%PY_CMD%" -m pip install --quiet --upgrade pip >nul 2>&1
-"%PY_CMD%" -m pip install --quiet -r "%DEST_DIR%\requirements_agent.txt"
+
+set "PIP_SUCCESS=0"
+if exist "%SRC_DIR%wheels" (
+    echo [*] Installing pre-bundled packages from SSD (offline)...
+    "%PY_CMD%" -m pip install --quiet --no-index --find-links="%SRC_DIR%wheels" -r "%DEST_DIR%\requirements_agent.txt" >nul 2>&1
+    if !errorlevel! equ 0 set "PIP_SUCCESS=1"
+)
+
+if "!PIP_SUCCESS!"=="0" (
+    echo [*] Installing packages via pip...
+    "%PY_CMD%" -m pip install --quiet -r "%DEST_DIR%\requirements_agent.txt"
+)
 if %errorlevel% neq 0 (
     echo [!] Warning: Some pip dependencies could not be verified. Proceeding...
 )
