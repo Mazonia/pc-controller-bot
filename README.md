@@ -77,6 +77,32 @@ Traditional remote desktop tools require port forwarding, static public IPs, com
   - **Interactive Remote Controls**: Control virtual desktops, inspect ping latency/FPS HUD, and capture high-res snapshots directly from your phone's browser.
   - **In-Chat Live Radar**: Rapid refreshing photo frames streamed directly inside your Telegram chat over the cloud relay.
 
+### 🖱️ Phone as a Mouse (Ghost Trackpad) & Direct Typing (`/mouse`, `/type`, `/key`)
+- **Translucent "Ghost Trackpad"**: Turns your entire phone screen into a multi-touch mouse trackpad while faintly projecting the live PC desktop underneath so you can see exactly where you're pointing.
+- **Adjustable Desktop Opacity**: Slide between **25% (faint ghost trackpad)**, **100% (vivid full desktop view)**, or **0% (OLED black stealth touchpad)**.
+- **Pointer Crosshair Radar**: Floating high-contrast target ring with a glowing center dot that tracks the cursor on the PC screen in real time.
+- **Multi-Touch Gestures**:
+  - **1-Finger Glide**: Smooth cursor movement with adjustable sensitivity (0.5x to 3.0x).
+  - **Tap**: Left Click (with visual pulse indicator).
+  - **Double Tap**: Double Click (opens files/apps).
+  - **Two-Finger Tap or Long Press (350ms)**: Right Click (with phone haptic vibration feedback).
+  - **Two-Finger Vertical Drag**: Smooth mouse wheel scrolling.
+  - **Right-Edge Scroll Strip**: Dedicated vertical strip for one-thumb fast scrolling.
+  - **🖲️ Drag Lock**: Toggle button locks left mouse down to easily drag windows, move files, or select text.
+- **Phone-to-PC Direct Typing & Voice Dictation**:
+  - Tap the floating input field on your phone to open your native smartphone keyboard.
+  - Full support for **voice dictation / speech-to-text**, autocorrect, predictive typing, and swipe.
+  - One-tap `[🚀 Send]` injects the text string into the active PC app using Win32 Unicode `SendInput` (emojis and international characters fully supported).
+  - `[⚡ Live]` toggle for instant character-by-character keystroke streaming.
+- **Special Keys Ribbon**: Floating scrollable quick pills for keys phone keyboards lack:
+  `[⏎ Enter]`, `[⌫ Bksp]`, `[⇥ Tab]`, `[Esc]`, `[⊞ Win]`, `[📋 Paste]`, `[Copy]`, `[Cut]`, `[Sel All]`, `[Undo]`, `[Del]`, `[Space]`, `[▲]`, `[▼]`, `[◄]`, `[►]`, `[Alt+Tab]`, `[Win+D]`, `[Task View]`.
+- **Telegram Mini App (TMA) Integration**:
+  - Tap `🖱️ Open Ghost Mouse (TMA)` inside Telegram to open the trackpad right within your Telegram app!
+- **In-Chat Quick Commands**:
+  - `/type <message>` — Injects `<message>` directly into whatever app is focused on the PC.
+  - `/key <key>` — Simulates keystrokes or hotkeys (e.g., `/key enter`, `/key ctrl+v`, `/key win+d`, `/key alt+f4`).
+  - `/mouse` — Opens the mouse controller dashboard.
+
 ### 🪟 Desktops & Windows Application Switching
 - **Dedicated Remote Control (`/desktop`, `/windows`, `/switch`)**: Switch, create, or inspect Windows Virtual Desktops and cycle or focus active application windows with 1 tap from Telegram or the live web stream player.
 - **Active Window Selection**: Tap any running application from the interactive Telegram keyboard or select it from the Live Stream dropdown to bring it directly to the front (even if minimized).

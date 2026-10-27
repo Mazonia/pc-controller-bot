@@ -333,6 +333,43 @@ def handle_relay_command(data: dict) -> dict:
             "pc_name": PC_NAME,
         }
 
+    # Remote Mouse & Keyboard Inputs
+    elif cmd == "mouse_input":
+        action = params.get("action", "move")
+        ok = False
+        if action == "move":
+            dx = int(params.get("dx", 0))
+            dy = int(params.get("dy", 0))
+            ok = SystemController.mouse_move(dx, dy)
+        elif action == "move_abs":
+            x = float(params.get("x", 0))
+            y = float(params.get("y", 0))
+            norm = bool(params.get("norm", False))
+            ok = SystemController.mouse_move_abs(x, y, normalized=norm)
+        elif action in ("click", "down", "up", "double"):
+            btn = str(params.get("btn", "left"))
+            act = "click" if action == "click" else action
+            if action == "double":
+                btn = "double"
+            ok = SystemController.mouse_click(button=btn, action=act)
+        elif action == "scroll":
+            delta = int(params.get("delta", 0))
+            ok = SystemController.mouse_scroll(delta)
+        return {"ok": ok, "cursor": SystemController.get_cursor_pos(), "pc_name": PC_NAME}
+
+    elif cmd == "type_text":
+        text = params.get("text", "")
+        ok, msg = SystemController.type_text(text)
+        return {"ok": ok, "msg": msg, "pc_name": PC_NAME}
+
+    elif cmd == "press_key":
+        key = params.get("key", "")
+        ok, msg = SystemController.press_key(key)
+        return {"ok": ok, "msg": msg, "pc_name": PC_NAME}
+
+    elif cmd == "get_cursor":
+        return {"ok": True, "cursor": SystemController.get_cursor_pos(), "pc_name": PC_NAME}
+
     # 7. POWER & LOCK
     elif cmd in ("lock", "power_lock"):
         ok = SystemController.lock_workstation()
@@ -673,6 +710,64 @@ async def api_window_focus(target: str = ""):
 async def api_window_cycle(direction: str = "next"):
     ok, msg = SystemController.cycle_window(direction)
     return {"ok": ok, "msg": msg, "direction": direction, "active_window": get_active_window_title()}
+
+
+# ── Remote Mouse & Keyboard Routes ──────────────────────────────────
+
+@app.post("/input/mouse")
+async def api_input_mouse(request: Request):
+    try:
+        data = await request.json()
+    except Exception:
+        data = dict(request.query_params)
+    action = data.get("action", "move")
+    ok = False
+    if action == "move":
+        dx = int(data.get("dx", 0))
+        dy = int(data.get("dy", 0))
+        ok = SystemController.mouse_move(dx, dy)
+    elif action == "move_abs":
+        x = float(data.get("x", 0))
+        y = float(data.get("y", 0))
+        norm = bool(data.get("norm", False))
+        ok = SystemController.mouse_move_abs(x, y, normalized=norm)
+    elif action in ("click", "down", "up", "double"):
+        btn = str(data.get("btn", "left"))
+        act = "click" if action == "click" else action
+        if action == "double":
+            btn = "double"
+        ok = SystemController.mouse_click(button=btn, action=act)
+    elif action == "scroll":
+        delta = int(data.get("delta", 0))
+        ok = SystemController.mouse_scroll(delta)
+    return {"ok": ok, "cursor": SystemController.get_cursor_pos()}
+
+
+@app.post("/input/type")
+async def api_input_type(request: Request):
+    try:
+        data = await request.json()
+    except Exception:
+        data = dict(request.query_params)
+    text = data.get("text", "")
+    ok, msg = SystemController.type_text(text)
+    return {"ok": ok, "msg": msg}
+
+
+@app.post("/input/key")
+async def api_input_key(request: Request):
+    try:
+        data = await request.json()
+    except Exception:
+        data = dict(request.query_params)
+    key = data.get("key", "")
+    ok, msg = SystemController.press_key(key)
+    return {"ok": ok, "msg": msg}
+
+
+@app.get("/input/cursor")
+async def api_input_cursor():
+    return {"ok": True, "cursor": SystemController.get_cursor_pos()}
 
 
 @app.get("/browse")

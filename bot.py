@@ -382,6 +382,47 @@ class AgentClient:
         except Exception as e:
             return {"ok": False, "msg": f"Cycle window failed: {e}", "error": str(e)}
 
+    async def mouse_input(self, action: str = "move", **kwargs) -> dict:
+        params = {"action": action, **kwargs}
+        if self.should_use_relay():
+            return await commander_relay.send_command(self.name, "mouse_input", params, timeout=10.0)
+        try:
+            r = await self._post("/input/mouse", json=params, timeout=10.0)
+            r.raise_for_status()
+            return r.json()
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
+
+    async def type_text(self, text: str) -> dict:
+        if self.should_use_relay():
+            return await commander_relay.send_command(self.name, "type_text", {"text": text}, timeout=10.0)
+        try:
+            r = await self._post("/input/type", json={"text": text}, timeout=10.0)
+            r.raise_for_status()
+            return r.json()
+        except Exception as e:
+            return {"ok": False, "msg": str(e), "error": str(e)}
+
+    async def press_key(self, key: str) -> dict:
+        if self.should_use_relay():
+            return await commander_relay.send_command(self.name, "press_key", {"key": key}, timeout=10.0)
+        try:
+            r = await self._post("/input/key", json={"key": key}, timeout=10.0)
+            r.raise_for_status()
+            return r.json()
+        except Exception as e:
+            return {"ok": False, "msg": str(e), "error": str(e)}
+
+    async def get_cursor(self) -> dict:
+        if self.should_use_relay():
+            return await commander_relay.send_command(self.name, "get_cursor", timeout=10.0)
+        try:
+            r = await self._get("/input/cursor", timeout=10.0)
+            r.raise_for_status()
+            return r.json()
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
+
     async def cast_rtmp_start(self, url: str) -> dict:
         r = await self._post("/cast/rtmp/start", data={"url": url})
         r.raise_for_status()
@@ -918,22 +959,25 @@ def get_main_keyboard() -> InlineKeyboardMarkup:
         ],
         [
             InlineKeyboardButton("📺 Live Screen Cast", callback_data="cb_cast_menu"),
+            InlineKeyboardButton("🖱️ Remote Mouse & Type", callback_data="cb_mouse_menu"),
+        ],
+        [
             InlineKeyboardButton("🪟 Desktops & Windows", callback_data="cb_desktop_menu"),
-        ],
-        [
             InlineKeyboardButton("🎥 Screen Video", callback_data="cb_screen_menu"),
-            InlineKeyboardButton("📷 Webcam Menu", callback_data="cb_webcam_menu"),
         ],
         [
-            InlineKeyboardButton("⚡ Power & Sleep", callback_data="cb_power_menu"),
+            InlineKeyboardButton("📷 Webcam Menu", callback_data="cb_webcam_menu"),
             InlineKeyboardButton("🎵 Media & Volume", callback_data="cb_media_menu"),
         ],
         [
+            InlineKeyboardButton("⚡ Power & Sleep", callback_data="cb_power_menu"),
             InlineKeyboardButton("💻 Top Processes", callback_data="cb_top"),
-            InlineKeyboardButton("📋 Clipboard Tools", callback_data="cb_clip_menu"),
         ],
         [
+            InlineKeyboardButton("📋 Clipboard Tools", callback_data="cb_clip_menu"),
             InlineKeyboardButton("🗣️ Speak / TTS", callback_data="cb_tts_info"),
+        ],
+        [
             InlineKeyboardButton("⏰ Alarm & Siren", callback_data="cb_alarm_menu"),
         ],
         [
@@ -2066,8 +2110,12 @@ async def execute_cast_web_start(update: Update, context: ContextTypes.DEFAULT_T
         url_section = ""
         buttons = []
         if public_url:
-            url_section += f"🌍 <b>Global Stream (Any Network / 4G / 5G):</b>\n<code>{public_url}</code>\n\n"
-            buttons.append([InlineKeyboardButton("🌍 Open Global Stream", url=public_url)])
+            url_section += f"🌍 <b>Global Stream & Ghost Trackpad:</b>\n<code>{public_url}</code>\n\n"
+            from telegram import WebAppInfo
+            buttons.append([
+                InlineKeyboardButton("🖱️ Open Ghost Mouse (TMA)", web_app=WebAppInfo(url=public_url)),
+                InlineKeyboardButton("🌍 Open in Browser", url=public_url),
+            ])
         else:
             url_section += (
                 "⚠️ <b>Global Tunnel:</b> <i>Establishing Cloudflare edge connection...</i>\n"
@@ -2094,7 +2142,7 @@ async def execute_cast_web_start(update: Update, context: ContextTypes.DEFAULT_T
             f"{url_section}"
             f"🔒 <b>Token:</b> <code>{token}</code>\n"
             f"⚡ <b>Engine:</b> <code>MJPEG + Turbo Snapshot</code>\n"
-            f"🪟 <b>Features:</b> Remote Desktops, Mobile Auto-Reconnect, Fullscreen"
+            f"🪟 <b>Features:</b> Ghost Mouse Trackpad, Phone Direct Typing, Desktops"
         )
 
         if update.callback_query:
@@ -2203,6 +2251,117 @@ async def _run_radar_loop(chat_id: int, message_id: int, context: ContextTypes.D
             pass
     finally:
         active_radar_tasks.pop(chat_id, None)
+
+
+# ── Remote Mouse, Trackpad & Direct Phone Typing ────────────────────────
+
+async def handle_type(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Type text directly into the focused PC application window."""
+    if not await check_access(update, context):
+        return
+    agent = await require_pc(update, context)
+    if not agent:
+        return
+    if not context.args:
+        await update.effective_message.reply_text(
+            "⌨️ <b>Type into PC Active Window:</b>\n"
+            "Usage: <code>/type Hello from my phone!</code>\n\n"
+            "<i>Whatever you type will be injected immediately into the active app, search bar, document, or terminal on your PC.</i>",
+            parse_mode="HTML"
+        )
+        return
+    text = " ".join(context.args)
+    try:
+        res = await agent.type_text(text)
+        if res.get("ok", True):
+            win = res.get("active_window", "")
+            win_txt = f" into <b>{html.escape(win)}</b>" if win else ""
+            await update.effective_message.reply_text(
+                f"⌨️ <b>Typed{win_txt}:</b>\n<code>{html.escape(text)}</code>",
+                parse_mode="HTML"
+            )
+        else:
+            await update.effective_message.reply_text(f"❌ Typing failed: {res.get('msg', 'Unknown error')}")
+    except Exception as e:
+        await update.effective_message.reply_text(f"❌ Typing error: {e}")
+
+
+async def handle_key(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Simulate keypress or keyboard shortcut on PC."""
+    if not await check_access(update, context):
+        return
+    agent = await require_pc(update, context)
+    if not agent:
+        return
+    if not context.args:
+        await update.effective_message.reply_text(
+            "⌨️ <b>Send PC Key / Shortcut:</b>\n"
+            "Usage: <code>/key enter</code> or <code>/key ctrl+v</code>\n\n"
+            "<b>Common Keys:</b>\n"
+            "• <code>/key enter</code>, <code>/key backspace</code>, <code>/key tab</code>, <code>/key esc</code>\n"
+            "• <code>/key win+d</code> (Show Desktop), <code>/key win</code> (Start Menu)\n"
+            "• <code>/key alt+tab</code> (Switch Window), <code>/key alt+f4</code> (Close App)\n"
+            "• <code>/key ctrl+c</code>, <code>/key ctrl+v</code>, <code>/key ctrl+z</code>\n"
+            "• <code>/key up</code>, <code>/key down</code>, <code>/key left</code>, <code>/key right</code>",
+            parse_mode="HTML"
+        )
+        return
+    key = context.args[0].lower().strip()
+    try:
+        res = await agent.press_key(key)
+        if res.get("ok", True):
+            await update.effective_message.reply_text(f"⌨️ <b>Key pressed:</b> <code>{html.escape(key.upper())}</code>", parse_mode="HTML")
+        else:
+            await update.effective_message.reply_text(f"❌ Key press failed: {res.get('msg', 'Unknown key')}")
+    except Exception as e:
+        await update.effective_message.reply_text(f"❌ Key press error: {e}")
+
+
+async def handle_mouse(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Mouse control menu, quick clicks, and Ghost Trackpad launcher."""
+    if not await check_access(update, context):
+        return
+    agent = await require_pc(update, context)
+    if not agent:
+        return
+
+    label = pc_label(context)
+    status = await agent.cast_status()
+    public_url = status.get("public_url", "")
+
+    rows = []
+    from telegram import WebAppInfo
+    if public_url:
+        rows.append([InlineKeyboardButton("🖱️ Open Ghost Mouse Trackpad", web_app=WebAppInfo(url=public_url))])
+        rows.append([InlineKeyboardButton("🌍 Open Trackpad in Browser", url=public_url)])
+    else:
+        rows.append([InlineKeyboardButton("🌐 Launch Ghost Trackpad Stream", callback_data="cb_cast_web_start")])
+
+    rows.append([
+        InlineKeyboardButton("🖱️ Left Click", callback_data="cb_mouse_click_left"),
+        InlineKeyboardButton("🖱️ Right Click", callback_data="cb_mouse_click_right"),
+        InlineKeyboardButton("🖱️ Double Click", callback_data="cb_mouse_click_double"),
+    ])
+    rows.append([
+        InlineKeyboardButton("🔼 Scroll Up", callback_data="cb_mouse_scroll_up"),
+        InlineKeyboardButton("🔽 Scroll Down", callback_data="cb_mouse_scroll_down"),
+    ])
+    rows.append([
+        InlineKeyboardButton("🔙 Menu", callback_data="cb_menu"),
+    ])
+    text = (
+        f"🖱️ <b>REMOTE MOUSE &amp; TOUCHPAD — {html.escape(label)}</b>\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"Use your phone as a full-screen trackpad with translucent desktop view.\n"
+        f"• <b>Ghost Trackpad:</b> Gliding thumb moves PC cursor over faint desktop.\n"
+        f"• <b>Direct Phone Typing:</b> Tap phone input field to type with voice &amp; autocorrect.\n"
+        f"• <b>In-Chat Quick Typing:</b> <code>/type &lt;message&gt;</code>\n"
+        f"• <b>In-Chat Hotkeys:</b> <code>/key &lt;enter|ctrl+v|win+d&gt;</code>"
+    )
+    if update.callback_query:
+        await update.callback_query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(rows), parse_mode="HTML")
+    else:
+        await update.effective_message.reply_text(text, reply_markup=InlineKeyboardMarkup(rows), parse_mode="HTML")
 
 
 # ── TTS, Processes, Kill, Open, CMD, Files, Clipboard ──────────────────
@@ -3254,6 +3413,24 @@ async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Cast Menu", callback_data="cb_cast_menu")]]),
             parse_mode="HTML"
         )
+    elif data == "cb_mouse_menu":
+        await handle_mouse(update, context)
+    elif data.startswith("cb_mouse_click_"):
+        btn = data.replace("cb_mouse_click_", "")
+        agent = get_agent(context)
+        if agent:
+            await agent.mouse_input(action="click", btn=btn)
+            await query.answer(f"🖱️ {btn.capitalize()} Click")
+    elif data == "cb_mouse_scroll_up":
+        agent = get_agent(context)
+        if agent:
+            await agent.mouse_input(action="scroll", delta=120)
+            await query.answer("🔼 Scrolled Up")
+    elif data == "cb_mouse_scroll_down":
+        agent = get_agent(context)
+        if agent:
+            await agent.mouse_input(action="scroll", delta=-120)
+            await query.answer("🔽 Scrolled Down")
     elif data == "cb_desktop_menu":
         agent = get_agent(context)
         if not agent:
@@ -4165,6 +4342,9 @@ def main():
     app.add_handler(CommandHandler(["lock", "lockpc"], handle_lock))
     app.add_handler(CommandHandler(["sleep", "sleeppc"], handle_sleep))
     app.add_handler(CommandHandler("monitor", handle_monitor))
+    app.add_handler(CommandHandler(["mouse", "touchpad", "trackpad"], handle_mouse))
+    app.add_handler(CommandHandler(["type", "typing", "sendtext"], handle_type))
+    app.add_handler(CommandHandler(["key", "press"], handle_key))
     app.add_handler(MessageHandler(filters.VOICE | filters.AUDIO, handle_incoming_voice))
     app.add_handler(MessageHandler(filters.Document.ALL, handle_incoming_file))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_incoming_text))
@@ -4218,6 +4398,9 @@ def main():
             BotCommand("rename", "Rename PC with custom label"),
             BotCommand("status", "System Diagnostics"),
             BotCommand("shot", "Desktop Screenshot"),
+            BotCommand("mouse", "Remote Ghost Mouse & Touchpad"),
+            BotCommand("type", "Type text into PC: /type [text]"),
+            BotCommand("key", "Press PC key: /key [enter|ctrl+v]"),
             BotCommand("cast", "Live Screen Cast"),
             BotCommand("desktop", "Desktops & Windows Menu"),
             BotCommand("windows", "Switch Open Apps/Windows"),

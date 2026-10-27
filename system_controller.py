@@ -687,6 +687,272 @@ class SystemController:
             logger.error(f"Focus window error: {e}")
             return False, f"Error focusing window: {e}"
 
+    # ── Remote Mouse & Direct Keyboard Control ──────────────────────────
+
+    @staticmethod
+    def get_cursor_pos() -> Dict[str, int]:
+        """Get current screen resolution and cursor position."""
+        SystemController.ensure_desktop_access()
+        user32 = ctypes.windll.user32
+        w = user32.GetSystemMetrics(0)
+        h = user32.GetSystemMetrics(1)
+
+        class POINT(ctypes.Structure):
+            _fields_ = [('x', ctypes.c_long), ('y', ctypes.c_long)]
+
+        pt = POINT()
+        user32.GetCursorPos(ctypes.byref(pt))
+        return {
+            "x": int(pt.x),
+            "y": int(pt.y),
+            "screen_w": int(w),
+            "screen_h": int(h)
+        }
+
+    @staticmethod
+    def mouse_move(dx: int, dy: int) -> bool:
+        """Simulate relative hardware mouse movement."""
+        SystemController.ensure_desktop_access()
+        try:
+            MOUSEEVENTF_MOVE = 0x0001
+            ctypes.windll.user32.mouse_event(MOUSEEVENTF_MOVE, int(dx), int(dy), 0, 0)
+            return True
+        except Exception as e:
+            logger.error(f"Mouse move error: {e}")
+            return False
+
+    @staticmethod
+    def mouse_move_abs(x: float, y: float, normalized: bool = False) -> bool:
+        """Move cursor to absolute coordinates (pixels or normalized 0.0-1.0)."""
+        SystemController.ensure_desktop_access()
+        try:
+            user32 = ctypes.windll.user32
+            if normalized:
+                w = user32.GetSystemMetrics(0)
+                h = user32.GetSystemMetrics(1)
+                px = int(max(0.0, min(1.0, float(x))) * (w - 1))
+                py = int(max(0.0, min(1.0, float(y))) * (h - 1))
+            else:
+                px = int(x)
+                py = int(y)
+            user32.SetCursorPos(px, py)
+            return True
+        except Exception as e:
+            logger.error(f"Mouse abs move error: {e}")
+            return False
+
+    @staticmethod
+    def mouse_click(button: str = "left", action: str = "click") -> bool:
+        """
+        Simulate mouse click, button down, button up, or double click.
+        button: 'left', 'right', 'middle', 'double'
+        action: 'click', 'down', 'up'
+        """
+        SystemController.ensure_desktop_access()
+        user32 = ctypes.windll.user32
+        btn = button.lower().strip()
+        act = action.lower().strip()
+
+        MOUSEEVENTF_LEFTDOWN = 0x0002
+        MOUSEEVENTF_LEFTUP = 0x0004
+        MOUSEEVENTF_RIGHTDOWN = 0x0008
+        MOUSEEVENTF_RIGHTUP = 0x0010
+        MOUSEEVENTF_MIDDLEDOWN = 0x0020
+        MOUSEEVENTF_MIDDLEUP = 0x0040
+
+        try:
+            if btn in ("double", "dblclick"):
+                user32.mouse_event(MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0)
+                time.sleep(0.02)
+                user32.mouse_event(MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
+                time.sleep(0.05)
+                user32.mouse_event(MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0)
+                time.sleep(0.02)
+                user32.mouse_event(MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
+                return True
+
+            if btn in ("right", "r"):
+                flags_down, flags_up = MOUSEEVENTF_RIGHTDOWN, MOUSEEVENTF_RIGHTUP
+            elif btn in ("middle", "m"):
+                flags_down, flags_up = MOUSEEVENTF_MIDDLEDOWN, MOUSEEVENTF_MIDDLEUP
+            else:  # left
+                flags_down, flags_up = MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP
+
+            if act == "down":
+                user32.mouse_event(flags_down, 0, 0, 0, 0)
+            elif act == "up":
+                user32.mouse_event(flags_up, 0, 0, 0, 0)
+            else:  # click
+                user32.mouse_event(flags_down, 0, 0, 0, 0)
+                time.sleep(0.02)
+                user32.mouse_event(flags_up, 0, 0, 0, 0)
+            return True
+        except Exception as e:
+            logger.error(f"Mouse click error: {e}")
+            return False
+
+    @staticmethod
+    def mouse_scroll(delta: int) -> bool:
+        """Simulate mouse wheel scrolling (positive = up, negative = down)."""
+        SystemController.ensure_desktop_access()
+        try:
+            MOUSEEVENTF_WHEEL = 0x0800
+            ctypes.windll.user32.mouse_event(MOUSEEVENTF_WHEEL, 0, 0, int(delta), 0)
+            return True
+        except Exception as e:
+            logger.error(f"Mouse scroll error: {e}")
+            return False
+
+    @staticmethod
+    def type_text(text: str) -> Tuple[bool, str]:
+        """
+        Type text directly into active PC input field using Win32 SendInput Unicode events.
+        Preserves unicode characters, emojis, accents, and symbols.
+        """
+        if not text:
+            return True, "No text provided"
+        SystemController.ensure_desktop_access()
+
+        PUL = ctypes.POINTER(ctypes.c_ulong)
+
+        class KeyBdInput(ctypes.Structure):
+            _fields_ = [('wVk', ctypes.c_ushort),
+                        ('wScan', ctypes.c_ushort),
+                        ('dwFlags', ctypes.c_ulong),
+                        ('time', ctypes.c_ulong),
+                        ('dwExtraInfo', PUL)]
+
+        class HardwareInput(ctypes.Structure):
+            _fields_ = [('uMsg', ctypes.c_ulong),
+                        ('wParamL', ctypes.c_short),
+                        ('wParamH', ctypes.c_ushort)]
+
+        class MouseInput(ctypes.Structure):
+            _fields_ = [('dx', ctypes.c_long),
+                        ('dy', ctypes.c_long),
+                        ('mouseData', ctypes.c_ulong),
+                        ('dwFlags', ctypes.c_ulong),
+                        ('time', ctypes.c_ulong),
+                        ('dwExtraInfo', PUL)]
+
+        class Input_I(ctypes.Union):
+            _fields_ = [('ki', KeyBdInput),
+                        ('mi', MouseInput),
+                        ('hi', HardwareInput)]
+
+        class Input(ctypes.Structure):
+            _fields_ = [('type', ctypes.c_ulong),
+                        ('ii', Input_I)]
+
+        KEYEVENTF_UNICODE = 0x0004
+        KEYEVENTF_KEYUP = 0x0002
+        INPUT_KEYBOARD = 1
+        user32 = ctypes.windll.user32
+
+        try:
+            for char in text:
+                if char == "\r":
+                    continue
+                if char == "\n":
+                    VK_RETURN = 0x0D
+                    user32.keybd_event(VK_RETURN, 0, 0, 0)
+                    time.sleep(0.01)
+                    user32.keybd_event(VK_RETURN, 0, KEYEVENTF_KEYUP, 0)
+                    time.sleep(0.01)
+                    continue
+
+                code = ord(char)
+                inp = Input()
+                inp.type = INPUT_KEYBOARD
+                inp.ii.ki.wVk = 0
+                inp.ii.ki.wScan = code
+                inp.ii.ki.dwFlags = KEYEVENTF_UNICODE
+                user32.SendInput(1, ctypes.byref(inp), ctypes.sizeof(Input))
+
+                inp.ii.ki.dwFlags = KEYEVENTF_UNICODE | KEYEVENTF_KEYUP
+                user32.SendInput(1, ctypes.byref(inp), ctypes.sizeof(Input))
+                time.sleep(0.005)
+
+            return True, f"Typed {len(text)} characters into active window"
+        except Exception as e:
+            logger.error(f"Type text error: {e}")
+            return False, f"Typing error: {e}"
+
+    @staticmethod
+    def press_key(key: str) -> Tuple[bool, str]:
+        """
+        Press special key or shortcut combo (e.g., 'enter', 'backspace', 'ctrl+v', 'win+d').
+        """
+        SystemController.ensure_desktop_access()
+        user32 = ctypes.windll.user32
+        k = key.lower().strip()
+
+        KEYEVENTF_EXTENDEDKEY = 0x0001
+        KEYEVENTF_KEYUP = 0x0002
+
+        vk_map = {
+            "enter": 0x0D, "return": 0x0D,
+            "backspace": 0x08, "bksp": 0x08,
+            "tab": 0x09,
+            "escape": 0x1B, "esc": 0x1B,
+            "space": 0x20,
+            "delete": 0x2E, "del": 0x2E,
+            "win": 0x5B, "super": 0x5B,
+            "up": 0x26, "down": 0x28, "left": 0x25, "right": 0x27,
+            "pageup": 0x21, "pagedown": 0x22,
+            "home": 0x24, "end": 0x23,
+            "insert": 0x2D,
+            "f1": 0x70, "f2": 0x71, "f3": 0x72, "f4": 0x73, "f5": 0x74,
+            "f6": 0x75, "f7": 0x76, "f8": 0x77, "f9": 0x78, "f10": 0x79,
+            "f11": 0x7A, "f12": 0x7B,
+        }
+
+        parts = [p.strip() for p in k.split("+")]
+        modifiers = []
+
+        for p in parts[:-1]:
+            if p in ("ctrl", "control"):
+                modifiers.append(0x11)
+            elif p in ("alt", "menu"):
+                modifiers.append(0x12)
+            elif p in ("shift",):
+                modifiers.append(0x10)
+            elif p in ("win", "super", "cmd"):
+                modifiers.append(0x5B)
+
+        last_part = parts[-1]
+        if last_part in vk_map:
+            primary_vk = vk_map[last_part]
+        elif len(last_part) == 1:
+            primary_vk = ord(last_part.upper())
+        elif last_part in ("ctrl", "alt", "shift", "win"):
+            mod_code = {"ctrl": 0x11, "alt": 0x12, "shift": 0x10, "win": 0x5B}[last_part]
+            user32.keybd_event(mod_code, 0, 0, 0)
+            time.sleep(0.04)
+            user32.keybd_event(mod_code, 0, KEYEVENTF_KEYUP, 0)
+            return True, f"Pressed {last_part}"
+        else:
+            return False, f"Unknown key '{key}'"
+
+        try:
+            for mod in modifiers:
+                user32.keybd_event(mod, 0, 0, 0)
+                time.sleep(0.01)
+
+            ext = primary_vk in (0x25, 0x26, 0x27, 0x28, 0x21, 0x22, 0x24, 0x23, 0x2E, 0x2D)
+            flags = KEYEVENTF_EXTENDEDKEY if ext else 0
+            user32.keybd_event(primary_vk, 0, flags, 0)
+            time.sleep(0.04)
+            user32.keybd_event(primary_vk, 0, flags | KEYEVENTF_KEYUP, 0)
+            time.sleep(0.01)
+            return True, f"Key '{key}' pressed"
+        except Exception as e:
+            logger.error(f"Press key error: {e}")
+            return False, f"Error pressing key: {e}"
+        finally:
+            for mod in reversed(modifiers):
+                user32.keybd_event(mod, 0, KEYEVENTF_KEYUP, 0)
+
 
     @staticmethod
     def speak_text(text: str) -> bool:

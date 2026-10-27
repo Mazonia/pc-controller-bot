@@ -108,23 +108,25 @@ HTML_PLAYER_TEMPLATE = """<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0, user-scalable=yes">
-    <title>PC Sentinel — Live Remote Cast</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <title>PC Sentinel — Remote Ghost Mouse & Cast</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
     <style>
         :root {
-            --bg: #090d16;
-            --surface: rgba(18, 24, 38, 0.85);
-            --surface-border: rgba(255, 255, 255, 0.1);
+            --bg: #070b14;
+            --surface: rgba(15, 23, 42, 0.88);
+            --surface-border: rgba(255, 255, 255, 0.12);
             --accent: #38bdf8;
-            --accent-glow: rgba(56, 189, 248, 0.3);
+            --accent-glow: rgba(56, 189, 248, 0.35);
+            --accent-subtle: rgba(56, 189, 248, 0.15);
             --danger: #f43f5e;
             --success: #10b981;
             --warning: #f59e0b;
             --text-main: #f8fafc;
             --text-sub: #94a3b8;
+            --dock-h: 155px;
         }
 
         * {
@@ -136,130 +138,153 @@ HTML_PLAYER_TEMPLATE = """<!DOCTYPE html>
 
         body {
             font-family: 'Outfit', sans-serif;
-            background: radial-gradient(circle at 50% 0%, #172554 0%, var(--bg) 60%);
+            background: radial-gradient(circle at 50% 0%, #0f1d3a 0%, var(--bg) 75%);
             color: var(--text-main);
-            min-height: 100vh;
+            height: 100vh;
+            height: 100dvh;
+            overflow: hidden;
             display: flex;
             flex-direction: column;
-            overflow-x: hidden;
+            user-select: none;
+            -webkit-user-select: none;
         }
 
+        /* ── Top Bar ─────────────────────────────────────────────── */
         header {
-            position: sticky;
-            top: 0;
-            z-index: 100;
+            position: relative;
+            z-index: 110;
             backdrop-filter: blur(16px);
             -webkit-backdrop-filter: blur(16px);
             background: var(--surface);
             border-bottom: 1px solid var(--surface-border);
-            padding: 12px 20px;
+            padding: 8px 14px;
             display: flex;
             align-items: center;
             justify-content: space-between;
-            gap: 12px;
+            gap: 10px;
+            flex-shrink: 0;
         }
 
-        .brand {
+        .brand-group {
             display: flex;
             align-items: center;
-            gap: 10px;
+            gap: 8px;
+            min-width: 0;
         }
 
         .badge-live {
             display: inline-flex;
             align-items: center;
-            gap: 6px;
+            gap: 5px;
             background: rgba(244, 63, 94, 0.15);
             border: 1px solid rgba(244, 63, 94, 0.4);
             color: #fda4af;
-            padding: 4px 10px;
+            padding: 3px 8px;
             border-radius: 999px;
-            font-size: 0.75rem;
+            font-size: 0.7rem;
             font-weight: 700;
-            letter-spacing: 0.08em;
-            text-transform: uppercase;
-        }
-
-        .badge-net {
-            display: inline-flex;
-            align-items: center;
-            gap: 6px;
-            background: rgba(56, 189, 248, 0.15);
-            border: 1px solid rgba(56, 189, 248, 0.35);
-            color: #7dd3fc;
-            padding: 4px 10px;
-            border-radius: 999px;
-            font-size: 0.75rem;
-            font-weight: 600;
+            letter-spacing: 0.05em;
         }
 
         .pulse-dot {
-            width: 8px;
-            height: 8px;
+            width: 7px;
+            height: 7px;
             background: var(--danger);
             border-radius: 50%;
-            box-shadow: 0 0 10px var(--danger);
             animation: pulse 1.5s infinite;
         }
 
         @keyframes pulse {
-            0% { transform: scale(0.95); opacity: 0.8; }
-            50% { transform: scale(1.3); opacity: 1; box-shadow: 0 0 14px var(--danger); }
-            100% { transform: scale(0.95); opacity: 0.8; }
+            0% { transform: scale(0.9); opacity: 0.8; }
+            50% { transform: scale(1.3); opacity: 1; box-shadow: 0 0 10px var(--danger); }
+            100% { transform: scale(0.9); opacity: 0.8; }
         }
 
-        .header-title {
-            font-size: 1rem;
-            font-weight: 600;
-            letter-spacing: -0.01em;
+        .window-pill {
+            background: rgba(255, 255, 255, 0.06);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            padding: 3px 10px;
+            border-radius: 8px;
+            font-size: 0.75rem;
+            color: #cbd5e1;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            max-width: 140px;
         }
 
-        .meta-stats {
+        .mode-segmented {
             display: flex;
-            align-items: center;
-            gap: 14px;
-            font-family: 'JetBrains Mono', monospace;
-            font-size: 0.8rem;
+            background: rgba(0, 0, 0, 0.4);
+            border: 1px solid var(--surface-border);
+            border-radius: 10px;
+            padding: 2px;
+            gap: 2px;
+        }
+
+        .mode-btn {
+            background: transparent;
+            border: none;
             color: var(--text-sub);
-        }
-
-        .stat-item {
+            padding: 5px 9px;
+            border-radius: 8px;
+            font-size: 0.75rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s ease;
             display: flex;
             align-items: center;
-            gap: 5px;
+            gap: 4px;
         }
 
-        .stat-val {
-            color: var(--accent);
-            font-weight: 500;
+        .mode-btn.active {
+            background: var(--accent);
+            color: #040812;
+            box-shadow: 0 0 10px var(--accent-glow);
         }
 
-        main {
-            flex: 1;
+        .header-actions {
             display: flex;
-            flex-direction: column;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .icon-btn {
+            background: rgba(255, 255, 255, 0.08);
+            border: 1px solid rgba(255, 255, 255, 0.12);
+            color: var(--text-main);
+            padding: 6px 9px;
+            border-radius: 8px;
+            font-size: 0.8rem;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .icon-btn:active {
+            transform: scale(0.95);
+        }
+
+        /* ── Main Viewport & Ghost Trackpad ───────────────────────── */
+        main {
+            position: relative;
+            flex: 1;
+            width: 100%;
+            height: calc(100% - 50px);
+            overflow: hidden;
+            background: #020617;
+            display: flex;
             align-items: center;
             justify-content: center;
-            padding: 16px;
-            gap: 16px;
-            width: 100%;
-            max-width: 1400px;
-            margin: 0 auto;
         }
 
-        .stream-viewport-wrapper {
+        .viewport-container {
             position: relative;
             width: 100%;
-            max-width: 1280px;
-            background: #020617;
-            border-radius: 16px;
-            border: 1px solid var(--surface-border);
-            overflow: hidden;
-            box-shadow: 0 20px 50px rgba(0, 0, 0, 0.6), 0 0 20px var(--accent-glow);
-            aspect-ratio: 16 / 9;
+            height: 100%;
             display: flex;
             align-items: center;
             justify-content: center;
+            background: #020617;
         }
 
         #stream-img {
@@ -267,331 +292,646 @@ HTML_PLAYER_TEMPLATE = """<!DOCTYPE html>
             height: 100%;
             object-fit: contain;
             display: block;
-            user-select: none;
-            -webkit-user-drag: none;
+            pointer-events: none;
+            transition: opacity 0.2s ease;
+            opacity: 0.35; /* default ghost opacity */
         }
 
-        .active-window-pill {
+        /* Full Screen Interactive Touch Trackpad Surface */
+        #touch-surface {
             position: absolute;
-            top: 14px;
-            left: 14px;
-            z-index: 10;
-            background: rgba(15, 23, 42, 0.85);
-            backdrop-filter: blur(8px);
-            border: 1px solid rgba(255, 255, 255, 0.1);
-            padding: 6px 14px;
-            border-radius: 8px;
-            font-size: 0.8rem;
-            color: #cbd5e1;
+            inset: 0;
+            width: 100%;
+            height: 100%;
+            z-index: 40;
+            touch-action: none;
+            cursor: crosshair;
+        }
+
+        /* High-Contrast Floating Cursor Radar & Crosshair */
+        #cursor-radar {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            width: 30px;
+            height: 30px;
+            margin-left: -15px;
+            margin-top: -15px;
+            border: 2px solid #38bdf8;
+            border-radius: 50%;
+            pointer-events: none;
+            z-index: 50;
+            box-shadow: 0 0 14px #38bdf8, inset 0 0 8px rgba(56, 189, 248, 0.4);
             display: flex;
             align-items: center;
-            gap: 8px;
-            max-width: 80%;
-            white-space: nowrap;
-            overflow: hidden;
-            text-overflow: ellipsis;
+            justify-content: center;
+            transition: transform 0.04s ease-out;
+            will-change: transform;
         }
 
-        .stream-status-overlay {
+        #cursor-radar::before {
+            content: '';
             position: absolute;
-            bottom: 14px;
-            right: 14px;
-            z-index: 10;
-            background: rgba(15, 23, 42, 0.85);
+            width: 44px;
+            height: 1px;
+            background: rgba(56, 189, 248, 0.4);
+        }
+
+        #cursor-radar::after {
+            content: '';
+            position: absolute;
+            height: 44px;
+            width: 1px;
+            background: rgba(56, 189, 248, 0.4);
+        }
+
+        .cursor-center-dot {
+            width: 7px;
+            height: 7px;
+            background: #ffffff;
+            border-radius: 50%;
+            box-shadow: 0 0 6px #ffffff;
+            z-index: 2;
+        }
+
+        #cursor-radar.click-ripple {
+            animation: radarPulse 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+        }
+
+        @keyframes radarPulse {
+            0% { transform: scale(0.9); border-color: #f43f5e; box-shadow: 0 0 20px #f43f5e; }
+            50% { transform: scale(1.6); border-color: #38bdf8; }
+            100% { transform: scale(1); }
+        }
+
+        /* Right Edge Vertical Scroll Strip */
+        #edge-scroll-strip {
+            position: absolute;
+            top: 15%;
+            bottom: 25%;
+            right: 6px;
+            width: 32px;
+            z-index: 45;
+            background: rgba(15, 23, 42, 0.65);
+            border: 1px solid rgba(255, 255, 255, 0.15);
+            border-radius: 16px;
             backdrop-filter: blur(8px);
-            border: 1px solid rgba(255, 255, 255, 0.1);
-            padding: 5px 12px;
-            border-radius: 6px;
-            font-family: 'JetBrains Mono', monospace;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: space-between;
+            padding: 8px 0;
+            color: #94a3b8;
             font-size: 0.75rem;
+            touch-action: none;
+            box-shadow: 0 6px 20px rgba(0, 0, 0, 0.5);
+            transition: all 0.2s;
+        }
+
+        #edge-scroll-strip.active {
+            border-color: var(--accent);
+            background: rgba(56, 189, 248, 0.25);
+            color: #ffffff;
+            box-shadow: 0 0 16px var(--accent-glow);
+        }
+
+        .scroll-icon {
+            font-size: 0.75rem;
+            opacity: 0.8;
+        }
+
+        /* ── Settings Drawer / Quick Bar ─────────────────────────── */
+        .controls-overlay {
+            position: absolute;
+            top: 8px;
+            left: 12px;
+            z-index: 48;
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px;
+            pointer-events: auto;
+        }
+
+        .hud-pill {
+            background: rgba(15, 23, 42, 0.85);
+            border: 1px solid var(--surface-border);
+            backdrop-filter: blur(8px);
+            padding: 4px 10px;
+            border-radius: 8px;
+            font-size: 0.75rem;
+            font-family: 'JetBrains Mono', monospace;
             color: #94a3b8;
             display: flex;
             align-items: center;
             gap: 6px;
         }
 
-        .toolbar {
-            width: 100%;
-            max-width: 1280px;
-            background: var(--surface);
-            backdrop-filter: blur(12px);
-            border: 1px solid var(--surface-border);
-            border-radius: 14px;
-            padding: 12px 18px;
+        .hud-pill span.val {
+            color: var(--accent);
+            font-weight: 600;
+        }
+
+        /* ── Floating Phone Input & Keyboard Dock ────────────────── */
+        #keyboard-dock {
+            position: fixed;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            z-index: 100;
+            background: rgba(9, 14, 26, 0.94);
+            backdrop-filter: blur(24px);
+            -webkit-backdrop-filter: blur(24px);
+            border-top: 1px solid rgba(255, 255, 255, 0.14);
+            padding: 8px 12px calc(8px + env(safe-area-inset-bottom, 0px));
             display: flex;
             flex-direction: column;
-            gap: 12px;
+            gap: 7px;
+            box-shadow: 0 -12px 36px rgba(0, 0, 0, 0.7);
+            transition: transform 0.28s cubic-bezier(0.16, 1, 0.3, 1);
         }
 
-        .toolbar-row {
+        #keyboard-dock.dock-minimized {
+            transform: translateY(calc(100% - 36px));
+        }
+
+        .dock-toggle-bar {
+            width: 100%;
             display: flex;
-            flex-wrap: wrap;
             align-items: center;
             justify-content: space-between;
-            gap: 10px;
+            cursor: pointer;
+            padding: 0 4px 2px 4px;
         }
 
-        .control-group {
-            display: flex;
-            flex-wrap: wrap;
-            align-items: center;
-            gap: 8px;
+        .dock-handle {
+            width: 36px;
+            height: 4px;
+            background: rgba(255, 255, 255, 0.25);
+            border-radius: 999px;
+            margin: 0 auto;
         }
 
-        .section-label {
+        .dock-title {
             font-size: 0.75rem;
             font-weight: 600;
-            letter-spacing: 0.05em;
-            text-transform: uppercase;
             color: var(--text-sub);
-            margin-right: 4px;
+            display: flex;
+            align-items: center;
+            gap: 5px;
         }
 
-        .btn {
-            background: rgba(255, 255, 255, 0.06);
-            border: 1px solid rgba(255, 255, 255, 0.14);
-            color: var(--text-main);
-            padding: 8px 13px;
-            border-radius: 8px;
-            font-family: inherit;
-            font-size: 0.85rem;
-            font-weight: 500;
-            cursor: pointer;
-            transition: all 0.2s ease;
-            display: inline-flex;
+        /* Row 1: Direct Text Input Bar */
+        .type-input-row {
+            display: flex;
             align-items: center;
             gap: 6px;
+            width: 100%;
         }
 
-        .btn:hover {
-            background: rgba(255, 255, 255, 0.14);
-            border-color: rgba(255, 255, 255, 0.3);
-            transform: translateY(-1px);
+        #phone-input {
+            flex: 1;
+            background: #0f172a;
+            border: 1px solid rgba(56, 189, 248, 0.35);
+            border-radius: 10px;
+            padding: 9px 12px;
+            color: #f8fafc;
+            font-size: 0.92rem;
+            font-family: inherit;
+            outline: none;
+            transition: all 0.2s;
         }
 
-        .btn:active {
-            transform: translateY(0);
+        #phone-input:focus {
+            border-color: var(--accent);
+            box-shadow: 0 0 14px var(--accent-glow);
+            background: #111c35;
         }
 
-        .btn-accent {
-            background: rgba(56, 189, 248, 0.15);
-            border-color: rgba(56, 189, 248, 0.4);
-            color: #7dd3fc;
+        .btn-send {
+            background: var(--accent);
+            color: #040812;
+            border: none;
+            border-radius: 9px;
+            padding: 9px 14px;
+            font-family: inherit;
+            font-size: 0.85rem;
+            font-weight: 700;
+            cursor: pointer;
+            transition: all 0.15s;
+            display: flex;
+            align-items: center;
+            gap: 4px;
+            white-space: nowrap;
         }
 
-        .btn-accent:hover {
-            background: rgba(56, 189, 248, 0.25);
-            border-color: #38bdf8;
+        .btn-send:active {
+            transform: scale(0.95);
         }
 
-        .btn-desktop {
-            background: rgba(99, 102, 241, 0.18);
-            border-color: rgba(99, 102, 241, 0.4);
-            color: #c7d2fe;
+        .btn-live-toggle {
+            background: rgba(255, 255, 255, 0.08);
+            border: 1px solid rgba(255, 255, 255, 0.15);
+            color: var(--text-sub);
+            border-radius: 9px;
+            padding: 9px 11px;
+            font-size: 0.75rem;
             font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s;
+            white-space: nowrap;
         }
 
-        .btn-desktop:hover {
-            background: rgba(99, 102, 241, 0.3);
-            border-color: #818cf8;
+        .btn-live-toggle.active {
+            background: rgba(16, 185, 129, 0.2);
+            border-color: var(--success);
+            color: #6ee7b7;
         }
 
-        .btn-danger {
-            background: rgba(244, 63, 94, 0.15);
-            border-color: rgba(244, 63, 94, 0.35);
+        /* Row 2: Tactile Mouse Buttons Bar */
+        .mouse-buttons-row {
+            display: grid;
+            grid-template-columns: 2fr 1.2fr 2fr;
+            gap: 6px;
+            width: 100%;
+        }
+
+        .mouse-btn {
+            background: rgba(255, 255, 255, 0.08);
+            border: 1px solid rgba(255, 255, 255, 0.15);
+            color: var(--text-main);
+            padding: 8px 10px;
+            border-radius: 8px;
+            font-family: inherit;
+            font-size: 0.8rem;
+            font-weight: 600;
+            cursor: pointer;
+            text-align: center;
+            transition: all 0.15s;
+        }
+
+        .mouse-btn:active {
+            background: var(--accent);
+            color: #040812;
+            transform: scale(0.97);
+        }
+
+        .mouse-btn.active-drag {
+            background: rgba(244, 63, 94, 0.25);
+            border-color: var(--danger);
             color: #fda4af;
         }
 
-        .btn-danger:hover {
-            background: rgba(244, 63, 94, 0.3);
-            border-color: var(--danger);
+        /* Row 3: Special Keys Scrollable Ribbon */
+        .keys-ribbon {
+            display: flex;
+            gap: 6px;
+            overflow-x: auto;
+            padding-bottom: 3px;
+            -webkit-overflow-scrolling: touch;
+            scrollbar-width: none;
         }
 
-        select {
-            background: #0f172a;
-            border: 1px solid rgba(255, 255, 255, 0.18);
+        .keys-ribbon::-webkit-scrollbar {
+            display: none;
+        }
+
+        .key-pill {
+            background: rgba(255, 255, 255, 0.08);
+            border: 1px solid rgba(255, 255, 255, 0.14);
+            color: #f1f5f9;
+            padding: 6px 11px;
+            border-radius: 8px;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.76rem;
+            font-weight: 600;
+            white-space: nowrap;
+            cursor: pointer;
+            touch-action: manipulation;
+            transition: all 0.12s;
+            flex-shrink: 0;
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+        }
+
+        .key-pill:active {
+            background: var(--accent);
+            color: #040812;
+            border-color: var(--accent);
+            transform: scale(0.94);
+        }
+
+        .key-pill.pill-accent {
+            background: rgba(56, 189, 248, 0.15);
+            border-color: rgba(56, 189, 248, 0.35);
+            color: #7dd3fc;
+        }
+
+        /* ── Expandable Modal / Controls Tray ─────────────────────── */
+        #tray-modal {
+            position: fixed;
+            inset: 0;
+            z-index: 150;
+            background: rgba(4, 8, 18, 0.85);
+            backdrop-filter: blur(12px);
+            display: none;
+            align-items: flex-end;
+            justify-content: center;
+        }
+
+        #tray-modal.show {
+            display: flex;
+        }
+
+        .tray-sheet {
+            width: 100%;
+            max-width: 600px;
+            background: #0d1527;
+            border-top: 1px solid var(--surface-border);
+            border-radius: 20px 20px 0 0;
+            padding: 16px 20px calc(20px + env(safe-area-inset-bottom, 0px));
+            max-height: 85vh;
+            overflow-y: auto;
+            display: flex;
+            flex-direction: column;
+            gap: 14px;
+        }
+
+        .sheet-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+
+        .sheet-title {
+            font-size: 1rem;
+            font-weight: 700;
+        }
+
+        .tray-section {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+
+        .tray-label {
+            font-size: 0.75rem;
+            font-weight: 700;
+            letter-spacing: 0.05em;
+            text-transform: uppercase;
+            color: var(--text-sub);
+        }
+
+        .tray-row {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+        }
+
+        .tray-btn {
+            flex: 1;
+            min-width: 90px;
+            background: rgba(255, 255, 255, 0.08);
+            border: 1px solid rgba(255, 255, 255, 0.15);
             color: var(--text-main);
+            padding: 9px 12px;
+            border-radius: 9px;
+            font-family: inherit;
+            font-size: 0.8rem;
+            font-weight: 600;
+            cursor: pointer;
+            text-align: center;
+        }
+
+        .tray-btn:active {
+            background: var(--accent);
+            color: #040812;
+        }
+
+        select.tray-select {
+            background: #0f172a;
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            color: #f8fafc;
             padding: 8px 12px;
             border-radius: 8px;
             font-family: inherit;
             font-size: 0.85rem;
-            outline: none;
-            cursor: pointer;
+            width: 100%;
         }
 
-        select:focus {
-            border-color: var(--accent);
-        }
-
-        .label-text {
-            font-size: 0.8rem;
-            color: var(--text-sub);
-            font-weight: 500;
-        }
-
-        /* Toast notifications */
+        /* Toast Notifications */
         .toast {
             position: fixed;
-            bottom: 24px;
+            top: 60px;
             left: 50%;
-            transform: translateX(-50%) translateY(100px);
+            transform: translateX(-50%) translateY(-30px);
             background: rgba(15, 23, 42, 0.95);
             border: 1px solid var(--accent);
             color: #f8fafc;
-            padding: 10px 20px;
+            padding: 7px 16px;
             border-radius: 10px;
-            font-size: 0.9rem;
+            font-size: 0.82rem;
             font-weight: 500;
             box-shadow: 0 10px 30px rgba(0, 0, 0, 0.6);
             opacity: 0;
-            transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1);
-            z-index: 1000;
+            transition: all 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+            z-index: 200;
+            pointer-events: none;
             display: flex;
             align-items: center;
-            gap: 8px;
-            pointer-events: none;
+            gap: 6px;
         }
 
         .toast.show {
             transform: translateX(-50%) translateY(0);
             opacity: 1;
         }
-
-        @media (max-width: 768px) {
-            header {
-                padding: 10px 14px;
-            }
-            .meta-stats {
-                display: none;
-            }
-            .toolbar {
-                padding: 12px;
-            }
-            .toolbar-row {
-                flex-direction: column;
-                align-items: stretch;
-            }
-            .control-group {
-                justify-content: space-between;
-                width: 100%;
-            }
-            .control-group .btn {
-                flex: 1;
-                justify-content: center;
-                padding: 10px 6px;
-                font-size: 0.8rem;
-            }
-            .stream-viewport-wrapper {
-                border-radius: 12px;
-            }
-        }
     </style>
 </head>
 <body>
     <header>
-        <div class="brand">
+        <div class="brand-group">
             <span class="badge-live"><span class="pulse-dot"></span> LIVE</span>
-            <span class="header-title">PC Sentinel Screen</span>
-            <span class="badge-net" id="badge-net">🌍 Remote Connected</span>
+            <div class="window-pill" id="window-pill" title="Active Window">
+                <span id="window-title">PC Desktop</span>
+            </div>
         </div>
-        <div class="meta-stats">
-            <div class="stat-item"><span>FPS:</span> <span class="stat-val" id="stat-fps">--</span></div>
-            <div class="stat-item"><span>Ping:</span> <span class="stat-val" id="stat-ping">-- ms</span></div>
-            <div class="stat-item"><span>CPU:</span> <span class="stat-val" id="stat-cpu">--%</span></div>
-            <div class="stat-item"><span>RAM:</span> <span class="stat-val" id="stat-ram">--%</span></div>
+
+        <!-- Mode Segmented Control: Ghost vs Desktop vs OLED -->
+        <div class="mode-segmented">
+            <button class="mode-btn active" id="btn-mode-ghost" onclick="setScreenViewMode('ghost')">👻 Ghost</button>
+            <button class="mode-btn" id="btn-mode-desk" onclick="setScreenViewMode('desk')">🖥️ View</button>
+            <button class="mode-btn" id="btn-mode-oled" onclick="setScreenViewMode('oled')">⬛ OLED</button>
+        </div>
+
+        <div class="header-actions">
+            <button class="icon-btn" onclick="openTray()" title="PC Controls & Settings">⚙️</button>
         </div>
     </header>
 
-    <main>
-        <div class="stream-viewport-wrapper" id="viewport">
-            <div class="active-window-pill" id="window-pill">
-                <span>🪟</span> <span id="window-title">Initializing desktop feed...</span>
+    <main id="main-area">
+        <div class="viewport-container" id="viewport">
+            <!-- Screen Video Stream -->
+            <img id="stream-img" src="/stream.mjpg?token={{TOKEN}}" alt="Desktop Stream" />
+
+            <!-- Full-Screen Interactive Touch Surface -->
+            <div id="touch-surface"></div>
+
+            <!-- Floating High-Contrast Cursor Crosshair Radar -->
+            <div id="cursor-radar">
+                <div class="cursor-center-dot"></div>
             </div>
-            <div class="stream-status-overlay" id="status-overlay">
-                <span id="stream-mode-label">MJPEG Live</span>
+
+            <!-- Right Edge Touch Scroll Strip -->
+            <div id="edge-scroll-strip" title="Slide thumb to scroll">
+                <span class="scroll-icon">▲</span>
+                <span style="font-size: 0.65rem; font-weight:700;">SCROLL</span>
+                <span class="scroll-icon">▼</span>
             </div>
-            <img id="stream-img" src="/stream.mjpg?token={{TOKEN}}" alt="Live Screen Stream" />
+
+            <!-- Top HUD Diagnostics -->
+            <div class="controls-overlay">
+                <div class="hud-pill">FPS: <span class="val" id="stat-fps">--</span></div>
+                <div class="hud-pill">Ping: <span class="val" id="stat-ping">-- ms</span></div>
+                <div class="hud-pill">Pos: <span class="val" id="stat-pos">0, 0</span></div>
+            </div>
+        </div>
+    </main>
+
+    <!-- Bottom Phone Input & Remote Keyboard Dock -->
+    <div id="keyboard-dock">
+        <div class="dock-toggle-bar" onclick="toggleDock()">
+            <div class="dock-title"><span>📱 Remote Keyboard & Input</span></div>
+            <div class="dock-handle"></div>
+            <span id="dock-chevron" style="color: var(--text-sub); font-size: 0.75rem;">▼</span>
         </div>
 
-        <div class="toolbar">
-            <!-- Row 1: Virtual Desktop Controls & Window Switching -->
-            <div class="toolbar-row">
-                <div class="control-group">
-                    <span class="section-label">🪟 Desktops:</span>
-                    <button class="btn btn-desktop" onclick="switchDesktop('prev')" title="Switch to Previous Virtual Desktop (Win+Ctrl+Left)">◀ Desktop</button>
-                    <button class="btn btn-desktop" onclick="switchDesktop('next')" title="Switch to Next Virtual Desktop (Win+Ctrl+Right)">Desktop ▶</button>
-                    <button class="btn" onclick="switchDesktop('task_view')" title="Toggle Task View / Desktop Overview (Win+Tab)">🪟 Task View</button>
-                    <button class="btn" onclick="switchDesktop('new')" title="Create New Virtual Desktop (Win+Ctrl+D)">➕ New</button>
+        <!-- Direct Text Injection Bar -->
+        <div class="type-input-row">
+            <input type="text" id="phone-input" placeholder="Type here (supports phone voice dictation)..." autocomplete="off" autocorrect="on" spellcheck="true" enterkeyhint="send" />
+            <button class="btn-send" id="btn-send-text" onclick="sendInputText()">🚀 Send</button>
+            <button class="btn-live-toggle" id="btn-live-type" onclick="toggleLiveType()" title="Stream keystrokes instantly">⚡ Live</button>
+        </div>
+
+        <!-- Tactile Mouse Buttons -->
+        <div class="mouse-buttons-row">
+            <button class="mouse-btn" onclick="sendMouseClick('left')">🖱️ Left Click</button>
+            <button class="mouse-btn" id="btn-drag-lock" onclick="toggleDragLock()">🖲️ Drag: Off</button>
+            <button class="mouse-btn" onclick="sendMouseClick('right')">🖱️ Right Click</button>
+        </div>
+
+        <!-- Special Keys Scrollable Ribbon -->
+        <div class="keys-ribbon">
+            <button class="key-pill pill-accent" onclick="sendKey('enter')">⏎ Enter</button>
+            <button class="key-pill" onclick="sendKey('backspace')">⌫ Bksp</button>
+            <button class="key-pill" onclick="sendKey('tab')">⇥ Tab</button>
+            <button class="key-pill" onclick="sendKey('esc')">Esc</button>
+            <button class="key-pill pill-accent" onclick="pasteClipboard()">📋 Paste</button>
+            <button class="key-pill" onclick="sendKey('ctrl+c')">Copy</button>
+            <button class="key-pill" onclick="sendKey('ctrl+a')">Sel All</button>
+            <button class="key-pill" onclick="sendKey('ctrl+z')">Undo</button>
+            <button class="key-pill" onclick="sendKey('delete')">Del</button>
+            <button class="key-pill" onclick="sendKey('space')">Space</button>
+            <button class="key-pill" onclick="sendKey('win')">⊞ Win</button>
+            <button class="key-pill" onclick="sendKey('alt+tab')">Alt+Tab</button>
+            <button class="key-pill" onclick="sendKey('win+d')">Win+D</button>
+            <button class="key-pill" onclick="sendKey('up')">▲ Up</button>
+            <button class="key-pill" onclick="sendKey('down')">▼ Down</button>
+            <button class="key-pill" onclick="sendKey('left')">◄ Left</button>
+            <button class="key-pill" onclick="sendKey('right')">► Right</button>
+        </div>
+    </div>
+
+    <!-- PC Controls Tray / Settings Sheet -->
+    <div id="tray-modal" onclick="closeTrayOnBackdrop(event)">
+        <div class="tray-sheet">
+            <div class="sheet-header">
+                <span class="sheet-title">⚙️ PC Controls & Tuning</span>
+                <button class="icon-btn" onclick="closeTray()">✕</button>
+            </div>
+
+            <!-- Ghost Opacity Slider -->
+            <div class="tray-section">
+                <div style="display:flex; justify-content:space-between;">
+                    <span class="tray-label">👻 Ghost Desktop Opacity:</span>
+                    <span id="label-opacity" style="font-size:0.75rem; color:var(--accent); font-weight:600;">35%</span>
                 </div>
-                <div class="control-group">
-                    <span class="section-label">⚡ Windows:</span>
-                    <button class="btn btn-desktop" onclick="cycleWindow('prev')" title="Alt+Shift+Tab (Cycle back)">◀ Alt+Tab</button>
-                    <button class="btn btn-desktop" onclick="cycleWindow('next')" title="Alt+Tab (Cycle forward)">Alt+Tab ▶</button>
-                    <select id="sel-app" onchange="focusSelectedApp()" title="Directly focus open application" style="max-width: 220px;">
-                        <option value="">🗂️ Switch App...</option>
-                    </select>
-                    <button class="btn" onclick="refreshOpenWindows()" title="Refresh open application list">🔄</button>
+                <input type="range" id="slider-opacity" min="5" max="100" value="35" oninput="changeOpacity(this.value)" style="width:100%; accent-color:var(--accent);">
+            </div>
+
+            <!-- Trackpad Sensitivity Slider -->
+            <div class="tray-section">
+                <div style="display:flex; justify-content:space-between;">
+                    <span class="tray-label">⚡ Trackpad Sensitivity:</span>
+                    <span id="label-sens" style="font-size:0.75rem; color:var(--accent); font-weight:600;">1.4x</span>
                 </div>
-                <div class="control-group">
-                    <button class="btn btn-accent" onclick="downloadSnapshot()">📸 Snapshot</button>
-                    <button class="btn" onclick="toggleFullscreen()">⛶ Fullscreen</button>
-                    <button class="btn btn-danger" onclick="stopStream()">⏹️ Stop</button>
+                <input type="range" id="slider-sens" min="5" max="30" value="14" oninput="changeSensitivity(this.value)" style="width:100%; accent-color:var(--accent);">
+            </div>
+
+            <!-- Virtual Desktops -->
+            <div class="tray-section">
+                <span class="tray-label">🪟 Virtual Desktops</span>
+                <div class="tray-row">
+                    <button class="tray-btn" onclick="switchDesktop('prev')">◀ Prev Desk</button>
+                    <button class="tray-btn" onclick="switchDesktop('next')">Next Desk ▶</button>
+                    <button class="tray-btn" onclick="switchDesktop('task_view')">🪟 Task View</button>
+                    <button class="tray-btn" onclick="switchDesktop('new')">➕ New</button>
                 </div>
             </div>
 
-            <!-- Row 2: Stream Tuning & Network Modes -->
-            <div class="toolbar-row">
-                <div class="control-group">
-                    <span class="section-label">Engine:</span>
-                    <select id="sel-mode" onchange="changeMode()">
-                        <option value="mjpeg" selected>🎥 Smooth Video (MJPEG)</option>
-                        <option value="snapshot">⚡ Turbo Snapshot (Cellular / Low Latency)</option>
+            <!-- Windows & Apps -->
+            <div class="tray-section">
+                <span class="tray-label">⚡ Switch Open App</span>
+                <div class="tray-row">
+                    <select id="sel-app" class="tray-select" onchange="focusSelectedApp()">
+                        <option value="">🗂️ Focus Open App...</option>
                     </select>
+                </div>
+            </div>
 
-                    <span class="label-text" style="margin-left: 8px;">Resolution:</span>
-                    <select id="sel-quality" onchange="updateSettings()">
+            <!-- Stream Quality -->
+            <div class="tray-section">
+                <span class="tray-label">🎥 Stream Engine & Quality</span>
+                <div class="tray-row">
+                    <select id="sel-quality" class="tray-select" onchange="updateSettings()" style="flex:1;">
                         <option value="480">480p (Data Saver)</option>
-                        <option value="720" selected>720p (Crisp & Fast)</option>
+                        <option value="720" selected>720p (Crisp)</option>
                         <option value="1080">1080p (Full HD)</option>
                     </select>
-
-                    <span class="label-text" style="margin-left: 8px;">Target FPS:</span>
-                    <select id="sel-fps" onchange="updateSettings()">
+                    <select id="sel-fps" class="tray-select" onchange="updateSettings()" style="flex:1;">
                         <option value="10">10 FPS</option>
                         <option value="15" selected>15 FPS</option>
                         <option value="25">25 FPS</option>
                     </select>
                 </div>
-                <div class="control-group">
-                    <button class="btn" onclick="forceReconnect()" title="Reconnect Video Stream">🔄 Reconnect</button>
+            </div>
+
+            <!-- Utilities -->
+            <div class="tray-section">
+                <div class="tray-row">
+                    <button class="tray-btn" onclick="toggleFullscreen()">⛶ Fullscreen</button>
+                    <button class="tray-btn" onclick="forceReconnect()">🔄 Reconnect</button>
+                    <button class="tray-btn" style="color:var(--danger); border-color:rgba(244,63,94,0.3);" onclick="stopStream()">⏹️ Stop</button>
                 </div>
             </div>
         </div>
-    </main>
+    </div>
 
     <div class="toast" id="toast">Notice message</div>
 
     <script>
         const token = "{{TOKEN}}";
-        let streamMode = 'mjpeg'; // 'mjpeg' or 'snapshot'
-        let frameCount = 0;
-        let lastTime = performance.now();
-        let lastFrameLoaded = performance.now();
-        let snapshotRunning = false;
-        let stallCount = 0;
+        let viewMode = 'ghost'; // 'ghost', 'desk', 'oled'
+        let sensitivity = 1.4;
+        let isDragLock = false;
+        let liveTypeEnabled = false;
 
         const img = document.getElementById('stream-img');
+        const touchSurface = document.getElementById('touch-surface');
+        const radar = document.getElementById('cursor-radar');
+        const phoneInput = document.getElementById('phone-input');
 
-        // Detect connection host
-        if (location.hostname.includes('trycloudflare.com')) {
-            document.getElementById('badge-net').textContent = '🌍 Cloudflare Global';
-        } else if (location.hostname === 'localhost' || location.hostname === '127.0.0.1') {
-            document.getElementById('badge-net').textContent = '💻 Host Loopback';
-        } else {
-            document.getElementById('badge-net').textContent = '🏠 Local LAN';
-        }
-
-        // Show Toast Notification
+        // Toast feedback
         let toastTimer = null;
         function showToast(msg, isWarn = false) {
             const toast = document.getElementById('toast');
@@ -599,182 +939,350 @@ HTML_PLAYER_TEMPLATE = """<!DOCTYPE html>
             toast.style.borderColor = isWarn ? '#f43f5e' : '#38bdf8';
             toast.classList.add('show');
             if (toastTimer) clearTimeout(toastTimer);
-            toastTimer = setTimeout(() => {
-                toast.classList.remove('show');
-            }, 3000);
+            toastTimer = setTimeout(() => toast.classList.remove('show'), 2200);
         }
 
-        // Frame timing and client FPS calculation
-        img.onload = () => {
-            frameCount++;
-            lastFrameLoaded = performance.now();
-            const now = performance.now();
-            if (now - lastTime >= 1000) {
-                const fps = Math.round((frameCount * 1000) / (now - lastTime));
-                document.getElementById('stat-fps').textContent = fps;
-                frameCount = 0;
-                lastTime = now;
+        // Haptic feedback helper
+        function vibrate(ms = 35) {
+            if (navigator.vibrate) {
+                try { navigator.vibrate(ms); } catch (e) {}
             }
-        };
+        }
 
-        // Mobile Watchdog: Auto-reconnect if MJPEG stream stalls > 3.5s
-        setInterval(() => {
-            if (streamMode === 'mjpeg') {
-                const elapsed = performance.now() - lastFrameLoaded;
-                if (elapsed > 3500) {
-                    stallCount++;
-                    document.getElementById('stream-mode-label').textContent = 'Reconnecting...';
-                    if (stallCount >= 3) {
-                        showToast('Cellular lag detected. Auto-switched to Snapshot Mode.', true);
-                        document.getElementById('sel-mode').value = 'snapshot';
-                        changeMode();
-                    } else {
-                        forceReconnect();
+        // Mode Switching
+        function setScreenViewMode(mode) {
+            viewMode = mode;
+            document.querySelectorAll('.mode-btn').forEach(b => b.classList.remove('active'));
+            if (mode === 'ghost') {
+                document.getElementById('btn-mode-ghost').classList.add('active');
+                img.style.display = 'block';
+                img.style.opacity = (document.getElementById('slider-opacity').value / 100);
+                showToast('Ghost Mode: Faint Screen + Trackpad 👻');
+            } else if (mode === 'desk') {
+                document.getElementById('btn-mode-desk').classList.add('active');
+                img.style.display = 'block';
+                img.style.opacity = '1.0';
+                showToast('View Mode: Full Desktop 🖥️');
+            } else {
+                document.getElementById('btn-mode-oled').classList.add('active');
+                img.style.display = 'none';
+                showToast('OLED Stealth Trackpad ⬛');
+            }
+        }
+
+        function changeOpacity(val) {
+            document.getElementById('label-opacity').textContent = val + '%';
+            if (viewMode === 'ghost') {
+                img.style.opacity = (val / 100);
+            }
+        }
+
+        function changeSensitivity(val) {
+            sensitivity = (val / 10);
+            document.getElementById('label-sens').textContent = sensitivity.toFixed(1) + 'x';
+        }
+
+        // ── FULL-SCREEN TOUCH TRACKPAD GESTURES ──────────────────────────
+        let lastTouchX = 0;
+        let lastTouchY = 0;
+        let touchStartX = 0;
+        let touchStartY = 0;
+        let touchStartTime = 0;
+        let movedDist = 0;
+        let longPressTimer = null;
+        let pendingDx = 0;
+        let pendingDy = 0;
+        let moveRafId = null;
+
+        // Virtual Radar cursor coordinates on screen
+        let radarX = window.innerWidth / 2;
+        let radarY = (window.innerHeight - 150) / 2;
+
+        function updateRadarPos(x, y) {
+            radarX = Math.max(10, Math.min(window.innerWidth - 10, x));
+            radarY = Math.max(10, Math.min(window.innerHeight - 150, y));
+            radar.style.left = radarX + 'px';
+            radar.style.top = radarY + 'px';
+        }
+        updateRadarPos(radarX, radarY);
+
+        function triggerRadarRipple() {
+            radar.classList.remove('click-ripple');
+            void radar.offsetWidth;
+            radar.classList.add('click-ripple');
+            vibrate(30);
+        }
+
+        function flushPendingMove() {
+            if (pendingDx !== 0 || pendingDy !== 0) {
+                const dx = Math.round(pendingDx);
+                const dy = Math.round(pendingDy);
+                pendingDx = 0;
+                pendingDy = 0;
+                fetch(`/input/mouse?token=${token}&action=move&dx=${dx}&dy=${dy}`, {
+                    method: 'POST',
+                    keepalive: true
+                }).catch(() => {});
+            }
+            moveRafId = null;
+        }
+
+        touchSurface.addEventListener('touchstart', (e) => {
+            if (e.touches.length === 1) {
+                const t = e.touches[0];
+                lastTouchX = t.clientX;
+                lastTouchY = t.clientY;
+                touchStartX = t.clientX;
+                touchStartY = t.clientY;
+                touchStartTime = performance.now();
+                movedDist = 0;
+
+                // Long press for Right Click
+                if (longPressTimer) clearTimeout(longPressTimer);
+                longPressTimer = setTimeout(() => {
+                    if (movedDist < 12) {
+                        sendMouseClick('right');
+                        showToast('Right Click 🖱️');
+                        vibrate(55);
                     }
-                } else {
-                    document.getElementById('stream-mode-label').textContent = 'MJPEG Live';
+                }, 380);
+            } else if (e.touches.length === 2) {
+                // Two fingers: cancel long press
+                if (longPressTimer) clearTimeout(longPressTimer);
+                lastTouchY = (e.touches[0].clientY + e.touches[1].clientY) / 2;
+            }
+        }, { passive: false });
+
+        touchSurface.addEventListener('touchmove', (e) => {
+            e.preventDefault(); // prevent pull to refresh and scroll
+            if (e.touches.length === 1) {
+                const t = e.touches[0];
+                const dx = (t.clientX - lastTouchX) * sensitivity;
+                const dy = (t.clientY - lastTouchY) * sensitivity;
+                lastTouchX = t.clientX;
+                lastTouchY = t.clientY;
+
+                movedDist += Math.hypot(dx, dy);
+                if (movedDist > 10 && longPressTimer) {
+                    clearTimeout(longPressTimer);
+                    longPressTimer = null;
+                }
+
+                updateRadarPos(radarX + dx, radarY + dy);
+                pendingDx += dx;
+                pendingDy += dy;
+
+                if (!moveRafId) {
+                    moveRafId = requestAnimationFrame(flushPendingMove);
+                }
+            } else if (e.touches.length === 2) {
+                // 2-finger scroll
+                const curY = (e.touches[0].clientY + e.touches[1].clientY) / 2;
+                const dy = curY - lastTouchY;
+                lastTouchY = curY;
+                if (Math.abs(dy) > 3) {
+                    const scrollDelta = Math.round(dy * 15);
+                    fetch(`/input/mouse?token=${token}&action=scroll&delta=${scrollDelta}`, { method: 'POST', keepalive: true }).catch(() => {});
                 }
             }
-        }, 1200);
+        }, { passive: false });
 
-        // Force Stream Reconnect
-        function forceReconnect() {
-            if (streamMode === 'mjpeg') {
-                lastFrameLoaded = performance.now();
-                img.src = `/stream.mjpg?token=${token}&_t=${Date.now()}`;
-                showToast('Stream reconnected 🔄');
-            } else {
-                showToast('Snapshot refreshed 🔄');
+        touchSurface.addEventListener('touchend', (e) => {
+            if (longPressTimer) {
+                clearTimeout(longPressTimer);
+                longPressTimer = null;
             }
-        }
 
-        // Switch Engine Mode: MJPEG vs Turbo Snapshot
-        function changeMode() {
-            const mode = document.getElementById('sel-mode').value;
-            streamMode = mode;
-            stallCount = 0;
-            if (mode === 'snapshot') {
-                document.getElementById('stream-mode-label').textContent = 'Turbo Snapshot';
-                showToast('Switched to Snapshot Mode (Cellular Resilient) ⚡');
-                if (!snapshotRunning) runSnapshotLoop();
-            } else {
-                snapshotRunning = false;
-                document.getElementById('stream-mode-label').textContent = 'MJPEG Live';
-                img.src = `/stream.mjpg?token=${token}&_t=${Date.now()}`;
-                lastFrameLoaded = performance.now();
-                showToast('Switched to Live MJPEG Stream 🎥');
+            // Flush remaining move
+            if (pendingDx !== 0 || pendingDy !== 0) {
+                flushPendingMove();
             }
-        }
 
-        // Turbo Snapshot Loop (Bulletproof across extreme cellular latency & CGNAT)
-        async function runSnapshotLoop() {
-            snapshotRunning = true;
-            while (snapshotRunning && streamMode === 'snapshot') {
-                const fps = parseInt(document.getElementById('sel-fps').value) || 10;
-                const delay = Math.max(40, Math.round(1000 / fps));
-                const t0 = performance.now();
-                try {
-                    const res = await fetch(`/snapshot.jpg?token=${token}&_t=${Date.now()}`);
-                    if (res.ok) {
-                        const blob = await res.blob();
-                        const oldUrl = img.src;
-                        img.src = URL.createObjectURL(blob);
-                        if (oldUrl.startsWith('blob:')) URL.revokeObjectURL(oldUrl);
-                        lastFrameLoaded = performance.now();
-                    }
-                } catch(e) {}
-                const elapsed = performance.now() - t0;
-                const waitTime = Math.max(10, delay - elapsed);
-                await new Promise(r => setTimeout(r, waitTime));
+            const elapsed = performance.now() - touchStartTime;
+            if (elapsed < 240 && movedDist < 10) {
+                // Quick tap -> Left Click
+                sendMouseClick('left');
+                triggerRadarRipple();
             }
-        }
+        });
 
-        // Poll diagnostics and measure Ping latency
-        async function fetchStatusAndPing() {
-            const t0 = performance.now();
+        // Right Edge Scroll Strip logic
+        const edgeStrip = document.getElementById('edge-scroll-strip');
+        let edgeStartY = 0;
+
+        edgeStrip.addEventListener('touchstart', (e) => {
+            e.stopPropagation();
+            edgeStrip.classList.add('active');
+            edgeStartY = e.touches[0].clientY;
+            vibrate(20);
+        }, { passive: true });
+
+        edgeStrip.addEventListener('touchmove', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            const y = e.touches[0].clientY;
+            const diff = y - edgeStartY;
+            edgeStartY = y;
+            if (Math.abs(diff) > 2) {
+                const delta = Math.round(-diff * 35);
+                fetch(`/input/mouse?token=${token}&action=scroll&delta=${delta}`, { method: 'POST', keepalive: true }).catch(() => {});
+            }
+        }, { passive: false });
+
+        edgeStrip.addEventListener('touchend', (e) => {
+            edgeStrip.classList.remove('active');
+        }, { passive: true });
+
+        // Mouse Click Sender
+        async function sendMouseClick(btn) {
+            triggerRadarRipple();
             try {
-                const res = await fetch(`/status?token=${token}`);
-                if (res.ok) {
-                    const ping = Math.round(performance.now() - t0);
-                    document.getElementById('stat-ping').textContent = ping + ' ms';
-                    const data = await res.json();
-                    if (data.cpu !== undefined) document.getElementById('stat-cpu').textContent = data.cpu + '%';
-                    if (data.ram !== undefined) document.getElementById('stat-ram').textContent = data.ram + '%';
-                    if (data.active_window) document.getElementById('window-title').textContent = data.active_window;
-                }
+                await fetch(`/input/mouse?token=${token}&action=click&btn=${btn}`, { method: 'POST' });
             } catch (e) {}
         }
-        setInterval(fetchStatusAndPing, 2000);
-        fetchStatusAndPing();
 
-        // Remote Virtual Desktop Switching Action
+        // Drag Lock Toggle
+        async function toggleDragLock() {
+            isDragLock = !isDragLock;
+            const btn = document.getElementById('btn-drag-lock');
+            if (isDragLock) {
+                btn.classList.add('active-drag');
+                btn.textContent = '🖲️ Drag: LOCKED';
+                await fetch(`/input/mouse?token=${token}&action=down&btn=left`, { method: 'POST' });
+                showToast('Drag Locked: Left Button Down 🖲️');
+                vibrate(60);
+            } else {
+                btn.classList.remove('active-drag');
+                btn.textContent = '🖲️ Drag: Off';
+                await fetch(`/input/mouse?token=${token}&action=up&btn=left`, { method: 'POST' });
+                showToast('Drag Released');
+                vibrate(30);
+            }
+        }
+
+        // ── REMOTE KEYBOARD & DIRECT TYPING ──────────────────────────────
+        async function sendInputText() {
+            const text = phoneInput.value;
+            if (!text) return;
+            phoneInput.value = '';
+            vibrate(25);
+            try {
+                const res = await fetch(`/input/type?token=${token}`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ text: text })
+                });
+                const data = await res.json();
+                if (data.ok) {
+                    showToast('Typed to PC 🚀');
+                }
+            } catch (e) {
+                showToast('Typing error: ' + e.message, true);
+            }
+        }
+
+        phoneInput.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                sendInputText();
+                // Send Enter key on PC too
+                sendKey('enter');
+            }
+        });
+
+        // Real-time live keystroke streaming
+        phoneInput.addEventListener('input', (e) => {
+            if (liveTypeEnabled && e.data) {
+                fetch(`/input/type?token=${token}`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ text: e.data })
+                }).catch(() => {});
+            }
+        });
+
+        function toggleLiveType() {
+            liveTypeEnabled = !liveTypeEnabled;
+            const btn = document.getElementById('btn-live-type');
+            if (liveTypeEnabled) {
+                btn.classList.add('active');
+                showToast('Live typing enabled ⚡');
+            } else {
+                btn.classList.remove('active');
+                showToast('Live typing disabled');
+            }
+        }
+
+        async function sendKey(keyName) {
+            vibrate(25);
+            try {
+                await fetch(`/input/key?token=${token}`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ key: keyName })
+                });
+                showToast(`Key: ${keyName.toUpperCase()}`);
+            } catch (e) {}
+        }
+
+        async function pasteClipboard() {
+            vibrate(30);
+            if (navigator.clipboard && navigator.clipboard.readText) {
+                try {
+                    const text = await navigator.clipboard.readText();
+                    if (text) {
+                        await fetch(`/input/type?token=${token}`, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ text: text })
+                        });
+                        showToast(`Pasted ${text.length} chars from Phone 📋`);
+                        return;
+                    }
+                } catch (e) {}
+            }
+            // Fallback: Send Ctrl+V to PC
+            sendKey('ctrl+v');
+        }
+
+        // Toggle Keyboard Dock
+        function toggleDock() {
+            const dock = document.getElementById('keyboard-dock');
+            dock.classList.toggle('dock-minimized');
+            const chevron = document.getElementById('dock-chevron');
+            chevron.textContent = dock.classList.contains('dock-minimized') ? '▲' : '▼';
+        }
+
+        // ── PC TRAY & VIRTUAL DESKTOPS ──────────────────────────────────
+        function openTray() {
+            document.getElementById('tray-modal').classList.add('show');
+            refreshOpenWindows();
+        }
+
+        function closeTray() {
+            document.getElementById('tray-modal').classList.remove('show');
+        }
+
+        function closeTrayOnBackdrop(e) {
+            if (e.target.id === 'tray-modal') closeTray();
+        }
+
         async function switchDesktop(action) {
             try {
-                showToast('Switching desktop...', false);
                 const res = await fetch(`/desktop/switch?token=${token}&action=${action}`, { method: 'POST' });
-                if (res.ok) {
-                    const data = await res.json();
-                    showToast(data.msg || `Desktop action: ${action}`);
-                    if (data.active_window) document.getElementById('window-title').textContent = data.active_window;
-                    setTimeout(fetchStatusAndPing, 300);
-                } else {
-                    showToast('Failed to switch desktop', true);
-                }
-            } catch (e) {
-                showToast('Desktop switch request error: ' + e.message, true);
-            }
+                const data = await res.json();
+                showToast(data.msg || `Desktop: ${action}`);
+                if (data.active_window) document.getElementById('window-title').textContent = data.active_window;
+            } catch (e) {}
         }
 
-        // Remote Window Cycling (Alt+Tab / Alt+Shift+Tab)
-        async function cycleWindow(dir) {
-            try {
-                showToast(`Cycling window (${dir})...`, false);
-                const res = await fetch(`/windows/cycle?token=${token}&dir=${dir}`, { method: 'POST' });
-                if (res.ok) {
-                    const data = await res.json();
-                    showToast(data.msg || `Window switched (${dir})`);
-                    if (data.active_window) document.getElementById('window-title').textContent = data.active_window;
-                    setTimeout(fetchStatusAndPing, 300);
-                    setTimeout(refreshOpenWindows, 500);
-                } else {
-                    showToast('Failed to cycle window', true);
-                }
-            } catch (e) {
-                showToast('Cycle error: ' + e.message, true);
-            }
-        }
-
-        // Focus selected window from application dropdown
-        async function focusSelectedApp() {
-            const sel = document.getElementById('sel-app');
-            const val = sel.value;
-            if (!val) return;
-            try {
-                showToast('Bringing window to front...', false);
-                const res = await fetch(`/windows/focus?token=${token}&target=${encodeURIComponent(val)}`, { method: 'POST' });
-                if (res.ok) {
-                    const data = await res.json();
-                    showToast(data.msg || 'Focused window');
-                    if (data.active_window) document.getElementById('window-title').textContent = data.active_window;
-                    setTimeout(fetchStatusAndPing, 300);
-                } else {
-                    showToast('Failed to focus window', true);
-                }
-            } catch (e) {
-                showToast('Focus error: ' + e.message, true);
-            } finally {
-                sel.value = "";
-            }
-        }
-
-        // Fetch and refresh list of open top-level application windows
         async function refreshOpenWindows() {
             try {
                 const res = await fetch(`/windows?token=${token}`);
                 if (res.ok) {
                     const data = await res.json();
                     const sel = document.getElementById('sel-app');
-                    sel.innerHTML = '<option value="">🗂️ Switch App (' + (data.windows ? data.windows.length : 0) + ')...</option>';
+                    sel.innerHTML = '<option value="">🗂️ Focus Open App (' + (data.windows ? data.windows.length : 0) + ')...</option>';
                     if (data.windows && Array.isArray(data.windows)) {
                         data.windows.forEach(w => {
                             const opt = document.createElement('option');
@@ -787,42 +1295,46 @@ HTML_PLAYER_TEMPLATE = """<!DOCTYPE html>
                 }
             } catch (e) {}
         }
-        setInterval(refreshOpenWindows, 10000);
-        setTimeout(refreshOpenWindows, 1200);
 
-        // Download high-resolution snapshot
-        function downloadSnapshot() {
-            const a = document.createElement('a');
-            a.href = `/snapshot.jpg?token=${token}&q=92&_t=${Date.now()}`;
-            a.download = `pc_screenshot_${Date.now()}.jpg`;
-            document.body.appendChild(a);
-            a.click();
-            document.body.removeChild(a);
-            showToast('Snapshot downloaded 📸');
+        async function focusSelectedApp() {
+            const sel = document.getElementById('sel-app');
+            const val = sel.value;
+            if (!val) return;
+            try {
+                const res = await fetch(`/windows/focus?token=${token}&target=${encodeURIComponent(val)}`, { method: 'POST' });
+                const data = await res.json();
+                showToast(data.msg || 'Focused Window');
+                if (data.active_window) document.getElementById('window-title').textContent = data.active_window;
+            } catch (e) {}
+            closeTray();
         }
 
-        // Toggle Fullscreen on viewport
-        function toggleFullscreen() {
-            const vp = document.getElementById('viewport');
-            if (!document.fullscreenElement) {
-                if (vp.requestFullscreen) vp.requestFullscreen();
-                else if (vp.webkitRequestFullscreen) vp.webkitRequestFullscreen();
-            } else {
-                if (document.exitFullscreen) document.exitFullscreen();
-            }
-        }
-
-        // Update Quality/FPS settings
         async function updateSettings() {
             const quality = document.getElementById('sel-quality').value;
             const fps = document.getElementById('sel-fps').value;
             try {
                 await fetch(`/config?token=${token}&res=${quality}&fps=${fps}`, { method: 'POST' });
-                showToast(`Settings updated: ${quality}p @ ${fps} FPS`);
+                showToast(`Settings: ${quality}p @ ${fps} FPS`);
             } catch (e) {}
         }
 
-        // Stop stream
+        function toggleFullscreen() {
+            const elem = document.documentElement;
+            if (!document.fullscreenElement) {
+                if (elem.requestFullscreen) elem.requestFullscreen();
+                else if (elem.webkitRequestFullscreen) elem.webkitRequestFullscreen();
+            } else {
+                if (document.exitFullscreen) document.exitFullscreen();
+            }
+            closeTray();
+        }
+
+        function forceReconnect() {
+            img.src = `/stream.mjpg?token=${token}&_t=${Date.now()}`;
+            showToast('Stream reconnected 🔄');
+            closeTray();
+        }
+
         async function stopStream() {
             if (!confirm('Stop PC Screen Casting?')) return;
             try {
@@ -830,6 +1342,45 @@ HTML_PLAYER_TEMPLATE = """<!DOCTYPE html>
                 document.body.innerHTML = '<div style="display:flex;height:100vh;align-items:center;justify-content:center;flex-direction:column;font-family:sans-serif;color:#94a3b8;"><h2>Stream Ended</h2><p style="margin-top:8px;">Screen casting was stopped by user.</p></div>';
             } catch (e) {}
         }
+
+        // Diagnostics loop
+        let frameCount = 0;
+        let lastTime = performance.now();
+        img.onload = () => {
+            frameCount++;
+            const now = performance.now();
+            if (now - lastTime >= 1000) {
+                const fps = Math.round((frameCount * 1000) / (now - lastTime));
+                document.getElementById('stat-fps').textContent = fps;
+                frameCount = 0;
+                lastTime = now;
+            }
+        };
+
+        async function fetchStatusAndPing() {
+            const t0 = performance.now();
+            try {
+                const res = await fetch(`/status?token=${token}`);
+                if (res.ok) {
+                    const ping = Math.round(performance.now() - t0);
+                    document.getElementById('stat-ping').textContent = ping + ' ms';
+                    const data = await res.json();
+                    if (data.active_window) document.getElementById('window-title').textContent = data.active_window;
+                }
+            } catch (e) {}
+
+            try {
+                const cRes = await fetch(`/input/cursor?token=${token}`);
+                if (cRes.ok) {
+                    const cData = await cRes.json();
+                    if (cData.cursor) {
+                        document.getElementById('stat-pos').textContent = `${cData.cursor.x}, ${cData.cursor.y}`;
+                    }
+                }
+            } catch (e) {}
+        }
+        setInterval(fetchStatusAndPing, 3000);
+        fetchStatusAndPing();
     </script>
 </body>
 </html>
@@ -965,6 +1516,20 @@ class StreamHTTPHandler(BaseHTTPRequestHandler):
             finally:
                 self.caster.active_viewers = max(0, self.caster.active_viewers - 1)
 
+        elif path == "/input/cursor":
+            try:
+                from system_controller import SystemController
+                pos = SystemController.get_cursor_pos()
+            except Exception:
+                pos = {"x": 0, "y": 0, "screen_w": 1920, "screen_h": 1080}
+            resp = json.dumps({"ok": True, "cursor": pos}).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(resp)))
+            self.send_header("Cache-Control", "no-cache")
+            self.end_headers()
+            self.wfile.write(resp)
+
         else:
             self.send_response(404)
             self.end_headers()
@@ -977,11 +1542,89 @@ class StreamHTTPHandler(BaseHTTPRequestHandler):
             self.send_unauthorized()
             return
 
+        def get_payload() -> dict:
+            try:
+                length = int(self.headers.get("Content-Length", 0))
+                if length > 0:
+                    raw = self.rfile.read(length)
+                    return json.loads(raw.decode("utf-8"))
+            except Exception:
+                pass
+            return {}
+
         if path == "/stop":
             self.send_response(200)
             self.end_headers()
             self.wfile.write(b"OK")
             threading.Thread(target=self.caster.stop_web_cast, daemon=True).start()
+
+        elif path == "/input/mouse":
+            query = parse_qs(parsed.query)
+            payload = get_payload()
+            action = payload.get("action") or query.get("action", ["move"])[0]
+            try:
+                from system_controller import SystemController
+                ok = False
+                if action == "move":
+                    dx = int(payload.get("dx", query.get("dx", [0])[0]))
+                    dy = int(payload.get("dy", query.get("dy", [0])[0]))
+                    ok = SystemController.mouse_move(dx, dy)
+                elif action == "move_abs":
+                    x = float(payload.get("x", query.get("x", [0])[0]))
+                    y = float(payload.get("y", query.get("y", [0])[0]))
+                    norm = bool(payload.get("norm", query.get("norm", ["0"])[0] in ("1", "true", "yes")))
+                    ok = SystemController.mouse_move_abs(x, y, normalized=norm)
+                elif action in ("click", "down", "up", "double"):
+                    btn = str(payload.get("btn", query.get("btn", ["left"])[0]))
+                    act = "click" if action == "click" else action
+                    if action == "double":
+                        btn = "double"
+                    ok = SystemController.mouse_click(button=btn, action=act)
+                elif action == "scroll":
+                    delta = int(payload.get("delta", query.get("delta", [0])[0]))
+                    ok = SystemController.mouse_scroll(delta)
+                cur = SystemController.get_cursor_pos()
+            except Exception as e:
+                ok = False
+                cur = {}
+            resp = json.dumps({"ok": ok, "cursor": cur}).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(resp)))
+            self.end_headers()
+            self.wfile.write(resp)
+
+        elif path == "/input/type":
+            query = parse_qs(parsed.query)
+            payload = get_payload()
+            text = payload.get("text") or query.get("text", [""])[0]
+            try:
+                from system_controller import SystemController
+                ok, msg = SystemController.type_text(text)
+            except Exception as e:
+                ok, msg = False, str(e)
+            resp = json.dumps({"ok": ok, "msg": msg}).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(resp)))
+            self.end_headers()
+            self.wfile.write(resp)
+
+        elif path == "/input/key":
+            query = parse_qs(parsed.query)
+            payload = get_payload()
+            key = payload.get("key") or query.get("key", [""])[0]
+            try:
+                from system_controller import SystemController
+                ok, msg = SystemController.press_key(key)
+            except Exception as e:
+                ok, msg = False, str(e)
+            resp = json.dumps({"ok": ok, "msg": msg}).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(resp)))
+            self.end_headers()
+            self.wfile.write(resp)
 
         elif path == "/desktop/switch":
             query = parse_qs(parsed.query)
