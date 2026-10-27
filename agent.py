@@ -335,15 +335,26 @@ def handle_relay_command(data: dict) -> dict:
 
     # Remote Mouse & Keyboard Inputs
     elif cmd == "mouse_input":
-        action = params.get("action", "move")
+        def _safe_int(v, d=0):
+            try:
+                return int(round(float(v))) if v is not None and v != "" else d
+            except (ValueError, TypeError):
+                return d
+        def _safe_float(v, d=0.0):
+            try:
+                return float(v) if v is not None and v != "" else d
+            except (ValueError, TypeError):
+                return d
+
+        action = str(params.get("action", "move")).lower().strip()
         ok = False
         if action == "move":
-            dx = int(params.get("dx", 0))
-            dy = int(params.get("dy", 0))
+            dx = _safe_int(params.get("dx", 0))
+            dy = _safe_int(params.get("dy", 0))
             ok = SystemController.mouse_move(dx, dy)
         elif action == "move_abs":
-            x = float(params.get("x", 0))
-            y = float(params.get("y", 0))
+            x = _safe_float(params.get("x", 0))
+            y = _safe_float(params.get("y", 0))
             norm = bool(params.get("norm", False))
             ok = SystemController.mouse_move_abs(x, y, normalized=norm)
         elif action in ("click", "down", "up", "double"):
@@ -353,17 +364,17 @@ def handle_relay_command(data: dict) -> dict:
                 btn = "double"
             ok = SystemController.mouse_click(button=btn, action=act)
         elif action == "scroll":
-            delta = int(params.get("delta", 0))
+            delta = _safe_int(params.get("delta", 0))
             ok = SystemController.mouse_scroll(delta)
         return {"ok": ok, "cursor": SystemController.get_cursor_pos(), "pc_name": PC_NAME}
 
     elif cmd == "type_text":
-        text = params.get("text", "")
+        text = str(params.get("text", ""))
         ok, msg = SystemController.type_text(text)
         return {"ok": ok, "msg": msg, "pc_name": PC_NAME}
 
     elif cmd == "press_key":
-        key = params.get("key", "")
+        key = str(params.get("key", ""))
         ok, msg = SystemController.press_key(key)
         return {"ok": ok, "msg": msg, "pc_name": PC_NAME}
 
@@ -714,22 +725,46 @@ async def api_window_cycle(direction: str = "next"):
 
 # ── Remote Mouse & Keyboard Routes ──────────────────────────────────
 
-@app.post("/input/mouse")
-async def api_input_mouse(request: Request):
+def _api_safe_int(v, d=0):
     try:
-        data = await request.json()
-    except Exception:
+        return int(round(float(v))) if v is not None and v != "" else d
+    except (ValueError, TypeError):
+        return d
+
+def _api_safe_float(v, d=0.0):
+    try:
+        return float(v) if v is not None and v != "" else d
+    except (ValueError, TypeError):
+        return d
+
+async def _extract_request_data(request: Request) -> dict:
+    data = {}
+    if request.method == "POST":
+        try:
+            data = await request.json()
+        except Exception:
+            try:
+                form = await request.form()
+                data = dict(form)
+            except Exception:
+                data = {}
+    if not data:
         data = dict(request.query_params)
-    action = data.get("action", "move")
+    return data
+
+@app.api_route("/input/mouse", methods=["GET", "POST"])
+async def api_input_mouse(request: Request):
+    data = await _extract_request_data(request)
+    action = str(data.get("action", "move")).lower().strip()
     ok = False
     if action == "move":
-        dx = int(data.get("dx", 0))
-        dy = int(data.get("dy", 0))
+        dx = _api_safe_int(data.get("dx", 0))
+        dy = _api_safe_int(data.get("dy", 0))
         ok = SystemController.mouse_move(dx, dy)
     elif action == "move_abs":
-        x = float(data.get("x", 0))
-        y = float(data.get("y", 0))
-        norm = bool(data.get("norm", False))
+        x = _api_safe_float(data.get("x", 0))
+        y = _api_safe_float(data.get("y", 0))
+        norm = data.get("norm", False) in (True, 1, "1", "true", "True", "yes")
         ok = SystemController.mouse_move_abs(x, y, normalized=norm)
     elif action in ("click", "down", "up", "double"):
         btn = str(data.get("btn", "left"))
@@ -738,34 +773,28 @@ async def api_input_mouse(request: Request):
             btn = "double"
         ok = SystemController.mouse_click(button=btn, action=act)
     elif action == "scroll":
-        delta = int(data.get("delta", 0))
+        delta = _api_safe_int(data.get("delta", 0))
         ok = SystemController.mouse_scroll(delta)
     return {"ok": ok, "cursor": SystemController.get_cursor_pos()}
 
 
-@app.post("/input/type")
+@app.api_route("/input/type", methods=["GET", "POST"])
 async def api_input_type(request: Request):
-    try:
-        data = await request.json()
-    except Exception:
-        data = dict(request.query_params)
-    text = data.get("text", "")
+    data = await _extract_request_data(request)
+    text = str(data.get("text", ""))
     ok, msg = SystemController.type_text(text)
     return {"ok": ok, "msg": msg}
 
 
-@app.post("/input/key")
+@app.api_route("/input/key", methods=["GET", "POST"])
 async def api_input_key(request: Request):
-    try:
-        data = await request.json()
-    except Exception:
-        data = dict(request.query_params)
-    key = data.get("key", "")
+    data = await _extract_request_data(request)
+    key = str(data.get("key", ""))
     ok, msg = SystemController.press_key(key)
     return {"ok": ok, "msg": msg}
 
 
-@app.get("/input/cursor")
+@app.api_route("/input/cursor", methods=["GET", "POST"])
 async def api_input_cursor():
     return {"ok": True, "cursor": SystemController.get_cursor_pos()}
 

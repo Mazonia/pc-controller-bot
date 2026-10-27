@@ -1516,23 +1516,111 @@ class StreamHTTPHandler(BaseHTTPRequestHandler):
             finally:
                 self.caster.active_viewers = max(0, self.caster.active_viewers - 1)
 
-        elif path == "/input/cursor":
-            try:
-                from system_controller import SystemController
-                pos = SystemController.get_cursor_pos()
-            except Exception:
-                pos = {"x": 0, "y": 0, "screen_w": 1920, "screen_h": 1080}
-            resp = json.dumps({"ok": True, "cursor": pos}).encode("utf-8")
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json")
-            self.send_header("Content-Length", str(len(resp)))
-            self.send_header("Cache-Control", "no-cache")
-            self.end_headers()
-            self.wfile.write(resp)
+        elif path in ("/input/cursor", "/input/mouse", "/input/type", "/input/key"):
+            self.handle_input_endpoint(path, query=parse_qs(parsed.query), payload={})
 
         else:
             self.send_response(404)
             self.end_headers()
+
+    def handle_input_endpoint(self, path: str, query: dict, payload: dict):
+        def _safe_int(val, default=0):
+            try:
+                if val is None or val == "":
+                    return default
+                return int(round(float(val)))
+            except (ValueError, TypeError):
+                return default
+
+        def _safe_float(val, default=0.0):
+            try:
+                if val is None or val == "":
+                    return default
+                return float(val)
+            except (ValueError, TypeError):
+                return default
+
+        from system_controller import SystemController
+        if path == "/input/cursor":
+            try:
+                pos = SystemController.get_cursor_pos()
+            except Exception:
+                pos = {"x": 0, "y": 0, "screen_w": 1920, "screen_h": 1080}
+            resp = json.dumps({"ok": True, "cursor": pos}).encode("utf-8")
+
+        elif path == "/input/mouse":
+            action = payload.get("action")
+            if not action and "action" in query:
+                action = query["action"][0]
+            action = str(action or "move").lower().strip()
+
+            try:
+                ok = False
+                if action == "move":
+                    val_x = payload.get("dx") if payload.get("dx") is not None else query.get("dx", [0])[0]
+                    val_y = payload.get("dy") if payload.get("dy") is not None else query.get("dy", [0])[0]
+                    dx = _safe_int(val_x, 0)
+                    dy = _safe_int(val_y, 0)
+                    ok = SystemController.mouse_move(dx, dy)
+                elif action == "move_abs":
+                    val_x = payload.get("x") if payload.get("x") is not None else query.get("x", [0])[0]
+                    val_y = payload.get("y") if payload.get("y") is not None else query.get("y", [0])[0]
+                    x = _safe_float(val_x, 0.0)
+                    y = _safe_float(val_y, 0.0)
+                    norm_val = payload.get("norm") if payload.get("norm") is not None else query.get("norm", ["0"])[0]
+                    norm = norm_val in (True, 1, "1", "true", "yes", "True")
+                    ok = SystemController.mouse_move_abs(x, y, normalized=norm)
+                elif action in ("click", "down", "up", "double"):
+                    btn = payload.get("btn") if payload.get("btn") is not None else query.get("btn", ["left"])[0]
+                    btn = str(btn or "left")
+                    act = "click" if action == "click" else action
+                    if action == "double":
+                        btn = "double"
+                    ok = SystemController.mouse_click(button=btn, action=act)
+                elif action == "scroll":
+                    val_delta = payload.get("delta") if payload.get("delta") is not None else query.get("delta", [0])[0]
+                    delta = _safe_int(val_delta, 0)
+                    ok = SystemController.mouse_scroll(delta)
+                cur = SystemController.get_cursor_pos()
+            except Exception as e:
+                logger.error(f"Mouse input handling error: {e}")
+                ok = False
+                cur = {}
+            resp = json.dumps({"ok": ok, "cursor": cur}).encode("utf-8")
+
+        elif path == "/input/type":
+            text = payload.get("text")
+            if text is None and "text" in query:
+                text = query["text"][0]
+            text = str(text or "")
+            try:
+                ok, msg = SystemController.type_text(text)
+            except Exception as e:
+                ok, msg = False, str(e)
+            resp = json.dumps({"ok": ok, "msg": msg}).encode("utf-8")
+
+        elif path == "/input/key":
+            key = payload.get("key")
+            if key is None and "key" in query:
+                key = query["key"][0]
+            key = str(key or "")
+            try:
+                ok, msg = SystemController.press_key(key)
+            except Exception as e:
+                ok, msg = False, str(e)
+            resp = json.dumps({"ok": ok, "msg": msg}).encode("utf-8")
+
+        else:
+            self.send_response(404)
+            self.end_headers()
+            return
+
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(resp)))
+        self.send_header("Cache-Control", "no-cache")
+        self.end_headers()
+        self.wfile.write(resp)
 
     def do_POST(self):
         parsed = urlparse(self.path)
@@ -1547,7 +1635,10 @@ class StreamHTTPHandler(BaseHTTPRequestHandler):
                 length = int(self.headers.get("Content-Length", 0))
                 if length > 0:
                     raw = self.rfile.read(length)
-                    return json.loads(raw.decode("utf-8"))
+                    try:
+                        return json.loads(raw.decode("utf-8"))
+                    except Exception:
+                        return {k: v[0] for k, v in parse_qs(raw.decode("utf-8")).items()}
             except Exception:
                 pass
             return {}
@@ -1558,73 +1649,8 @@ class StreamHTTPHandler(BaseHTTPRequestHandler):
             self.wfile.write(b"OK")
             threading.Thread(target=self.caster.stop_web_cast, daemon=True).start()
 
-        elif path == "/input/mouse":
-            query = parse_qs(parsed.query)
-            payload = get_payload()
-            action = payload.get("action") or query.get("action", ["move"])[0]
-            try:
-                from system_controller import SystemController
-                ok = False
-                if action == "move":
-                    dx = int(payload.get("dx", query.get("dx", [0])[0]))
-                    dy = int(payload.get("dy", query.get("dy", [0])[0]))
-                    ok = SystemController.mouse_move(dx, dy)
-                elif action == "move_abs":
-                    x = float(payload.get("x", query.get("x", [0])[0]))
-                    y = float(payload.get("y", query.get("y", [0])[0]))
-                    norm = bool(payload.get("norm", query.get("norm", ["0"])[0] in ("1", "true", "yes")))
-                    ok = SystemController.mouse_move_abs(x, y, normalized=norm)
-                elif action in ("click", "down", "up", "double"):
-                    btn = str(payload.get("btn", query.get("btn", ["left"])[0]))
-                    act = "click" if action == "click" else action
-                    if action == "double":
-                        btn = "double"
-                    ok = SystemController.mouse_click(button=btn, action=act)
-                elif action == "scroll":
-                    delta = int(payload.get("delta", query.get("delta", [0])[0]))
-                    ok = SystemController.mouse_scroll(delta)
-                cur = SystemController.get_cursor_pos()
-            except Exception as e:
-                ok = False
-                cur = {}
-            resp = json.dumps({"ok": ok, "cursor": cur}).encode("utf-8")
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json")
-            self.send_header("Content-Length", str(len(resp)))
-            self.end_headers()
-            self.wfile.write(resp)
-
-        elif path == "/input/type":
-            query = parse_qs(parsed.query)
-            payload = get_payload()
-            text = payload.get("text") or query.get("text", [""])[0]
-            try:
-                from system_controller import SystemController
-                ok, msg = SystemController.type_text(text)
-            except Exception as e:
-                ok, msg = False, str(e)
-            resp = json.dumps({"ok": ok, "msg": msg}).encode("utf-8")
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json")
-            self.send_header("Content-Length", str(len(resp)))
-            self.end_headers()
-            self.wfile.write(resp)
-
-        elif path == "/input/key":
-            query = parse_qs(parsed.query)
-            payload = get_payload()
-            key = payload.get("key") or query.get("key", [""])[0]
-            try:
-                from system_controller import SystemController
-                ok, msg = SystemController.press_key(key)
-            except Exception as e:
-                ok, msg = False, str(e)
-            resp = json.dumps({"ok": ok, "msg": msg}).encode("utf-8")
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json")
-            self.send_header("Content-Length", str(len(resp)))
-            self.end_headers()
-            self.wfile.write(resp)
+        elif path in ("/input/mouse", "/input/type", "/input/key", "/input/cursor"):
+            self.handle_input_endpoint(path, query=parse_qs(parsed.query), payload=get_payload())
 
         elif path == "/desktop/switch":
             query = parse_qs(parsed.query)

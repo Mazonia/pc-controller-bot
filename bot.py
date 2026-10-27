@@ -81,19 +81,50 @@ def ensure_host_pc_registered(fleet: dict) -> bool:
 
 
 def ensure_local_agent_running():
-    """If running on Windows and local agent is not running on port 9010, launch it in background."""
+    """If running on Windows and local agent is not running or outdated on port 9010, launch it in background."""
     if sys.platform != "win32":
         return
     import socket
     import subprocess
+    import urllib.request
+    import urllib.error
     try:
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         sock.settimeout(0.5)
         is_open = sock.connect_ex(("127.0.0.1", 9010)) == 0
         sock.close()
         if is_open:
-            logger.info("Local PC Agent is already listening on port 9010.")
-            return
+            # Check if running agent is up-to-date (responds to /input/cursor)
+            is_outdated = False
+            try:
+                req = urllib.request.Request("http://127.0.0.1:9010/input/cursor")
+                if config.AGENT_SECRET:
+                    req.add_header("X-Agent-Secret", config.AGENT_SECRET)
+                with urllib.request.urlopen(req, timeout=1.0) as resp:
+                    if resp.status == 200:
+                        logger.info("Local PC Agent is running and up-to-date on port 9010.")
+                        return
+            except urllib.error.HTTPError as he:
+                if he.code == 404:
+                    logger.warning("Local PC Agent on port 9010 is outdated (missing /input/cursor). Restarting...")
+                    is_outdated = True
+            except Exception:
+                # If non-HTTP error (e.g. secret mismatch, timeout), keep existing process
+                return
+
+            if is_outdated:
+                # Terminate stale agent process listening on port 9010
+                try:
+                    netstat_out = subprocess.check_output("netstat -ano", shell=True).decode()
+                    for line in netstat_out.splitlines():
+                        if ":9010" in line and "LISTENING" in line:
+                            parts = line.strip().split()
+                            pid = int(parts[-1])
+                            if pid > 0 and pid != os.getpid():
+                                subprocess.run(f"taskkill /f /pid {pid}", shell=True, capture_output=True)
+                    time.sleep(1.0)
+                except Exception as err:
+                    logger.debug(f"Failed to kill outdated agent: {err}")
 
         agent_py = config.BASE_DIR / "agent.py"
         if not agent_py.exists():
@@ -2326,14 +2357,23 @@ async def handle_mouse(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     label = pc_label(context)
-    status = await agent.cast_status()
+    try:
+        status = await agent.cast_status()
+    except Exception:
+        status = {}
     public_url = status.get("public_url", "")
+    lan_url = status.get("lan_url", "")
 
     rows = []
     from telegram import WebAppInfo
     if public_url:
         rows.append([InlineKeyboardButton("🖱️ Open Ghost Mouse Trackpad", web_app=WebAppInfo(url=public_url))])
         rows.append([InlineKeyboardButton("🌍 Open Trackpad in Browser", url=public_url)])
+        if lan_url:
+            rows.append([InlineKeyboardButton("🏠 Open Local Stream (LAN)", url=lan_url)])
+    elif lan_url:
+        rows.append([InlineKeyboardButton("🌐 Launch Global Tunnel Stream", callback_data="cb_cast_web_start")])
+        rows.append([InlineKeyboardButton("🏠 Open Local Trackpad (LAN)", url=lan_url)])
     else:
         rows.append([InlineKeyboardButton("🌐 Launch Ghost Trackpad Stream", callback_data="cb_cast_web_start")])
 
@@ -2349,10 +2389,19 @@ async def handle_mouse(update: Update, context: ContextTypes.DEFAULT_TYPE):
     rows.append([
         InlineKeyboardButton("🔙 Menu", callback_data="cb_menu"),
     ])
+
+    status_note = ""
+    if public_url:
+        status_note = f"\n🟢 <b>Active Trackpad Link:</b>\n<code>{public_url}</code>\n"
+    elif lan_url:
+        status_note = f"\n🟡 <b>LAN Active:</b> <code>{lan_url}</code>\n"
+    else:
+        status_note = "\n⚪ <i>Tap 'Launch Ghost Trackpad Stream' below to activate web surface.</i>\n"
+
     text = (
         f"🖱️ <b>REMOTE MOUSE &amp; TOUCHPAD — {html.escape(label)}</b>\n"
         f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"Use your phone as a full-screen trackpad with translucent desktop view.\n"
+        f"Use your phone as a full-screen trackpad with translucent desktop view.{status_note}\n"
         f"• <b>Ghost Trackpad:</b> Gliding thumb moves PC cursor over faint desktop.\n"
         f"• <b>Direct Phone Typing:</b> Tap phone input field to type with voice &amp; autocorrect.\n"
         f"• <b>In-Chat Quick Typing:</b> <code>/type &lt;message&gt;</code>\n"

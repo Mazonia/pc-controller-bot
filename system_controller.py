@@ -715,7 +715,7 @@ class SystemController:
         SystemController.ensure_desktop_access()
         try:
             MOUSEEVENTF_MOVE = 0x0001
-            ctypes.windll.user32.mouse_event(MOUSEEVENTF_MOVE, int(dx), int(dy), 0, 0)
+            ctypes.windll.user32.mouse_event(MOUSEEVENTF_MOVE, int(round(float(dx))), int(round(float(dy))), 0, 0)
             return True
         except Exception as e:
             logger.error(f"Mouse move error: {e}")
@@ -733,8 +733,8 @@ class SystemController:
                 px = int(max(0.0, min(1.0, float(x))) * (w - 1))
                 py = int(max(0.0, min(1.0, float(y))) * (h - 1))
             else:
-                px = int(x)
-                py = int(y)
+                px = int(round(float(x)))
+                py = int(round(float(y)))
             user32.SetCursorPos(px, py)
             return True
         except Exception as e:
@@ -797,7 +797,7 @@ class SystemController:
         SystemController.ensure_desktop_access()
         try:
             MOUSEEVENTF_WHEEL = 0x0800
-            ctypes.windll.user32.mouse_event(MOUSEEVENTF_WHEEL, 0, 0, int(delta), 0)
+            ctypes.windll.user32.mouse_event(MOUSEEVENTF_WHEEL, 0, 0, int(round(float(delta))), 0)
             return True
         except Exception as e:
             logger.error(f"Mouse scroll error: {e}")
@@ -806,7 +806,8 @@ class SystemController:
     @staticmethod
     def type_text(text: str) -> Tuple[bool, str]:
         """
-        Type text directly into active PC input field using Win32 SendInput Unicode events.
+        Type text directly into active PC input field using Win32 SendInput Unicode events
+        with keybd_event unicode fallback.
         Preserves unicode characters, emojis, accents, and symbols.
         """
         if not text:
@@ -867,10 +868,16 @@ class SystemController:
                 inp.ii.ki.wVk = 0
                 inp.ii.ki.wScan = code
                 inp.ii.ki.dwFlags = KEYEVENTF_UNICODE
-                user32.SendInput(1, ctypes.byref(inp), ctypes.sizeof(Input))
+                sent = user32.SendInput(1, ctypes.byref(inp), ctypes.sizeof(Input))
 
                 inp.ii.ki.dwFlags = KEYEVENTF_UNICODE | KEYEVENTF_KEYUP
                 user32.SendInput(1, ctypes.byref(inp), ctypes.sizeof(Input))
+
+                if sent == 0:
+                    user32.keybd_event(0, code, KEYEVENTF_UNICODE, 0)
+                    time.sleep(0.002)
+                    user32.keybd_event(0, code, KEYEVENTF_UNICODE | KEYEVENTF_KEYUP, 0)
+
                 time.sleep(0.005)
 
             return True, f"Typed {len(text)} characters into active window"

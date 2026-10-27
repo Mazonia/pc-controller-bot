@@ -71,3 +71,39 @@ def test_fastapi_input_endpoints():
     resp = client.get("/input/cursor")
     assert resp.status_code == 200
     assert resp.json()["ok"] is True
+
+
+def test_fastapi_float_and_get_endpoints():
+    with patch("system_controller.SystemController.mouse_move", return_value=True) as mock_move:
+        # POST with float strings
+        resp = client.post("/input/mouse", json={"action": "move", "dx": "14.6", "dy": "-8.2"})
+        assert resp.status_code == 200
+        assert resp.json()["ok"] is True
+        mock_move.assert_called_with(15, -8)
+
+        # GET with query params
+        resp = client.get("/input/mouse?action=move&dx=5.1&dy=-2.9")
+        assert resp.status_code == 200
+        assert resp.json()["ok"] is True
+
+    with patch("system_controller.SystemController.type_text", return_value=(True, "Typed")) as mock_type:
+        resp = client.get("/input/type?text=Hello+World")
+        assert resp.status_code == 200
+        assert resp.json()["ok"] is True
+        mock_type.assert_called_with("Hello World")
+
+    with patch("system_controller.SystemController.press_key", return_value=(True, "Pressed")) as mock_key:
+        resp = client.get("/input/key?key=enter")
+        assert resp.status_code == 200
+        assert resp.json()["ok"] is True
+        mock_key.assert_called_with("enter")
+
+
+def test_type_text_fallback_when_sendinput_fails():
+    with patch("ctypes.windll.user32.SendInput", return_value=0) as mock_send, \
+         patch("ctypes.windll.user32.keybd_event") as mock_keybd:
+        ok, msg = SystemController.type_text("A")
+        assert ok is True
+        # keybd_event should have been called as fallback
+        assert mock_keybd.called
+
