@@ -40,10 +40,23 @@ BASE_DIR = Path(__file__).resolve().parent
 load_dotenv(BASE_DIR / "agent.env")
 load_dotenv(BASE_DIR / ".env")
 
+# Configure persistent rotating file logging (C:\PCSentinel\agent.log)
+LOG_FILE = BASE_DIR / "agent.log"
+logger.add(
+    str(LOG_FILE),
+    rotation="10 MB",
+    retention="7 days",
+    level="DEBUG",
+    backtrace=True,
+    diagnose=True,
+    encoding="utf-8",
+)
+
 PC_NAME = os.getenv("PC_NAME", "").strip() or os.environ.get("COMPUTERNAME", "Unknown-PC")
 AGENT_PORT = int(os.getenv("AGENT_PORT", "9010"))
 AGENT_SECRET = os.getenv("AGENT_SECRET", "").strip() or os.getenv("FLEET_SECRET", "").strip()
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
+AUTHORIZED_USER_IDS = os.getenv("AUTHORIZED_USER_IDS", "").strip()
 MQTT_BROKER = os.getenv("MQTT_BROKER", "broker.emqx.io").strip()
 MQTT_PORT = int(os.getenv("MQTT_PORT", "8883"))
 MQTT_USE_TLS = os.getenv("MQTT_USE_TLS", "true").strip().lower() in ("1", "true", "yes")
@@ -1082,38 +1095,74 @@ def ensure_single_agent_instance():
         logger.debug(f"ensure_single_agent_instance error: {e}")
 
 
+def send_startup_announcement():
+    """Notify Telegram chat immediately that this PC has booted and is online."""
+    if not TELEGRAM_BOT_TOKEN or not AUTHORIZED_USER_IDS:
+        return
+    net = get_network_info()
+    text = (
+        f"🟢 <b>PC Sentinel Agent Online!</b>\n\n"
+        f"🖥️ <b>PC Name:</b> <code>{PC_NAME}</code>\n"
+        f"🌐 <b>Network:</b> <code>{net.get('type', 'Unknown')}</code>\n"
+        f"📡 <b>Cloud Relay:</b> <code>{MQTT_BROKER}:{MQTT_PORT}</code>\n"
+        f"🕒 <b>Boot Time:</b> <code>{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</code>\n\n"
+        f"✨ <i>Send /pcs or /start to control this PC.</i>"
+    )
+    for uid in AUTHORIZED_USER_IDS.split(","):
+        uid = uid.strip()
+        if not uid.isdigit():
+            continue
+        try:
+            httpx.post(
+                f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
+                json={"chat_id": int(uid), "text": text, "parse_mode": "HTML"},
+                timeout=12.0,
+            )
+            logger.info(f"Direct startup announcement sent to Telegram user {uid}")
+        except Exception as e:
+            logger.debug(f"Could not send startup announcement to {uid}: {e}")
+
+
 def main():
     global relay
 
-    ensure_single_agent_instance()
-
-    logger.info("=" * 55)
-    logger.info(f"   PC REMOTE SENTINEL AGENT — {PC_NAME}")
-    logger.info("=" * 55)
-    net = get_network_info()
-    logger.info(f"Local IP: {net['ip']} | Connection: {net['type']}")
-    logger.info(f"Relay Broker: {MQTT_BROKER}:{MQTT_PORT} (TLS={MQTT_USE_TLS})")
-    logger.info(f"Local LAN Port: {AGENT_PORT}")
-
-    # 1. Start Cloud Relay (MQTT over TLS)
-    relay = FleetAgentRelay(
-        pc_name=PC_NAME,
-        secret=AGENT_SECRET,
-        broker=MQTT_BROKER,
-        port=MQTT_PORT,
-        use_tls=MQTT_USE_TLS,
-        command_handler=handle_relay_command,
-    )
-    relay.start()
-
-    # 2. Run local FastAPI server (keeps main thread alive)
     try:
-        uvicorn.run(app, host="0.0.0.0", port=AGENT_PORT, log_level="warning")
+        ensure_single_agent_instance()
+
+        logger.info("=" * 55)
+        logger.info(f"   PC REMOTE SENTINEL AGENT — {PC_NAME}")
+        logger.info("=" * 55)
+        net = get_network_info()
+        logger.info(f"Local IP: {net['ip']} | Connection: {net['type']}")
+        logger.info(f"Relay Broker: {MQTT_BROKER}:{MQTT_PORT} (TLS={MQTT_USE_TLS})")
+        logger.info(f"Local LAN Port: {AGENT_PORT}")
+
+        # 1. Start Cloud Relay (MQTT over TLS)
+        relay = FleetAgentRelay(
+            pc_name=PC_NAME,
+            secret=AGENT_SECRET,
+            broker=MQTT_BROKER,
+            port=MQTT_PORT,
+            use_tls=MQTT_USE_TLS,
+            command_handler=handle_relay_command,
+        )
+        relay.start()
+
+        # 2. Dispatch immediate startup Telegram notification
+        threading.Thread(target=send_startup_announcement, daemon=True).start()
+
+        # 3. Run local FastAPI server (keeps main thread alive)
+        try:
+            uvicorn.run(app, host="0.0.0.0", port=AGENT_PORT, log_level="warning")
+        except Exception as e:
+            logger.error(f"Uvicorn server error: {e}")
+        finally:
+            if relay:
+                relay.stop()
     except Exception as e:
-        logger.error(f"Uvicorn server error: {e}")
-    finally:
-        if relay:
-            relay.stop()
+        logger.exception(f"Fatal error running PC Sentinel Agent: {e}")
+        time.sleep(2)
+        sys.exit(1)
 
 
 if __name__ == "__main__":

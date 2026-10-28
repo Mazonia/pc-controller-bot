@@ -22,7 +22,8 @@ required_files = [
     "fleet.json",
     "python-installer.exe",
     "cloudflared.exe",
-    "INSTRUCTIONS.txt"
+    "INSTRUCTIONS.txt",
+    "sync_fleet.bat",
 ]
 
 print("[1] File Existence & Size Checks:")

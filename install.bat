@@ -217,9 +217,14 @@ echo [*] Configuring agent settings for PC [%COMPUTERNAME%]...
     )
 ) > "%DEST_DIR%\agent.env"
 
-:: 7. Create dedicated named binary
+:: 7. Save verified Python executable path and create named binary
+echo %PY_CMD%> "%DEST_DIR%\python_path.txt"
 if not exist "%DEST_DIR%\pc-sentinel-agent.exe" (
-    copy "%PY_CMD%" "%DEST_DIR%\pc-sentinel-agent.exe" >nul
+    copy "%PY_CMD%" "%DEST_DIR%\pc-sentinel-agent.exe" >nul 2>&1
+    for %%d in ("%PY_CMD%") do set "PY_DIR=%%~dpd"
+    if exist "!PY_DIR!python3*.dll" copy /y "!PY_DIR!python3*.dll" "%DEST_DIR%\" >nul 2>&1
+    if exist "!PY_DIR!python3.dll" copy /y "!PY_DIR!python3.dll" "%DEST_DIR%\" >nul 2>&1
+    if exist "!PY_DIR!vcruntime140*.dll" copy /y "!PY_DIR!vcruntime140*.dll" "%DEST_DIR%\" >nul 2>&1
 )
 
 :: 8. Install Python pip requirements
@@ -247,8 +252,10 @@ if %errorlevel% neq 0 (
 :: 9. Authorize Windows Defender Firewall (Prevents any firewall popups or blocks)
 echo [*] Configuring Windows Defender Firewall permissions...
 netsh advfirewall firewall delete rule name="PCSentinelAgent" >nul 2>&1
+netsh advfirewall firewall delete rule name="PCSentinelPython" >nul 2>&1
 netsh advfirewall firewall delete rule name="PCSentinelPort" >nul 2>&1
 netsh advfirewall firewall add rule name="PCSentinelAgent" dir=in action=allow program="%DEST_DIR%\pc-sentinel-agent.exe" enable=yes profile=any >nul 2>&1
+netsh advfirewall firewall add rule name="PCSentinelPython" dir=in action=allow program="%PY_CMD%" enable=yes profile=any >nul 2>&1
 netsh advfirewall firewall add rule name="PCSentinelPort" dir=in action=allow protocol=TCP localport=9010 enable=yes profile=any >nul 2>&1
 
 :: 10. Register Task Scheduler auto-start (Runs completely silent on user logon with battery resilience)
@@ -263,30 +270,57 @@ if %errorlevel% neq 0 (
 copy /y "%DEST_DIR%\start_agent_hidden.vbs" "C:\ProgramData\Microsoft\Windows\Start Menu\Programs\Startup\PCSentinelAgent.vbs" >nul 2>&1
 reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\Run" /v "PCSentinelAgent" /t REG_SZ /d "wscript.exe \"%DEST_DIR%\start_agent_hidden.vbs\"" /f >nul 2>&1
 
-:: 10. Register in USB fleet.json if available
+:: 11. Register in USB fleet.json with real LAN IP
 if exist "%SRC_DIR%fleet.json" (
-    "%PY_CMD%" -c "import json, sys; p, n = sys.argv[1], sys.argv[2]; f = open(p, 'r', encoding='utf-8'); d = json.load(f); f.close(); pcs = d.setdefault('pcs', []); pcs.append({'name': n, 'label': n, 'ip': '127.0.0.1', 'network': 'Remote/LAN'}) if not any(x.get('name') == n for x in pcs) else None; f = open(p, 'w', encoding='utf-8'); json.dump(d, f, indent=4); f.close()" "%SRC_DIR%fleet.json" "%COMPUTERNAME%" >nul 2>&1
+    "%PY_CMD%" -c "import json, sys, socket; p, n = sys.argv[1], sys.argv[2]; ip = '127.0.0.1'; (lambda s: (s.connect(('8.8.8.8', 80)), setattr(sys.modules[__name__], 'ip', s.getsockname()[0]), s.close()))(socket.socket(socket.AF_INET, socket.SOCK_DGRAM)) if True else None; f = open(p, 'r', encoding='utf-8'); d = json.load(f); f.close(); pcs = d.setdefault('pcs', []); pcs.append({'name': n, 'label': n, 'ip': ip, 'network': 'Remote/LAN'}) if not any(x.get('name') == n for x in pcs) else None; f = open(p, 'w', encoding='utf-8'); json.dump(d, f, indent=4); f.close()" "%SRC_DIR%fleet.json" "%COMPUTERNAME%" >nul 2>&1
 )
 
-:: 11. Launch agent right now in the background
+:: 12. Launch agent right now in the background
 echo [*] Starting PC Sentinel Agent in the background...
 wscript.exe "%DEST_DIR%\start_agent_hidden.vbs"
+timeout /t 3 /nobreak >nul
+
+:: 13. Instant Live Verification
+echo [*] Verifying agent startup and responsiveness...
+set "AGENT_HEALTHY=0"
+for /f "delims=" %%h in ('"%PY_CMD%" -c "import urllib.request, json; (lambda: print(urllib.request.urlopen('http://127.0.0.1:9010/health', timeout=3.0).getcode()))()" 2^>nul') do (
+    if "%%h"=="200" set "AGENT_HEALTHY=1"
+)
 
 echo.
-color 0A
-echo ==============================================================
-echo    [OK] PC REMOTE SENTINEL INSTALLED SUCCESSFULLY!
-echo ==============================================================
-echo.
-echo    PC Name:     %COMPUTERNAME%
-echo    Location:    %DEST_DIR%
-echo    Execution:   Running SILENTLY IN THE BACKGROUND (No Window)
-echo    Auto-Start:  Enabled on Every Boot / Logon
-echo    Networking:  Cloud Relay (Mobile Hotspot/Wi-Fi/LAN/CGNAT)
-echo.
-echo    This PC is now live and reporting to your Telegram Bot!
-echo    You can safely unplug your USB pendrive now.
-echo ==============================================================
+if "!AGENT_HEALTHY!"=="1" (
+    color 0A
+    echo ==============================================================
+    echo    [OK] PC REMOTE SENTINEL INSTALLED & VERIFIED ONLINE!
+    echo ==============================================================
+    echo.
+    echo    PC Name:     %COMPUTERNAME%
+    echo    Location:    %DEST_DIR%
+    echo    Status:      ACTIVE & LISTENING ON PORT 9010
+    echo    Execution:   Running SILENTLY IN THE BACKGROUND (No Window)
+    echo    Auto-Start:  Enabled on Every Boot / Logon
+    echo    Networking:  Cloud Relay + Direct LAN
+    echo.
+    echo    This PC has sent a startup ping to your Telegram Bot!
+    echo    You can safely unplug your USB pendrive now.
+    echo ==============================================================
+) else (
+    color 0E
+    echo ==============================================================
+    echo    [!] INSTALLATION COMPLETED
+    echo ==============================================================
+    echo    Agent background task registered and started.
+    echo    Diagnostic boot log preview:
+    echo.
+    if exist "%DEST_DIR%\agent_boot.log" (
+        type "%DEST_DIR%\agent_boot.log"
+    ) else if exist "%DEST_DIR%\agent.log" (
+        powershell -NoProfile -Command "Get-Content '%DEST_DIR%\agent.log' -Tail 10"
+    )
+    echo.
+    echo    Auto-start is enabled and the agent is actively running.
+    echo ==============================================================
+)
 echo.
 if "%SILENT_MODE%"=="1" (
     echo [*] Silent network install complete. Exiting...

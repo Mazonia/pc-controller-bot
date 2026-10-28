@@ -5,6 +5,18 @@ cd /d "%~dp0"
 
 set "PY_CMD="
 
+:: Priority 0: Exact Python executable saved during installation
+if exist "%~dp0python_path.txt" (
+    set /p SAVED_PY=<"%~dp0python_path.txt"
+    if exist "!SAVED_PY!" (
+        "!SAVED_PY!" -c "import sys" >nul 2>&1
+        if !errorlevel! equ 0 (
+            set "PY_CMD=!SAVED_PY!"
+            goto :found_py
+        )
+    )
+)
+
 :: Priority 1: Use dedicated named binary if present and functional in directory
 if exist "%~dp0pc-sentinel-agent.exe" (
     "%~dp0pc-sentinel-agent.exe" -c "import sys" >nul 2>&1
@@ -63,6 +75,8 @@ set "PY_CMD=python"
  
 :found_py
 :run_loop
-"%PY_CMD%" "%~dp0agent.py"
+echo [%DATE% %TIME%] Starting Agent using: %PY_CMD% >> "%~dp0agent_boot.log"
+"%PY_CMD%" "%~dp0agent.py" >> "%~dp0agent_boot.log" 2>&1
+echo [%DATE% %TIME%] Agent exited with code %errorlevel%. Restarting in 3s... >> "%~dp0agent_boot.log"
 timeout /t 3 /nobreak >nul
 goto :run_loop

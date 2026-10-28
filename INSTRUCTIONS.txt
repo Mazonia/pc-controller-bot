@@ -29,13 +29,27 @@ HOW TO USE THIS PACKAGE:
    - Fleet Tracking: Records the new PC's hostname in fleet.json.
 
 4. CHECK YOUR TELEGRAM BOT:
-   - Within seconds, your Telegram bot will detect the new PC.
-   - You can immediately use the Ghost Mouse Trackpad, type from your phone,
-     capture screenshots/webcam, control volume/apps, and switch virtual desktops.
+   - If the target PC has Internet access (Wi-Fi, Ethernet, Mobile Hotspot):
+     • The agent connects to the encrypted Cloud Relay broker.
+     • Your Telegram bot will immediately receive an alert:
+       "🟢 New PC Online: [Hostname]"
+     • Open Telegram and send /pcs to switch between your PCs!
+
+   - If the target PC is completely OFFLINE (No Internet):
+     • The installer records the PC with its local LAN IP in 'fleet.json' on this SSD.
+     • When you plug this SSD back into your main Host PC, run 'sync_fleet.bat'.
+     • This instantly syncs the new PC into your Telegram bot!
 
 5. UNPLUG & GO:
    - Once the installer says [OK], you can safely unplug your SSD / USB drive.
    - The PC Sentinel Agent stays permanently active on that PC.
+
+TROUBLESHOOTING / LOGS:
+--------------------------------------------------------------------------------
+   - Check C:\PCSentinel\agent.log or C:\PCSentinel\agent_boot.log on the target PC
+     for detailed real-time diagnostic output.
+   - Make sure the target PC is connected to Wi-Fi, Ethernet, or Phone Hotspot
+     so it can report its status to the Cloud Relay.
 
 TO UNINSTALL FROM A PC (OPTIONAL):
 --------------------------------------------------------------------------------

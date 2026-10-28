@@ -56,6 +56,7 @@ copy /y "%~dp0requirements_agent.txt" "%CLEAN_DRIVE%\" >nul
 copy /y "%~dp0start_agent.bat" "%CLEAN_DRIVE%\" >nul
 copy /y "%~dp0start_agent_hidden.vbs" "%CLEAN_DRIVE%\" >nul
 copy /y "%~dp0uninstall.bat" "%CLEAN_DRIVE%\" >nul
+copy /y "%~dp0sync_fleet.bat" "%CLEAN_DRIVE%\" >nul
 copy /y "%~dp0INSTRUCTIONS.txt" "%CLEAN_DRIVE%\" >nul
 
 :: Copy cloudflared tunnel engine if available

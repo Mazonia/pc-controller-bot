@@ -93,3 +93,31 @@ def test_commander_get_pc_list_staleness():
     pc_list = relay.get_pc_list()
     assert pc_list["PC-Active"]["status"] == "online"
     assert pc_list["PC-Stale"]["status"] == "offline"
+
+
+def test_commander_on_status_callback():
+    callback_calls = []
+
+    def mock_cb(pc_name, data, is_new):
+        callback_calls.append((pc_name, data["status"], is_new))
+
+    relay = FleetCommanderRelay(secret="test-secret", on_status_callback=mock_cb)
+    client = MagicMock()
+
+    # 1. First status message for new PC
+    msg1 = MagicMock()
+    msg1.topic = f"{relay.prefix}/status/Laptop-Office"
+    msg1.payload = relay.crypto.encrypt({"status": "online", "pc_name": "Laptop-Office", "network": "Wi-Fi"})
+    relay._on_message(client, None, msg1)
+
+    assert len(callback_calls) == 1
+    assert callback_calls[0] == ("Laptop-Office", "online", True)
+
+    # 2. Subsequent status message for already known online PC should not re-trigger
+    msg2 = MagicMock()
+    msg2.topic = f"{relay.prefix}/status/Laptop-Office"
+    msg2.payload = relay.crypto.encrypt({"status": "online", "pc_name": "Laptop-Office", "network": "Wi-Fi"})
+    relay._on_message(client, None, msg2)
+
+    assert len(callback_calls) == 1
+

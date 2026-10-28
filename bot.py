@@ -4307,18 +4307,17 @@ def ensure_single_bot_instance():
     cur_dir = str(config.BASE_DIR).lower()
     for p in psutil.process_iter(['pid', 'name', 'cmdline', 'exe']):
         try:
-            if p.pid == cur_pid:
+            if p.pid == cur_pid or p.pid == os.getppid():
                 continue
             cmdline = p.info.get('cmdline') or []
             cmd_str = " ".join(cmdline).lower()
             p_name = p.info.get('name', '').lower()
             exe_path = (p.info.get('exe') or '').lower()
 
-            # Absolute isolation: process MUST physically reside in this installation directory
             is_in_our_dir = (cur_dir in exe_path) or (cur_dir in cmd_str)
             is_our_commander = is_in_our_dir and (
-                ("pc-sentinel" in p_name and "agent" not in p_name)
-                or "bot.py" in cmd_str
+                ("pc-sentinel" in p_name and "agent" not in p_name and not any("test" in a for a in cmdline))
+                or any(a.lower().endswith("bot.py") for a in cmdline)
             )
             if is_our_commander:
                 logger.warning(f"Terminating older conflicting bot process (PID {p.pid})...")
@@ -4424,12 +4423,43 @@ def main():
                 except Exception:
                     pass
 
+        def on_fleet_status(pc_name: str, status_data: dict, is_new: bool):
+            fleet_data = load_fleet()
+            known_names = {pc.get("name") for pc in fleet_data.get("pcs", [])}
+            is_truly_new = pc_name not in known_names
+            if is_truly_new:
+                fleet_data.setdefault("pcs", []).append({
+                    "name": pc_name,
+                    "label": pc_name,
+                    "ip": status_data.get("ip", "Unknown"),
+                    "network": status_data.get("network", "Remote (Relay)"),
+                })
+                save_fleet(fleet_data)
+                logger.info(f"Auto-registered new PC '{pc_name}' into fleet.json")
+
+            net_desc = status_data.get("network", "Remote")
+            banner = "🎉 <b>New PC Discovered!</b>" if is_truly_new else "🟢 <b>PC Reconnected!</b>"
+            notice_text = (
+                f"{banner}\n\n"
+                f"🖥️ <b>PC Name:</b> <code>{html.escape(pc_name)}</code>\n"
+                f"🌐 <b>Network:</b> <code>{html.escape(net_desc)}</code>\n"
+                f"📡 <b>Status:</b> Online via Cloud Relay\n"
+                f"🕒 <b>Time:</b> <code>{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</code>\n\n"
+                f"✨ <i>Ready to control! Send /pcs or /start to switch to this PC.</i>"
+            )
+            for uid in config.AUTHORIZED_USER_IDS:
+                try:
+                    asyncio.create_task(application.bot.send_message(chat_id=uid, text=notice_text, parse_mode="HTML"))
+                except Exception as e:
+                    logger.debug(f"Could not send fleet notice to {uid}: {e}")
+
         commander_relay = FleetCommanderRelay(
             secret=secret,
             broker=broker,
             port=port,
             use_tls=use_tls,
             on_alert_callback=on_fleet_alert,
+            on_status_callback=on_fleet_status,
         )
         commander_relay.start(asyncio.get_running_loop())
         # Allow relay a brief moment to connect and ingest retained status

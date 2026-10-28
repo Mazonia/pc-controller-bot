@@ -304,12 +304,14 @@ class FleetCommanderRelay:
         port: int = 8883,
         use_tls: bool = True,
         on_alert_callback: Optional[Callable[[dict], None]] = None,
+        on_status_callback: Optional[Callable[[str, dict, bool], None]] = None,
     ):
         self.crypto = FleetCrypto(secret)
         self.broker = broker
         self.port = port
         self.use_tls = use_tls
         self.on_alert_callback = on_alert_callback
+        self.on_status_callback = on_status_callback
         self.client: Optional[mqtt.Client] = None
         self.is_connected = False
         self.pcs: Dict[str, dict] = {}  # pc_name -> {status, ip, network, last_seen, ...}
@@ -378,8 +380,18 @@ class FleetCommanderRelay:
             if "/status/" in topic:
                 pc_name = data.get("pc_name") or topic.split("/")[-1]
                 data["last_seen"] = time.time()
+                is_new = pc_name not in self.pcs
+                was_offline = (self.pcs.get(pc_name, {}).get("status") == "offline") if not is_new else False
                 self.pcs[pc_name] = data
                 logger.debug(f"Fleet PC status update: {pc_name} -> {data.get('status')} ({data.get('network')})")
+                if self.on_status_callback and (is_new or was_offline) and data.get("status") == "online":
+                    try:
+                        if self._loop:
+                            self._loop.call_soon_threadsafe(self.on_status_callback, pc_name, data, is_new)
+                        else:
+                            self.on_status_callback(pc_name, data, is_new)
+                    except Exception as cb_err:
+                        logger.error(f"Error in on_status_callback: {cb_err}")
 
             elif "/resp/" in topic:
                 req_id = data.get("id")
