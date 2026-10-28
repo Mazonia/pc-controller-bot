@@ -2,6 +2,7 @@
 setlocal enabledelayedexpansion
 title PC Remote Sentinel - Universal Auto Installer
 color 0B
+cd /d "%~dp0"
 
 :: Check for /SILENT flag (used by network deployer)
 set "SILENT_MODE=0"
@@ -22,23 +23,38 @@ if %errorlevel% neq 0 (
     echo  [!] ADMINISTRATOR PRIVILEGES REQUIRED
     echo ==============================================================
     echo.
-    echo  [*] Requesting Administrator elevation...
-    powershell -NoProfile -ExecutionPolicy Bypass -Command "Start-Process cmd.exe -ArgumentList '/k \"\"%~f0\"\"' -Verb RunAs" >nul 2>&1
+    echo  [*] Requesting Administrator elevation (click YES if prompted by Windows)...
+    powershell -NoProfile -ExecutionPolicy Bypass -Command "Start-Process cmd.exe -WorkingDirectory '%~dp0' -ArgumentList '/k install.bat %*' -Verb RunAs" >nul 2>&1
     if !errorlevel! equ 0 (
         echo  [OK] Elevated Administrator installation window opened.
-        echo  Please complete the installation in that window.
-    ) else (
-        color 0C
-        echo  [X] Could not automatically request Administrator privileges.
-        echo.
-        echo  PLEASE DO THIS:
-        echo    1. Right-click 'install.bat' (or '1-CLICK-INSTALL.bat')
-        echo    2. Select 'Run as administrator'
-        echo.
+        echo  [*] Installation is running in the elevated window.
+        timeout /t 3 /nobreak >nul
+        exit /b 0
     )
-    echo  Press any key to close this launcher...
+    
+    :: Fallback to VBScript elevation if PowerShell was blocked
+    echo Set UAC = CreateObject^("Shell.Application"^) > "%TEMP%\sentinel_elevate.vbs"
+    echo UAC.ShellExecute "cmd.exe", "/k cd /d """"%~dp0"""" ^&^& install.bat %*", "", "runas", 1 >> "%TEMP%\sentinel_elevate.vbs"
+    cscript //nologo "%TEMP%\sentinel_elevate.vbs" >nul 2>&1
+    set "VBS_ERR=!errorlevel!"
+    del /f /q "%TEMP%\sentinel_elevate.vbs" >nul 2>&1
+    if !VBS_ERR! equ 0 (
+        echo  [OK] Elevated Administrator installation window opened.
+        echo  [*] Installation is running in the elevated window.
+        timeout /t 3 /nobreak >nul
+        exit /b 0
+    )
+    
+    color 0C
+    echo  [X] Could not automatically request Administrator privileges.
+    echo.
+    echo  PLEASE DO THIS:
+    echo    1. Right-click 'install.bat' (or '1-CLICK-INSTALL.bat')
+    echo    2. Select 'Run as administrator'
+    echo.
+    echo  Press any key to exit...
     pause >nul
-    exit /b
+    exit /b 1
 )
 
 
@@ -54,6 +70,15 @@ echo.
 :: 2. Check for working Python
 echo [*] Checking Python environment...
 set "PY_CMD="
+
+:: Method 0: Check dedicated Sentinel Python directory
+if exist "%DEST_DIR%\Python\python.exe" (
+    "%DEST_DIR%\Python\python.exe" -c "import sys" >nul 2>&1
+    if !errorlevel! equ 0 (
+        set "PY_CMD=%DEST_DIR%\Python\python.exe"
+        goto :py_found
+    )
+)
 
 :: Method 1: Check if python in PATH is working (not MS Store stub)
 for /f "delims=" %%i in ('python -c "import sys; print(sys.executable)" 2^>nul') do (
@@ -119,10 +144,10 @@ if defined PY_CMD goto :py_found
 echo [!] Working Python not found on this PC.
 echo [*] Starting silent automated Python installation...
 
-:: Priority A: Offline installer on USB drive
+:: Priority A: Offline installer on USB drive (Target C:\PCSentinel\Python)
 if exist "%SRC_DIR%python-installer.exe" (
     echo [*] Installing Python using offline installer from USB drive...
-    start /wait "" "%SRC_DIR%python-installer.exe" /quiet InstallAllUsers=1 PrependPath=1 Include_pip=1
+    start /wait "" "%SRC_DIR%python-installer.exe" /quiet TargetDir="%DEST_DIR%\Python" PrependPath=1 Include_pip=1 AssociateFiles=0 Shortcuts=0 Include_doc=0 Include_test=0
     timeout /t 3 /nobreak >nul
 ) else (
     :: Priority B: Download official installer silently via PowerShell
@@ -130,7 +155,7 @@ if exist "%SRC_DIR%python-installer.exe" (
     powershell -Command "[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; (New-Object Net.WebClient).DownloadFile('https://www.python.org/ftp/python/3.11.9/python-3.11.9-amd64.exe', '%TEMP%\python-installer.exe')"
     if exist "%TEMP%\python-installer.exe" (
         echo [*] Installing Python silently...
-        start /wait "" "%TEMP%\python-installer.exe" /quiet InstallAllUsers=1 PrependPath=1 Include_pip=1
+        start /wait "" "%TEMP%\python-installer.exe" /quiet TargetDir="%DEST_DIR%\Python" PrependPath=1 Include_pip=1 AssociateFiles=0 Shortcuts=0 Include_doc=0 Include_test=0
         timeout /t 3 /nobreak >nul
         del /f /q "%TEMP%\python-installer.exe" >nul 2>&1
     ) else (
@@ -142,20 +167,38 @@ if exist "%SRC_DIR%python-installer.exe" (
 )
 
 :: Re-verify Python after installation
+if exist "%DEST_DIR%\Python\python.exe" (
+    "%DEST_DIR%\Python\python.exe" -c "import sys" >nul 2>&1
+    if !errorlevel! equ 0 (
+        set "PY_CMD=%DEST_DIR%\Python\python.exe"
+        goto :py_found
+    )
+)
+
 for %%p in (
     "C:\Program Files\Python314\python.exe"
     "C:\Program Files\Python313\python.exe"
     "C:\Program Files\Python312\python.exe"
     "C:\Program Files\Python311\python.exe"
+    "C:\Program Files\Python310\python.exe"
+    "C:\Python314\python.exe"
+    "C:\Python313\python.exe"
+    "C:\Python312\python.exe"
+    "C:\Python311\python.exe"
+    "C:\Python310\python.exe"
     "%LOCALAPPDATA%\Programs\Python\Python314\python.exe"
     "%LOCALAPPDATA%\Programs\Python\Python313\python.exe"
     "%LOCALAPPDATA%\Programs\Python\Python312\python.exe"
     "%LOCALAPPDATA%\Programs\Python\Python311\python.exe"
+    "%LOCALAPPDATA%\Programs\Python\Python310\python.exe"
 ) do (
     if not defined PY_CMD (
         if exist %%p (
-            set "PY_CMD=%%~p"
-            goto :py_found
+            %%p -c "import sys" >nul 2>&1
+            if !errorlevel! equ 0 (
+                set "PY_CMD=%%~p"
+                goto :py_found
+            )
         )
     )
 )

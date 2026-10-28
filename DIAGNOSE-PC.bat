@@ -17,7 +17,11 @@ set "SRC_DIR=%~dp0"
 :: 2. Find Python runtime
 set "PY_CMD="
 
-if exist "%DEST_DIR%\python_path.txt" (
+if exist "%DEST_DIR%\Python\python.exe" (
+    set "PY_CMD=%DEST_DIR%\Python\python.exe"
+)
+
+if not defined PY_CMD if exist "%DEST_DIR%\python_path.txt" (
     set /p SAVED_PY=<"%DEST_DIR%\python_path.txt"
     if exist "!SAVED_PY!" set "PY_CMD=!SAVED_PY!"
 )

@@ -2,6 +2,7 @@
 setlocal enabledelayedexpansion
 title PC Remote Sentinel - Universal Clean Uninstaller
 color 0C
+cd /d "%~dp0"
 
 echo ==============================================================
 echo       PC REMOTE SENTINEL — UNIVERSAL CLEAN UNINSTALLER
@@ -16,23 +17,38 @@ if %errorlevel% neq 0 (
     echo  [!] ADMINISTRATOR PRIVILEGES REQUIRED
     echo ==============================================================
     echo.
-    echo  [*] Requesting Administrator elevation...
-    powershell -NoProfile -ExecutionPolicy Bypass -Command "Start-Process cmd.exe -ArgumentList '/k \"\"%~f0\"\"' -Verb RunAs" >nul 2>&1
+    echo  [*] Requesting Administrator elevation (click YES if prompted by Windows)...
+    powershell -NoProfile -ExecutionPolicy Bypass -Command "Start-Process cmd.exe -WorkingDirectory '%~dp0' -ArgumentList '/k uninstall.bat' -Verb RunAs" >nul 2>&1
     if !errorlevel! equ 0 (
         echo  [OK] Elevated Administrator uninstallation window opened.
-        echo  Please complete the clean uninstall in that window.
-    ) else (
-        color 0C
-        echo  [X] Could not automatically request Administrator privileges.
-        echo.
-        echo  PLEASE DO THIS:
-        echo    1. Right-click 'uninstall.bat'
-        echo    2. Select 'Run as administrator'
-        echo.
+        echo  [*] Uninstallation is running in the elevated window.
+        timeout /t 3 /nobreak >nul
+        exit /b 0
     )
-    echo  Press any key to close this launcher...
+    
+    :: Fallback to VBScript elevation if PowerShell was blocked
+    echo Set UAC = CreateObject^("Shell.Application"^) > "%TEMP%\sentinel_elevate.vbs"
+    echo UAC.ShellExecute "cmd.exe", "/k cd /d """"%~dp0"""" ^&^& uninstall.bat", "", "runas", 1 >> "%TEMP%\sentinel_elevate.vbs"
+    cscript //nologo "%TEMP%\sentinel_elevate.vbs" >nul 2>&1
+    set "VBS_ERR=!errorlevel!"
+    del /f /q "%TEMP%\sentinel_elevate.vbs" >nul 2>&1
+    if !VBS_ERR! equ 0 (
+        echo  [OK] Elevated Administrator uninstallation window opened.
+        echo  [*] Uninstallation is running in the elevated window.
+        timeout /t 3 /nobreak >nul
+        exit /b 0
+    )
+    
+    color 0C
+    echo  [X] Could not automatically request Administrator privileges.
+    echo.
+    echo  PLEASE DO THIS:
+    echo    1. Right-click 'uninstall.bat'
+    echo    2. Select 'Run as administrator'
+    echo.
+    echo  Press any key to exit...
     pause >nul
-    exit /b
+    exit /b 1
 )
 
 set "DEST_DIR=C:\PCSentinel"

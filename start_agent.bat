@@ -17,6 +17,15 @@ if exist "%~dp0python_path.txt" (
     )
 )
 
+:: Priority 0.5: Check dedicated Sentinel Python directory
+if exist "%~dp0Python\python.exe" (
+    "%~dp0Python\python.exe" -c "import sys" >nul 2>&1
+    if !errorlevel! equ 0 (
+        set "PY_CMD=%~dp0Python\python.exe"
+        goto :found_py
+    )
+)
+
 :: Priority 1: Use dedicated named binary if present and functional in directory
 if exist "%~dp0pc-sentinel-agent.exe" (
     "%~dp0pc-sentinel-agent.exe" -c "import sys" >nul 2>&1
