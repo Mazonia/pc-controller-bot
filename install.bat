@@ -186,6 +186,8 @@ copy /y "%SRC_DIR%screen_caster.py" "%DEST_DIR%\" >nul
 copy /y "%SRC_DIR%requirements_agent.txt" "%DEST_DIR%\" >nul
 copy /y "%SRC_DIR%start_agent.bat" "%DEST_DIR%\" >nul
 copy /y "%SRC_DIR%start_agent_hidden.vbs" "%DEST_DIR%\" >nul
+copy /y "%SRC_DIR%register_target_pc.py" "%DEST_DIR%\" >nul 2>&1
+copy /y "%SRC_DIR%DIAGNOSE-PC.bat" "%DEST_DIR%\" >nul 2>&1
 
 if exist "%SRC_DIR%cloudflared.exe" (
     copy /y "%SRC_DIR%cloudflared.exe" "%DEST_DIR%\" >nul
@@ -272,7 +274,12 @@ reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\Run" /v "PCSentinelAgent
 
 :: 11. Register in USB fleet.json with real LAN IP
 if exist "%SRC_DIR%fleet.json" (
-    "%PY_CMD%" -c "import json, sys, socket; p, n = sys.argv[1], sys.argv[2]; ip = '127.0.0.1'; (lambda s: (s.connect(('8.8.8.8', 80)), setattr(sys.modules[__name__], 'ip', s.getsockname()[0]), s.close()))(socket.socket(socket.AF_INET, socket.SOCK_DGRAM)) if True else None; f = open(p, 'r', encoding='utf-8'); d = json.load(f); f.close(); pcs = d.setdefault('pcs', []); pcs.append({'name': n, 'label': n, 'ip': ip, 'network': 'Remote/LAN'}) if not any(x.get('name') == n for x in pcs) else None; f = open(p, 'w', encoding='utf-8'); json.dump(d, f, indent=4); f.close()" "%SRC_DIR%fleet.json" "%COMPUTERNAME%" >nul 2>&1
+    echo [*] Registering %COMPUTERNAME% in USB fleet.json...
+    if exist "%SRC_DIR%register_target_pc.py" (
+        "%PY_CMD%" "%SRC_DIR%register_target_pc.py" "%SRC_DIR%fleet.json" "%COMPUTERNAME%"
+    ) else if exist "%DEST_DIR%\register_target_pc.py" (
+        "%PY_CMD%" "%DEST_DIR%\register_target_pc.py" "%SRC_DIR%fleet.json" "%COMPUTERNAME%"
+    )
 )
 
 :: 12. Launch agent right now in the background

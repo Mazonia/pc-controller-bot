@@ -36,7 +36,7 @@ class FleetCrypto:
 
     def __init__(self, secret: str):
         if not secret:
-            secret = "sentinel-default-secret-key-2026"
+            secret = "sentinel-fleet-secret-2026"
         self.secret = secret
         self.key = hashlib.sha256(secret.encode("utf-8")).digest()
         self.aesgcm = AESGCM(self.key)

@@ -54,7 +54,8 @@ logger.add(
 
 PC_NAME = os.getenv("PC_NAME", "").strip() or os.environ.get("COMPUTERNAME", "Unknown-PC")
 AGENT_PORT = int(os.getenv("AGENT_PORT", "9010"))
-AGENT_SECRET = os.getenv("AGENT_SECRET", "").strip() or os.getenv("FLEET_SECRET", "").strip()
+AGENT_SECRET = os.getenv("AGENT_SECRET", "").strip()
+FLEET_SECRET = os.getenv("FLEET_SECRET", "").strip() or AGENT_SECRET or "sentinel-fleet-secret-2026"
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
 AUTHORIZED_USER_IDS = os.getenv("AUTHORIZED_USER_IDS", "").strip()
 MQTT_BROKER = os.getenv("MQTT_BROKER", "broker.emqx.io").strip()
@@ -1140,7 +1141,7 @@ def main():
         # 1. Start Cloud Relay (MQTT over TLS)
         relay = FleetAgentRelay(
             pc_name=PC_NAME,
-            secret=AGENT_SECRET,
+            secret=FLEET_SECRET,
             broker=MQTT_BROKER,
             port=MQTT_PORT,
             use_tls=MQTT_USE_TLS,
