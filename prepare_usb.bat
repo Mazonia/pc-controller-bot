@@ -84,6 +84,15 @@ if exist "%~dp0python-installer.exe" (
     echo   [OK] Offline Python installer included on drive.
 )
 
+:: Offline pip packages folder (100% internet-free installation)
+if exist "%~dp0wheels" (
+    echo.
+    echo [*] Offline Python packages (wheels) found. Copying to drive...
+    if not exist "%CLEAN_DRIVE%\wheels" mkdir "%CLEAN_DRIVE%\wheels"
+    xcopy /y /q "%~dp0wheels\*.whl" "%CLEAN_DRIVE%\wheels\" >nul
+    echo   [OK] Offline Python wheels copied (100% offline installation enabled).
+)
+
 echo.
 color 0A
 echo ==============================================================

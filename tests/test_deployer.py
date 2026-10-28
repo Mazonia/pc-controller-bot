@@ -180,4 +180,10 @@ def test_portable_desktop_folder_integrity():
     if cf_installer.exists():
         assert cf_installer.stat().st_size > 20_000_000, "cloudflared.exe is too small/corrupted"
 
+    # Verify offline wheels if present
+    wheels_dir = desktop_folder / "wheels"
+    if wheels_dir.exists():
+        wheels = list(wheels_dir.glob("*.whl"))
+        assert len(wheels) > 0, "wheels directory exists but contains no .whl files"
+
 

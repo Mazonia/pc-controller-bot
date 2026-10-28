@@ -86,4 +86,13 @@ import screen_caster
 import fleet_relay
 print("    [OK] system_controller, screen_caster, and fleet_relay imported cleanly.")
 
+# 7. Check offline wheels bundle
+print("\n[7] Offline Wheels Bundle Checks:")
+wheels_dir = os.path.join(installer_dir, "wheels")
+assert os.path.exists(wheels_dir), "wheels directory missing in portable folder"
+whl_files = [w for w in os.listdir(wheels_dir) if w.endswith(".whl")]
+total_mb = sum(os.path.getsize(os.path.join(wheels_dir, w)) for w in whl_files) / (1024 * 1024)
+assert len(whl_files) >= 25, f"Expected at least 25 wheels, found {len(whl_files)}"
+print(f"    [OK] wheels/ directory present with {len(whl_files)} pre-cached packages ({total_mb:.1f} MB) for 100% offline installs.")
+
 print("\n=== ALL PORTABLE INSTALLER TESTS PASSED WITH 100% SUCCESS! ===")

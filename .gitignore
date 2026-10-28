@@ -9,3 +9,5 @@ __pycache__/
 *.exe
 fleet_deploy_log.json
 *.log
+wheels/
+*.whl

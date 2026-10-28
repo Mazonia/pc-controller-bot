@@ -13,10 +13,13 @@ HOW TO USE THIS PACKAGE:
    - Open the drive in File Explorer.
    - Double-click "1-CLICK-INSTALL.bat" (or right-click and "Run as administrator").
 
-3. WHAT HAPPENS AUTOMATICALLY (Takes ~10-15 seconds):
+3. WHAT HAPPENS AUTOMATICALLY (Takes ~10-15 seconds, 100% OFFLINE):
+   - Zero Internet Needed: All 32 Python wheels, Cloudflared, and Python installer
+     are pre-bundled in the 'wheels/' folder on this drive.
    - Python Auto-Install: If Python is missing, it silently installs the bundled
      official Python installer (python-installer.exe).
    - Agent Setup: Installs the background agent into C:\PCSentinel.
+   - Dependencies: Installs all pip packages instantly from the local 'wheels/' folder.
    - Cloud Relay & Telegram: Auto-configures encrypted TLS MQTT relay and Telegram token.
    - Firewall Rules: Automatically allows the agent in Windows Defender Firewall.
    - Auto-Start on Boot: Registers a silent Windows Task Scheduler background task

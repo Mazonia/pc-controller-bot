@@ -224,18 +224,20 @@ if not exist "%DEST_DIR%\pc-sentinel-agent.exe" (
 
 :: 8. Install Python pip requirements
 echo [*] Installing required Python packages...
-"%PY_CMD%" -m ensurepip --upgrade >nul 2>&1
-"%PY_CMD%" -m pip install --quiet --upgrade pip >nul 2>&1
+"%PY_CMD%" -m ensurepip >nul 2>&1
 
 set "PIP_SUCCESS=0"
 if exist "%SRC_DIR%wheels" (
-    echo [*] Installing pre-bundled packages from SSD (offline)...
+    echo [*] Installing pre-bundled packages from SSD (100%% offline)...
     "%PY_CMD%" -m pip install --quiet --no-index --find-links="%SRC_DIR%wheels" -r "%DEST_DIR%\requirements_agent.txt" >nul 2>&1
-    if !errorlevel! equ 0 set "PIP_SUCCESS=1"
+    if !errorlevel! equ 0 (
+        echo   [OK] Offline packages installed successfully!
+        set "PIP_SUCCESS=1"
+    )
 )
 
 if "!PIP_SUCCESS!"=="0" (
-    echo [*] Installing packages via pip...
+    echo [*] Installing packages via online pip...
     "%PY_CMD%" -m pip install --quiet -r "%DEST_DIR%\requirements_agent.txt"
 )
 if %errorlevel% neq 0 (
