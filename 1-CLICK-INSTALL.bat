@@ -15,14 +15,36 @@ echo.
 echo ==============================================================
 echo.
 
-:: 1. Auto-elevate to Administrator
+:: 1. Check for Administrator privileges
 net session >nul 2>&1
 if %errorlevel% neq 0 (
-    echo [*] Requesting Administrator privileges...
-    powershell -NoProfile -Command "Start-Process '%~dp0install.bat' -Verb RunAs"
+    echo [!] Administrator privileges required to install system background tasks.
+    echo [*] Launching elevated Administrator installation window...
+    echo.
+    powershell -NoProfile -ExecutionPolicy Bypass -Command "Start-Process cmd.exe -ArgumentList '/k \"\"%~dp0install.bat\"\"' -Verb RunAs" >nul 2>&1
+    if !errorlevel! equ 0 (
+        echo [OK] Administrator installation window opened.
+        echo You can now review progress in the elevated window.
+    ) else (
+        color 0C
+        echo [X] Could not automatically request Administrator privileges.
+        echo.
+        echo PLEASE DO THIS:
+        echo   1. Right-click '1-CLICK-INSTALL.bat' (or 'install.bat')
+        echo   2. Select 'Run as administrator'
+        echo.
+    )
+    echo.
+    echo Press any key to close this launcher...
+    pause >nul
     exit /b
 )
 
 :: Already admin, run install.bat directly
 call "%~dp0install.bat"
+
+echo.
+echo Press any key to exit...
+pause >nul
+
 

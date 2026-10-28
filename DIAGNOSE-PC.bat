@@ -3,6 +3,13 @@ setlocal enabledelayedexpansion
 title "PC Remote Sentinel - Live Diagnostic Inspector"
 color 0B
 
+cd /d "%~dp0"
+
+echo ==============================================================
+echo       PC REMOTE SENTINEL — LIVE DIAGNOSTIC INSPECTOR
+echo ==============================================================
+echo.
+
 :: 1. Check directory
 set "DEST_DIR=C:\PCSentinel"
 set "SRC_DIR=%~dp0"
@@ -45,7 +52,14 @@ if not defined PY_CMD (
     )
 )
 
-if not defined PY_CMD set "PY_CMD=python"
+if defined PY_CMD (
+    echo [*] Python runtime: %PY_CMD%
+) else (
+    echo [!] Python runtime not detected in standard paths.
+    echo     Attempting default python command...
+    set "PY_CMD=python"
+)
+echo.
 
 :: 3. Run diagnose_agent.py
 if exist "%SRC_DIR%diagnose_agent.py" (
@@ -53,8 +67,15 @@ if exist "%SRC_DIR%diagnose_agent.py" (
 ) else if exist "%DEST_DIR%\diagnose_agent.py" (
     "%PY_CMD%" "%DEST_DIR%\diagnose_agent.py"
 ) else (
+    color 0C
     echo [!] diagnose_agent.py script not found.
-    echo Please make sure the USB drive or install folder contains diagnose_agent.py.
-    pause
+    echo     Please make sure diagnose_agent.py is in %SRC_DIR% or %DEST_DIR%.
 )
+
+echo.
+echo ==============================================================
+echo Diagnostics finished. Press any key to exit this window...
+echo ==============================================================
+pause >nul
+
 

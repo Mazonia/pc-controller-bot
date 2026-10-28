@@ -11,8 +11,27 @@ echo.
 :: 1. Check for Admin privileges and auto-elevate
 net session >nul 2>&1
 if %errorlevel% neq 0 (
-    echo [!] Requesting Administrator privileges...
-    powershell -NoProfile -Command "Start-Process '%~f0' -Verb RunAs"
+    echo.
+    echo ==============================================================
+    echo  [!] ADMINISTRATOR PRIVILEGES REQUIRED
+    echo ==============================================================
+    echo.
+    echo  [*] Requesting Administrator elevation...
+    powershell -NoProfile -ExecutionPolicy Bypass -Command "Start-Process cmd.exe -ArgumentList '/k \"\"%~f0\"\"' -Verb RunAs" >nul 2>&1
+    if !errorlevel! equ 0 (
+        echo  [OK] Elevated Administrator uninstallation window opened.
+        echo  Please complete the clean uninstall in that window.
+    ) else (
+        color 0C
+        echo  [X] Could not automatically request Administrator privileges.
+        echo.
+        echo  PLEASE DO THIS:
+        echo    1. Right-click 'uninstall.bat'
+        echo    2. Select 'Run as administrator'
+        echo.
+    )
+    echo  Press any key to close this launcher...
+    pause >nul
     exit /b
 )
 
