@@ -28,6 +28,7 @@ required_files = [
     "register_target_pc.py",
     "DIAGNOSE-PC.bat",
     "diagnose_agent.py",
+    "UPDATE-SSD.bat",
 ]
 
 print("[1] File Existence & Size Checks:")

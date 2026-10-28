@@ -54,12 +54,14 @@ def main():
     existing = next((p for p in pcs if p.get("name") == pc_name), None)
     if existing:
         existing["ip"] = local_ip
+        existing["port"] = 9010
         existing["network"] = network_type
     else:
         pcs.append({
             "name": pc_name,
             "label": pc_name,
             "ip": local_ip,
+            "port": 9010,
             "network": network_type,
         })
 

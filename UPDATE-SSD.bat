@@ -56,7 +56,26 @@ echo.
 echo [*] Target drive: %FOUND_DRIVE%
 echo [*] Copying latest tools, clean uninstaller, diagnostics, and sync scripts...
 
-python -c "import shutil, os; src=r'%~dp0'; dst=r'%FOUND_DRIVE%'; files=['1-CLICK-INSTALL.bat', 'install.bat', 'uninstall.bat', 'start_agent.bat', 'start_agent_hidden.vbs', 'agent.py', 'fleet_relay.py', 'system_controller.py', 'screen_caster.py', 'requirements_agent.txt', 'deploy_config.env', 'fleet.json', 'INSTRUCTIONS.txt', 'sync_fleet.bat', 'sync_fleet.py', 'register_target_pc.py', 'DIAGNOSE-PC.bat', 'diagnose_agent.py', 'prepare_usb.bat']; [shutil.copy2(os.path.join(src, f), os.path.join(dst, f)) for f in files if os.path.exists(os.path.join(src, f))]" >nul 2>&1
+copy /y "%~dp01-CLICK-INSTALL.bat" "%FOUND_DRIVE%\" >nul
+copy /y "%~dp0install.bat" "%FOUND_DRIVE%\" >nul
+copy /y "%~dp0uninstall.bat" "%FOUND_DRIVE%\" >nul
+copy /y "%~dp0start_agent.bat" "%FOUND_DRIVE%\" >nul
+copy /y "%~dp0start_agent_hidden.vbs" "%FOUND_DRIVE%\" >nul
+copy /y "%~dp0agent.py" "%FOUND_DRIVE%\" >nul
+copy /y "%~dp0fleet_relay.py" "%FOUND_DRIVE%\" >nul
+copy /y "%~dp0system_controller.py" "%FOUND_DRIVE%\" >nul
+copy /y "%~dp0screen_caster.py" "%FOUND_DRIVE%\" >nul
+copy /y "%~dp0requirements_agent.txt" "%FOUND_DRIVE%\" >nul
+copy /y "%~dp0deploy_config.env" "%FOUND_DRIVE%\" >nul
+copy /y "%~dp0fleet.json" "%FOUND_DRIVE%\" >nul
+copy /y "%~dp0INSTRUCTIONS.txt" "%FOUND_DRIVE%\" >nul
+copy /y "%~dp0sync_fleet.bat" "%FOUND_DRIVE%\" >nul
+copy /y "%~dp0sync_fleet.py" "%FOUND_DRIVE%\" >nul
+copy /y "%~dp0register_target_pc.py" "%FOUND_DRIVE%\" >nul
+copy /y "%~dp0DIAGNOSE-PC.bat" "%FOUND_DRIVE%\" >nul
+copy /y "%~dp0diagnose_agent.py" "%FOUND_DRIVE%\" >nul
+copy /y "%~dp0UPDATE-SSD.bat" "%FOUND_DRIVE%\" >nul
+copy /y "%~dp0prepare_usb.bat" "%FOUND_DRIVE%\" >nul
 
 :: Also sync wheels if present
 if exist "%~dp0wheels" (

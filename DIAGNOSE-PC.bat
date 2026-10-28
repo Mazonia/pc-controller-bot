@@ -53,12 +53,29 @@ if not defined PY_CMD (
 )
 
 if defined PY_CMD (
-    echo [*] Python runtime: %PY_CMD%
+    echo [*] Python runtime candidate: %PY_CMD%
 ) else (
-    echo [!] Python runtime not detected in standard paths.
-    echo     Attempting default python command...
     set "PY_CMD=python"
 )
+
+:: Verify python actually runs
+"%PY_CMD%" -c "import sys" >nul 2>&1
+if %errorlevel% neq 0 (
+    color 0C
+    echo [X] Working Python runtime was NOT found on this PC.
+    echo.
+    echo  RECOMMENDED ACTION:
+    echo    1. Right-click '1-CLICK-INSTALL.bat' on this drive
+    echo    2. Select 'Run as administrator'
+    echo    (It will automatically install Python from the SSD offline bundle).
+    echo.
+    echo ==============================================================
+    echo Diagnostics aborted. Press any key to exit this window...
+    echo ==============================================================
+    pause >nul
+    exit /b 1
+)
+echo [OK] Python runtime verified and working!
 echo.
 
 :: 3. Run diagnose_agent.py
