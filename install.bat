@@ -183,7 +183,7 @@ echo.
 :: 3. Stop existing running agent if upgrading
 echo [*] Stopping existing Sentinel agent processes (if any)...
 taskkill /f /im pc-sentinel-agent.exe >nul 2>&1
-powershell -NoProfile -ExecutionPolicy Bypass -Command "Get-CimInstance Win32_Process -Filter \"Name like 'python%'\" -ErrorAction SilentlyContinue | Where-Object { $_.CommandLine -like '*agent.py*' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }" >nul 2>&1
+powershell -NoProfile -ExecutionPolicy Bypass -EncodedCommand RwBlAHQALQBDAGkAbQBJAG4AcwB0AGEAbgBjAGUAIABXAGkAbgAzADIAXwBQAHIAbwBjAGUAcwBzACAALQBFAHIAcgBvAHIAQQBjAHQAaQBvAG4AIABTAGkAbABlAG4AdABsAHkAQwBvAG4AdABpAG4AdQBlACAAfAAgAFcAaABlAHIAZQAtAE8AYgBqAGUAYwB0ACAAewAgACQAXwAuAEMAbwBtAG0AYQBuAGQATABpAG4AZQAgAC0AbABpAGsAZQAgACcAKgBhAGcAZQBuAHQALgBwAHkAKgAnACAALQBvAHIAIAAkAF8ALgBFAHgAZQBjAHUAdABhAGIAbABlAFAAYQB0AGgAIAAtAGwAaQBrAGUAIAAnACoAUABDAFMAZQBuAHQAaQBuAGUAbAAqACcAIAB9ACAAfAAgAEYAbwByAEUAYQBjAGgALQBPAGIAagBlAGMAdAAgAHsAIABTAHQAbwBwAC0AUAByAG8AYwBlAHMAcwAgAC0ASQBkACAAJABfAC4AUAByAG8AYwBlAHMAcwBJAGQAIAAtAEYAbwByAGMAZQAgAC0ARQByAHIAbwByAEEAYwB0AGkAbwBuACAAUwBpAGwAZQBuAHQAbAB5AEMAbwBuAHQAaQBuAHUAZQAgAH0A >nul 2>&1
 schtasks /end /tn "PCSentinelAgent" >nul 2>&1
 timeout /t 1 /nobreak >nul
 
@@ -279,7 +279,7 @@ netsh advfirewall firewall add rule name="PCSentinelPort" dir=in action=allow pr
 
 :: 10. Register Task Scheduler auto-start (Runs completely silent on user logon with battery resilience)
 echo [*] Registering auto-start background task in Windows Task Scheduler...
-powershell -NoProfile -ExecutionPolicy Bypass -Command "& { $trig = New-ScheduledTaskTrigger -AtLogOn; $set = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Days 0) -StartWhenAvailable -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1); $princ = New-ScheduledTaskPrincipal -UserId \"$env:USERDOMAIN\$env:USERNAME\" -LogonType Interactive -RunLevel Highest; $act = New-ScheduledTaskAction -Execute 'wscript.exe' -Argument '\"%DEST_DIR%\start_agent_hidden.vbs\"' -WorkingDirectory '%DEST_DIR%'; Register-ScheduledTask -TaskName 'PCSentinelAgent' -Action $act -Trigger $trig -Settings $set -Principal $princ -Force | Out-Null; }" >nul 2>&1
+powershell -NoProfile -ExecutionPolicy Bypass -Command "& { $trig = New-ScheduledTaskTrigger -AtLogOn; $set = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Days 0) -StartWhenAvailable -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1); $princ = New-ScheduledTaskPrincipal -UserId \"$env:USERDOMAIN\$env:USERNAME\" -LogonType Interactive -RunLevel Highest; $act = New-ScheduledTaskAction -Execute 'wscript.exe' -Argument '\"%DEST_DIR%\start_agent_hidden.vbs\"' -WorkingDirectory '%DEST_DIR%'; Register-ScheduledTask -TaskName 'PCSentinelAgent' -Action $act -Trigger $trig -Settings $set -Principal $princ -Force >$null; }" >nul 2>&1
 if %errorlevel% neq 0 (
     schtasks /delete /tn "PCSentinelAgent" /f >nul 2>&1
     schtasks /create /tn "PCSentinelAgent" /tr "wscript.exe \"%DEST_DIR%\start_agent_hidden.vbs\"" /sc ONLOGON /rl HIGHEST /f >nul 2>&1
