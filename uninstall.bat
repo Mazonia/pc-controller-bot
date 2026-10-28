@@ -12,7 +12,7 @@ echo.
 net session >nul 2>&1
 if %errorlevel% neq 0 (
     echo [!] Requesting Administrator privileges...
-    powershell -Command "Start-Process '%~f0' -Verb RunAs"
+    powershell -NoProfile -Command "Start-Process '%~f0' -Verb RunAs"
     exit /b
 )
 
@@ -21,32 +21,50 @@ set "DEST_DIR=C:\PCSentinel"
 echo [*] Completely uninstalling PC Sentinel from [%COMPUTERNAME%]...
 echo.
 
-:: 2. Terminate running processes
-echo [*] Terminating running agent processes...
+:: 2. Terminate all running Sentinel processes
+echo [*] Terminating running Sentinel processes...
 taskkill /f /im pc-sentinel-agent.exe >nul 2>&1
-powershell -NoProfile -ExecutionPolicy Bypass -Command "Get-CimInstance Win32_Process -Filter \"Name like 'python%'\" -ErrorAction SilentlyContinue | Where-Object { $_.CommandLine -like '*agent.py*' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }" >nul 2>&1
 taskkill /f /im cloudflared.exe >nul 2>&1
+
+:: Kill any python process running agent.py
+powershell -NoProfile -ExecutionPolicy Bypass -Command "Get-CimInstance Win32_Process -Filter \"Name like 'python%'\" -ErrorAction SilentlyContinue | Where-Object { $_.CommandLine -like '*agent.py*' -or $_.ExecutablePath -like 'C:\PCSentinel*' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }" >nul 2>&1
+
+:: Stop scheduled task
 schtasks /end /tn "PCSentinelAgent" >nul 2>&1
-timeout /t 1 /nobreak >nul
+timeout /t 2 /nobreak >nul
 
 :: 3. Remove Scheduled Task
-echo [*] Removing Task Scheduler entry...
+echo [*] Removing Task Scheduler entry (PCSentinelAgent)...
 schtasks /delete /tn "PCSentinelAgent" /f >nul 2>&1
 
-:: 4. Remove Startup fallback and Registry Run
+:: 4. Remove Startup folder entries (All Users and Current User)
+echo [*] Cleaning Windows Startup folder entries...
 if exist "C:\ProgramData\Microsoft\Windows\Start Menu\Programs\Startup\PCSentinelAgent.vbs" (
     del /f /q "C:\ProgramData\Microsoft\Windows\Start Menu\Programs\Startup\PCSentinelAgent.vbs" >nul 2>&1
 )
-reg delete "HKCU\Software\Microsoft\Windows\CurrentVersion\Run" /v "PCSentinelAgent" /f >nul 2>&1
+if exist "%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\PCSentinelAgent.vbs" (
+    del /f /q "%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\PCSentinelAgent.vbs" >nul 2>&1
+)
 
-:: 5. Remove Windows Firewall Rule
+:: 5. Remove Registry Run auto-start entries (HKCU and HKLM)
+echo [*] Cleaning Windows Registry auto-start keys...
+reg delete "HKCU\Software\Microsoft\Windows\CurrentVersion\Run" /v "PCSentinelAgent" /f >nul 2>&1
+reg delete "HKLM\Software\Microsoft\Windows\CurrentVersion\Run" /v "PCSentinelAgent" /f >nul 2>&1
+
+:: 6. Remove Windows Defender Firewall Rules
+echo [*] Removing Windows Defender Firewall rules...
 netsh advfirewall firewall delete rule name="PCSentinelAgent" >nul 2>&1
+netsh advfirewall firewall delete rule name="PCSentinelPython" >nul 2>&1
 netsh advfirewall firewall delete rule name="PCSentinelPort" >nul 2>&1
 
-:: 6. Delete Agent files
+:: 7. Delete Agent directory files
 if exist "%DEST_DIR%" (
-    echo [*] Deleting agent files at %DEST_DIR%...
+    echo [*] Removing files at %DEST_DIR%...
     rmdir /s /q "%DEST_DIR%" >nul 2>&1
+    if exist "%DEST_DIR%" (
+        timeout /t 2 /nobreak >nul
+        rmdir /s /q "%DEST_DIR%" >nul 2>&1
+    )
 )
 
 echo.
@@ -55,9 +73,12 @@ echo ==============================================================
 echo    [OK] PC REMOTE SENTINEL COMPLETELY REMOVED!
 echo ==============================================================
 echo.
-echo    PC Name:     %COMPUTERNAME%
-echo    Status:      All tasks, services, and files deleted.
-echo    System:      Restored to original clean state.
+echo    Target PC:   %COMPUTERNAME%
+echo    Status:      All tasks, services, registry, and files deleted.
+echo    System:      Restored to 100%% clean state.
+echo.
+echo    You can now perform a clean reinstall using 1-CLICK-INSTALL.bat!
 echo ==============================================================
 echo.
-timeout /t 5
+pause
+

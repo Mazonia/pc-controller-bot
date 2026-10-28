@@ -18,10 +18,11 @@ echo.
 :: 1. Auto-elevate to Administrator
 net session >nul 2>&1
 if %errorlevel% neq 0 (
-    echo [*] Elevating to Administrator...
-    powershell -NoProfile -Command "Start-Process cmd.exe -ArgumentList '/c `\"`\"%~dp0install.bat`\"`\"' -Verb RunAs"
+    echo [*] Requesting Administrator privileges...
+    powershell -NoProfile -Command "Start-Process '%~dp0install.bat' -Verb RunAs"
     exit /b
 )
 
 :: Already admin, run install.bat directly
 call "%~dp0install.bat"
+

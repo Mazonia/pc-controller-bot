@@ -60,6 +60,7 @@ copy /y "%~dp0sync_fleet.bat" "%CLEAN_DRIVE%\" >nul
 copy /y "%~dp0sync_fleet.py" "%CLEAN_DRIVE%\" >nul
 copy /y "%~dp0register_target_pc.py" "%CLEAN_DRIVE%\" >nul
 copy /y "%~dp0DIAGNOSE-PC.bat" "%CLEAN_DRIVE%\" >nul
+copy /y "%~dp0diagnose_agent.py" "%CLEAN_DRIVE%\" >nul
 copy /y "%~dp0INSTRUCTIONS.txt" "%CLEAN_DRIVE%\" >nul
 
 :: Copy cloudflared tunnel engine if available

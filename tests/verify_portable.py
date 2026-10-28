@@ -27,6 +27,7 @@ required_files = [
     "sync_fleet.py",
     "register_target_pc.py",
     "DIAGNOSE-PC.bat",
+    "diagnose_agent.py",
 ]
 
 print("[1] File Existence & Size Checks:")
@@ -44,7 +45,7 @@ assert all_exist, "Some required files are missing from the portable folder"
 
 # 2. Syntax & Compilation check for all Python files in the portable folder
 print("\n[2] Python Bytecode Compilation Checks:")
-py_files = ["agent.py", "fleet_relay.py", "system_controller.py", "screen_caster.py", "sync_fleet.py", "register_target_pc.py"]
+py_files = ["agent.py", "fleet_relay.py", "system_controller.py", "screen_caster.py", "sync_fleet.py", "register_target_pc.py", "diagnose_agent.py"]
 for pf in py_files:
     full_path = os.path.join(installer_dir, pf)
     py_compile.compile(full_path, doraise=True)

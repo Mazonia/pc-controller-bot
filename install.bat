@@ -188,6 +188,7 @@ copy /y "%SRC_DIR%start_agent.bat" "%DEST_DIR%\" >nul
 copy /y "%SRC_DIR%start_agent_hidden.vbs" "%DEST_DIR%\" >nul
 copy /y "%SRC_DIR%register_target_pc.py" "%DEST_DIR%\" >nul 2>&1
 copy /y "%SRC_DIR%DIAGNOSE-PC.bat" "%DEST_DIR%\" >nul 2>&1
+copy /y "%SRC_DIR%diagnose_agent.py" "%DEST_DIR%\" >nul 2>&1
 
 if exist "%SRC_DIR%cloudflared.exe" (
     copy /y "%SRC_DIR%cloudflared.exe" "%DEST_DIR%\" >nul
@@ -285,13 +286,20 @@ if exist "%SRC_DIR%fleet.json" (
 :: 12. Launch agent right now in the background
 echo [*] Starting PC Sentinel Agent in the background...
 wscript.exe "%DEST_DIR%\start_agent_hidden.vbs"
-timeout /t 3 /nobreak >nul
+timeout /t 4 /nobreak >nul
 
 :: 13. Instant Live Verification
 echo [*] Verifying agent startup and responsiveness...
 set "AGENT_HEALTHY=0"
-for /f "delims=" %%h in ('"%PY_CMD%" -c "import urllib.request, json; (lambda: print(urllib.request.urlopen('http://127.0.0.1:9010/health', timeout=3.0).getcode()))()" 2^>nul') do (
-    if "%%h"=="200" set "AGENT_HEALTHY=1"
+for /l %%r in (1,1,3) do (
+    if "!AGENT_HEALTHY!"=="0" (
+        for /f "delims=" %%h in ('"%PY_CMD%" -c "import urllib.request; (lambda: print(urllib.request.urlopen('http://127.0.0.1:9010/health', timeout=3.0).getcode()))()" 2^>nul') do (
+            if "%%h"=="200" set "AGENT_HEALTHY=1"
+        )
+        if "!AGENT_HEALTHY!"=="0" (
+            timeout /t 2 /nobreak >nul
+        )
+    )
 )
 
 echo.
@@ -314,7 +322,7 @@ if "!AGENT_HEALTHY!"=="1" (
 ) else (
     color 0E
     echo ==============================================================
-    echo    [!] INSTALLATION COMPLETED
+    echo    [!] INSTALLATION COMPLETED — VERIFYING AGENT STATUS
     echo ==============================================================
     echo    Agent background task registered and started.
     echo    Diagnostic boot log preview:
@@ -325,7 +333,8 @@ if "!AGENT_HEALTHY!"=="1" (
         powershell -NoProfile -Command "Get-Content '%DEST_DIR%\agent.log' -Tail 10"
     )
     echo.
-    echo    Auto-start is enabled and the agent is actively running.
+    echo    Auto-start is enabled. If port 9010 is not up yet,
+    echo    you can run DIAGNOSE-PC.bat to test connectivity.
     echo ==============================================================
 )
 echo.
@@ -333,5 +342,7 @@ if "%SILENT_MODE%"=="1" (
     echo [*] Silent network install complete. Exiting...
     exit /b 0
 )
-timeout /t 5
+echo Press any key to finish installation and close this window...
+pause >nul
+
 
