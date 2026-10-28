@@ -24,6 +24,7 @@ echo.
 :: 2. Terminate running processes
 echo [*] Terminating running agent processes...
 taskkill /f /im pc-sentinel-agent.exe >nul 2>&1
+powershell -NoProfile -ExecutionPolicy Bypass -Command "Get-CimInstance Win32_Process -Filter \"Name like 'python%'\" -ErrorAction SilentlyContinue | Where-Object { $_.CommandLine -like '*agent.py*' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }" >nul 2>&1
 taskkill /f /im cloudflared.exe >nul 2>&1
 schtasks /end /tn "PCSentinelAgent" >nul 2>&1
 timeout /t 1 /nobreak >nul
@@ -40,6 +41,7 @@ reg delete "HKCU\Software\Microsoft\Windows\CurrentVersion\Run" /v "PCSentinelAg
 
 :: 5. Remove Windows Firewall Rule
 netsh advfirewall firewall delete rule name="PCSentinelAgent" >nul 2>&1
+netsh advfirewall firewall delete rule name="PCSentinelPort" >nul 2>&1
 
 :: 6. Delete Agent files
 if exist "%DEST_DIR%" (

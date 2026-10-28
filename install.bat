@@ -106,16 +106,16 @@ echo [*] Starting silent automated Python installation...
 :: Priority A: Offline installer on USB drive
 if exist "%SRC_DIR%python-installer.exe" (
     echo [*] Installing Python using offline installer from USB drive...
-    "%SRC_DIR%python-installer.exe" /quiet InstallAllUsers=1 PrependPath=1 Include_pip=1
-    timeout /t 10 /nobreak >nul
+    start /wait "" "%SRC_DIR%python-installer.exe" /quiet InstallAllUsers=1 PrependPath=1 Include_pip=1
+    timeout /t 3 /nobreak >nul
 ) else (
     :: Priority B: Download official installer silently via PowerShell
     echo [*] Downloading official Python installer...
     powershell -Command "[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; (New-Object Net.WebClient).DownloadFile('https://www.python.org/ftp/python/3.11.9/python-3.11.9-amd64.exe', '%TEMP%\python-installer.exe')"
     if exist "%TEMP%\python-installer.exe" (
         echo [*] Installing Python silently...
-        "%TEMP%\python-installer.exe" /quiet InstallAllUsers=1 PrependPath=1 Include_pip=1
-        timeout /t 10 /nobreak >nul
+        start /wait "" "%TEMP%\python-installer.exe" /quiet InstallAllUsers=1 PrependPath=1 Include_pip=1
+        timeout /t 3 /nobreak >nul
         del /f /q "%TEMP%\python-installer.exe" >nul 2>&1
     ) else (
         :: Priority C: Winget fallback
@@ -167,6 +167,7 @@ echo.
 :: 3. Stop existing running agent if upgrading
 echo [*] Stopping existing Sentinel agent processes (if any)...
 taskkill /f /im pc-sentinel-agent.exe >nul 2>&1
+powershell -NoProfile -ExecutionPolicy Bypass -Command "Get-CimInstance Win32_Process -Filter \"Name like 'python%'\" -ErrorAction SilentlyContinue | Where-Object { $_.CommandLine -like '*agent.py*' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }" >nul 2>&1
 schtasks /end /tn "PCSentinelAgent" >nul 2>&1
 timeout /t 1 /nobreak >nul
 
@@ -201,12 +202,9 @@ echo [*] Configuring agent settings for PC [%COMPUTERNAME%]...
     echo PC_NAME=%COMPUTERNAME%
     
     if exist "%CONFIG_SRC%" (
-        for /f "usebackq tokens=1* delims==" %%A in ("%CONFIG_SRC%") do (
-            set "LINE=%%A"
-            if not "!LINE:~0,1!"=="#" (
-                if not "%%A"=="" (
-                    echo %%A=%%B
-                )
+        for /f "usebackq eol=# tokens=1* delims==" %%A in ("%CONFIG_SRC%") do (
+            if not "%%A"=="" (
+                echo %%A=%%B
             )
         )
     ) else (
@@ -247,7 +245,9 @@ if %errorlevel% neq 0 (
 :: 9. Authorize Windows Defender Firewall (Prevents any firewall popups or blocks)
 echo [*] Configuring Windows Defender Firewall permissions...
 netsh advfirewall firewall delete rule name="PCSentinelAgent" >nul 2>&1
+netsh advfirewall firewall delete rule name="PCSentinelPort" >nul 2>&1
 netsh advfirewall firewall add rule name="PCSentinelAgent" dir=in action=allow program="%DEST_DIR%\pc-sentinel-agent.exe" enable=yes profile=any >nul 2>&1
+netsh advfirewall firewall add rule name="PCSentinelPort" dir=in action=allow protocol=TCP localport=9010 enable=yes profile=any >nul 2>&1
 
 :: 10. Register Task Scheduler auto-start (Runs completely silent on user logon with battery resilience)
 echo [*] Registering auto-start background task in Windows Task Scheduler...
@@ -263,22 +263,7 @@ reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\Run" /v "PCSentinelAgent
 
 :: 10. Register in USB fleet.json if available
 if exist "%SRC_DIR%fleet.json" (
-    "%PY_CMD%" -c "
-import json, sys, os
-f_path = r'%SRC_DIR%fleet.json'
-pc_name = r'%COMPUTERNAME%'
-try:
-    with open(f_path, 'r', encoding='utf-8') as f:
-        d = json.load(f)
-    pcs = d.get('pcs', [])
-    if not any(p.get('name') == pc_name for p in pcs):
-        pcs.append({'name': pc_name, 'label': pc_name, 'ip': '127.0.0.1', 'network': 'Remote/LAN'})
-        d['pcs'] = pcs
-        with open(f_path, 'w', encoding='utf-8') as f:
-            json.dump(d, f, indent=4)
-except Exception:
-    pass
-" >nul 2>&1
+    "%PY_CMD%" -c "import json, sys; p, n = sys.argv[1], sys.argv[2]; f = open(p, 'r', encoding='utf-8'); d = json.load(f); f.close(); pcs = d.setdefault('pcs', []); pcs.append({'name': n, 'label': n, 'ip': '127.0.0.1', 'network': 'Remote/LAN'}) if not any(x.get('name') == n for x in pcs) else None; f = open(p, 'w', encoding='utf-8'); json.dump(d, f, indent=4); f.close()" "%SRC_DIR%fleet.json" "%COMPUTERNAME%" >nul 2>&1
 )
 
 :: 11. Launch agent right now in the background

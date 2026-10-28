@@ -38,6 +38,8 @@ INSTALL_DEST = r"C:\PCSentinel"
 FLEET_LOG_FILE = os.path.join(DEPLOY_DIR, "fleet_deploy_log.json")
 
 AGENT_CORE_FILES = [
+    "1-CLICK-INSTALL.bat",
+    "install.bat",
     "agent.py",
     "fleet_relay.py",
     "system_controller.py",
@@ -46,13 +48,14 @@ AGENT_CORE_FILES = [
     "start_agent.bat",
     "start_agent_hidden.vbs",
     "deploy_config.env",
-    "install.bat",
     "uninstall.bat",
+    "INSTRUCTIONS.txt",
 ]
 
 # Large optional files — downloaded only if needed
 OPTIONAL_LARGE_FILES = [
     "python-installer.exe",
+    "cloudflared.exe",
 ]
 
 # ========================================================================

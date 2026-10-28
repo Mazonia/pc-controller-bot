@@ -5,6 +5,15 @@ cd /d "%~dp0"
 
 set "PY_CMD="
 
+:: Priority 1: Use dedicated named binary if present and functional in directory
+if exist "%~dp0pc-sentinel-agent.exe" (
+    "%~dp0pc-sentinel-agent.exe" -c "import sys" >nul 2>&1
+    if !errorlevel! equ 0 (
+        set "PY_CMD=%~dp0pc-sentinel-agent.exe"
+        goto :found_py
+    )
+)
+
 :: Check direct python
 for /f "delims=" %%i in ('python -c "import sys; print(sys.executable)" 2^>nul') do (
     set "CANDIDATE=%%i"
@@ -50,16 +59,10 @@ if not defined PY_CMD (
 )
 if defined PY_CMD goto :found_py
 
-:: Check local named executable if present
-if exist "%~dp0pc-sentinel-agent.exe" (
-    set "PY_CMD=%~dp0pc-sentinel-agent.exe"
-    goto :found_py
-)
-
 set "PY_CMD=python"
-
+ 
 :found_py
 :run_loop
-"%PY_CMD%" agent.py
+"%PY_CMD%" "%~dp0agent.py"
 timeout /t 3 /nobreak >nul
 goto :run_loop
