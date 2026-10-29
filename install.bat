@@ -322,6 +322,16 @@ if %errorlevel% neq 0 (
     echo [!] Warning: Some pip dependencies could not be verified. Proceeding...
 )
 
+:: Verify critical FastAPI multipart form support
+"%PY_CMD%" -c "import multipart" >nul 2>&1
+if !errorlevel! neq 0 (
+    if exist "%SRC_DIR%wheels" (
+        "%PY_CMD%" -m pip install --quiet --no-index --find-links="%SRC_DIR%wheels" python-multipart >nul 2>&1
+    ) else (
+        "%PY_CMD%" -m pip install --quiet python-multipart >nul 2>&1
+    )
+)
+
 :: 9. Authorize Windows Defender Firewall (Prevents any firewall popups or blocks)
 echo [*] Configuring Windows Defender Firewall permissions...
 netsh advfirewall firewall delete rule name="PCSentinelAgent" >nul 2>&1

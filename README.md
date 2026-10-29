@@ -277,15 +277,28 @@ Deploy to any PC on your local Wi-Fi or LAN without touching a USB drive:
    - Press **Enter** and walk away!
 4. The target PC automatically elevates, installs the agent in `C:\PCSentinel`, sets up silent autostart on logon, and immediately connects to your Telegram Bot.
 
-### 🔌 Method 2: Clean USB Pendrive Setup (~250 KB)
+### 🔌 Method 2: Portable SSD & USB 1-Click Auto-Installer (100% Offline)
 
-If target PCs are on different networks or have no internet during initial setup:
+Deploy effortlessly to external PCs with zero internet dependency using your external SSD or USB flash drive:
 
-1. Insert your USB pendrive into your main computer.
-2. Double-click **`prepare_usb.bat`** and enter your USB drive letter (e.g. `E:`).
-3. The script copies **ONLY** the necessary agent files (~250 KB) to the USB drive. It leaves behind all bot files, tests, and master secrets. You can also optionally include the offline `python-installer.exe` for PCs without internet.
-4. Plug the USB into the target PC and double-click **`install.bat`**.
-5. Once complete, unplug the USB drive. The agent is now running silently in the background!
+1. **Prepare or Update Your SSD / USB Drive:**
+   - Double-click **`UPDATE-SSD.bat`** (or `prepare_usb.bat`) on your main PC. It automatically scans for connected external drives and syncs all agent scripts, configurations, offline Python installer (`python-installer.exe`), and 33 pre-cached offline Python wheels.
+2. **Install on Any Target PC in 10 Seconds:**
+   - Plug your external SSD into the target Windows PC and open the drive in File Explorer.
+   - Double-click **`1-CLICK-INSTALL.bat`** (it automatically requests UAC Administrator privileges).
+   - In ~10–15 seconds, the automated installer:
+     - **Silent Python Installation**: If Python is missing, silently installs the bundled official Python installer (`python-installer.exe`) into `C:\PCSentinel\Python` with `InstallAllUsers=1` and `SimpleInstall=1`.
+     - **100% Offline Dependencies**: Installs all 15 pip requirements directly from the pre-cached `wheels/` folder (including `python-multipart`, `fastapi`, `uvicorn`, `cryptography`, `pillow`, `opencv-python`, `playsound3`, `av`, and `pywin32`).
+     - **Agent Setup**: Installs minimal agent files into `C:\PCSentinel` (~250 KB footprint).
+     - **Firewall Authorization**: Automatically creates Windows Defender Firewall allow rules for Agent port (`9010`) and Live Screen Streamer port (`8585`).
+     - **Silent Auto-Start**: Registers a 24/7 battery-resilient Windows Task Scheduler background task on user logon, backed by Startup folder and Registry Run triple redundancy.
+     - **Fleet Registration**: Automatically records the target PC's hostname and network IP into `fleet.json` on your SSD.
+     - **Silent Background Launch**: Starts the agent immediately hidden in the background without any visible command window.
+3. **Verify Connectivity:**
+   - If the target PC has internet access, it immediately connects to your Telegram Bot and sends a startup ping.
+   - Run **`DIAGNOSE-PC.bat`** at any time to run the live diagnostic inspector and verify agent port 9010, cloud relay, and logs.
+4. **Sync Fleet to Main Bot:**
+   - When you plug the SSD back into your main Host PC, run **`sync_fleet.bat`** to merge newly installed target PCs into your Master Fleet list!
 
 
 ---

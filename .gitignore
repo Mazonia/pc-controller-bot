@@ -11,3 +11,4 @@ fleet_deploy_log.json
 *.log
 wheels/
 *.whl
+.pytest_cache/
