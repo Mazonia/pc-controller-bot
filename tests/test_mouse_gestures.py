@@ -92,3 +92,4 @@ def test_screen_caster_capture_single_frame():
     assert len(frame_bytes) > 0
     # Standard JPEG header starts with \xff\xd8
     assert frame_bytes[:2] == b"\xff\xd8"
+

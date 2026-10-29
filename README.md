@@ -7,7 +7,7 @@
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE)
 
 > **A secure, cross-network multi-PC remote management, surveillance, and automation system controlled entirely through a single Telegram Bot.**  
-> Monitor, control, diagnose, and automate any number of Windows computers (home desktop, work laptop, gaming rig, remote servers, or a fleet of workstations) from your phone anywhere in the world — across local LAN, mobile hotspots, 4G/5G tethering, or firewalled networks.
+> Monitor, control, diagnose, and automate any number of Windows computers (home desktop, work laptop, gaming rig, remote servers, or a fleet of workstations) from your phone anywhere in the world - across local LAN, mobile hotspots, 4G/5G tethering, or firewalled networks.
 
 ---
 
@@ -106,7 +106,7 @@ Traditional remote desktop tools require port forwarding, static public IPs, com
 - **Webcam Surveillance (`/webcam`, `/record_webcam`)**: Instant photo snapshot or short security video clip (10s/30s) from connected webcams.
 - **Multi-Duration Screen Recorder (`/record_screen`)**: Interactive duration picker for 10s, 20s, 30s, 40s, 50s, 1 min, or 2 mins of on-screen desktop action into an MP4 video file.
 - **Hardware-Accelerated 30 FPS Live Screen Casting (`/cast`, `/stream`)**:
-  - **OpenCV Hardware Encoding Acceleration**: Converted frame resizing and compression from PIL down to high-performance C++ OpenCV (`cv2.cvtColor`, `cv2.resize`, `cv2.imencode`), reducing per-frame encode latency by 15x (from ~80–120ms to ~6ms) for butter-smooth 30+ FPS live desktop streaming.
+  - **OpenCV Hardware Encoding Acceleration**: Converted frame resizing and compression from PIL down to high-performance C++ OpenCV (`cv2.cvtColor`, `cv2.resize`, `cv2.imencode`), reducing per-frame encode latency by 15x (from ~80-120ms to ~6ms) for butter-smooth 30+ FPS live desktop streaming.
   - **Zero-Stall Stream Pipeline**: Socket write buffer flushing prevents TCP frame buildup and eliminates jitter over both local Wi-Fi and mobile hotspots.
   - **Cross-Network Global Access**: Streams reliably across separate networks, cellular data (4G/5G), and CGNAT via automated Cloudflare Quick Tunnels (`https://*.trycloudflare.com`) with zero router port forwarding.
   - **Dual-Engine Web Player with Mobile Watchdog**: Smooth MJPEG video streaming + client-side watchdog that automatically re-syncs the stream if cellular signal dips.
@@ -150,9 +150,9 @@ Traditional remote desktop tools require port forwarding, static public IPs, com
 - **Telegram Mini App (TMA) Integration**:
   - Tap `🖱️ Open Ghost Mouse (TMA)` inside Telegram to open the trackpad right within your Telegram app!
 - **In-Chat Quick Commands**:
-  - `/type <message>` — Injects `<message>` directly into whatever app is focused on the PC.
-  - `/key <key>` — Simulates keystrokes or hotkeys (e.g., `/key enter`, `/key ctrl+v`, `/key win+d`, `/key alt+f4`).
-  - `/mouse` — Opens the mouse controller dashboard.
+  - `/type <message>` - Injects `<message>` directly into whatever app is focused on the PC.
+  - `/key <key>` - Simulates keystrokes or hotkeys (e.g., `/key enter`, `/key ctrl+v`, `/key win+d`, `/key alt+f4`).
+  - `/mouse` - Opens the mouse controller dashboard.
 
 ### 🪟 Desktops & Windows Application Switching <a id="desktops-windows-application-switching"></a>
 - **Dedicated Remote Control (`/desktop`, `/windows`, `/switch`)**: Switch, create, or inspect Windows Virtual Desktops and cycle or focus active application windows with 1 tap from Telegram or the live web stream player.
@@ -198,7 +198,7 @@ Traditional remote desktop tools require port forwarding, static public IPs, com
 - **Engineered for High Latency & Unstable Connections**: Built specifically to survive bad internet, weak mobile hotspots, packet drop, 3G/4G/5G tethering, and cellular CGNAT environments where commands frequently time out.
 - **Intelligent Telegram API Retries (`safe_telegram_call`)**: Automatically intercepts transient timeouts, connection resets, and Telegram flood limits (`RetryAfter`) with exponential backoff retry cycles and extended 60-second read/write timeouts.
 - **Direct Local HTTP Loopback (`127.0.0.1`)**: Host PC commands automatically detect local residence and bypass cloud brokers and internet routing entirely, guaranteeing 0ms ping latency and zero cloud dependency.
-- **Automatic JPEG Screenshot Compression**: High-resolution screenshots automatically compress oversized PNGs (>400KB) into optimized JPEG format (quality 85) on the agent before transmission, slashing upload sizes by 90–95% (e.g. from 4MB to ~200KB) for instantaneous mobile delivery.
+- **Automatic JPEG Screenshot Compression**: High-resolution screenshots automatically compress oversized PNGs (>400KB) into optimized JPEG format (quality 85) on the agent before transmission, slashing upload sizes by 90-95% (e.g. from 4MB to ~200KB) for instantaneous mobile delivery.
 - **Self-Healing Cloud Relay**: Commander Relay automatically buffers and waits up to 6.0 seconds for broker reconnection during transient network blips and automatically retries timed-out commands with QoS 1 confirmation.
 - **Real-Time Network Diagnostics (`/net`, `/ping`)**: Tap the new **"🌐 Network Ping"** button or type `/net` to measure live roundtrip Telegram API latency in milliseconds, MQTT cloud broker connection health, and target PC reachability with color-coded connection ratings.
 - **Immediate Typing Feedback**: Emits immediate `ChatAction.TYPING` and `ChatAction.UPLOAD_PHOTO` signals so you always know a command is being processed, even over high-latency connections.
@@ -245,7 +245,7 @@ Traditional remote desktop tools require port forwarding, static public IPs, com
 
 You have **three flexible ways** to run your Commander Bot 24/7:
 
-#### 📱 Option A: Android Phone (24/7 Always-On via Termux) — Recommended <a id="option-a-android-phone-247-always-on-via-termux-recommended"></a>
+#### 📱 Option A: Android Phone (24/7 Always-On via Termux) - Recommended <a id="option-a-android-phone-247-always-on-via-termux-recommended"></a>
 Because smartphones stay powered and connected to Wi-Fi/4G 24/7, you can run the Commander Bot directly on your Android phone!
 1. Install **[Termux](https://f-droid.org/en/packages/com.termux/)** (free from F-Droid or GitHub Releases).
 2. Open Termux and clone the repo:
@@ -264,7 +264,7 @@ Because smartphones stay powered and connected to Wi-Fi/4G 24/7, you can run the
    ```
    *The script activates `termux-wake-lock` so Android never suspends your bot when the phone screen is off!*
 
-#### ☁️ Option B: Free 24/7 Cloud Server (Render / Railway / Docker) — Zero Phone Battery <a id="option-b-free-247-cloud-server-render-railway-docker-zero-phone-battery"></a>
+#### ☁️ Option B: Free 24/7 Cloud Server (Render / Railway / Docker) - Zero Phone Battery <a id="option-b-free-247-cloud-server-render-railway-docker-zero-phone-battery"></a>
 Run the Commander Bot 24/7 in the cloud with zero hardware maintenance:
 
 **Via Render.com (Free Tier):**
@@ -313,7 +313,7 @@ You can easily deploy PC-Remote-Sentinel to any number of target Windows PCs (pe
 
 Target PCs only receive the lightweight agent runtime (~250 KB). Master bot code (`bot.py`), configurations, and credentials are never deployed to target machines.
 
-### 🌐 Method 1: Over-the-Air Network Deployment (Recommended for 1–100+ PCs) <a id="method-1-over-the-air-network-deployment-recommended-for-1100-pcs"></a>
+### 🌐 Method 1: Over-the-Air Network Deployment (Recommended for 1-100+ PCs) <a id="method-1-over-the-air-network-deployment-recommended-for-1100-pcs"></a>
 
 Deploy to any PC on your local Wi-Fi or LAN without touching a USB drive:
 
@@ -337,7 +337,7 @@ Deploy effortlessly to external PCs with zero internet dependency using your ext
 2. **Install on Any Target PC in 10 Seconds:**
    - Plug your external SSD into the target Windows PC and open the drive in File Explorer.
    - Double-click **`1-CLICK-INSTALL.bat`** (it automatically requests UAC Administrator privileges).
-   - In ~10–15 seconds, the automated installer:
+   - In ~10-15 seconds, the automated installer:
      - **Silent Python Installation**: If Python is missing, silently installs the bundled official Python installer (`python-installer.exe`) into `C:\PCSentinel\Python` with `InstallAllUsers=1` and `SimpleInstall=1`.
      - **100% Offline Dependencies**: Installs all 15 pip requirements directly from the pre-cached `wheels/` folder (including `python-multipart`, `fastapi`, `uvicorn`, `cryptography`, `pillow`, `opencv-python`, `playsound3`, `av`, and `pywin32`).
      - **Agent Setup**: Installs minimal agent files into `C:\PCSentinel` (~250 KB footprint).
@@ -367,7 +367,7 @@ Deploy effortlessly to external PCs with zero internet dependency using your ext
 | `/switch <name>` | Instantly bring matching application window to the front |
 | `/webcam` | Capture photo from connected webcam |
 | `/record_webcam [s]` | Record 10s or custom webcam video clip |
-| `/record_screen [s]` | Record 10s–120s of on-screen desktop video |
+| `/record_screen [s]` | Record 10s-120s of on-screen desktop video |
 | `/lock` | Instantly lock the Windows workstation |
 | `/top` | Display top RAM & CPU consuming processes |
 | `/kill <name_or_pid>` | Terminate running process (e.g. `/kill notepad.exe`) |
@@ -386,7 +386,7 @@ Deploy effortlessly to external PCs with zero internet dependency using your ext
 | `/cmd <command>` | Execute terminal command with token masking |
 | `/login <pin>` | Authenticate PIN to unlock Command Center |
 | `/logout` | Lock bot session immediately |
-| `/setpin <pin>` | Configure or change bot security PIN (4–8 digits) |
+| `/setpin <pin>` | Configure or change bot security PIN (4-8 digits) |
 | `/removepin` | Disable PIN protection completely |
 | `/rename [name]` | Rename a PC with a friendly custom label |
 | `/removepc <name>` | Remove an uninstalled PC from the fleet list |
@@ -425,6 +425,22 @@ Removing Sentinel from any PC is just as simple as installing it:
 
 ### From Your Main Host PC <a id="from-your-main-host-pc"></a>
 - Double-click **`remove_autostart.bat`** to cleanly remove the startup task and background process.
+
+---
+
+## ❓ Frequently Asked Questions (FAQ)
+
+### What is PC Remote Sentinel?
+PC Remote Sentinel is an enterprise-grade multi-PC fleet management, surveillance, and automation system controlled entirely through a single Telegram Bot. It enables remote desktop monitoring, webcam capture, process management, mouse/keyboard simulation, and terminal execution on Windows 10 and 11.
+
+### How does it connect to remote computers without port forwarding?
+Sentinel uses outbound-only long-polling to the Telegram Bot API and optional MQTT over TLS (AES-256-GCM encrypted relay). This architecture punches through Carrier-Grade NAT (CGNAT), 4G/5G mobile hotspots, and corporate firewalls with zero router configuration.
+
+### How does the bot prevent unauthorized access?
+The bot enforces strict Telegram User ID authorization (`ADMIN_IDS`). Any interaction from unauthorized accounts is immediately blocked, logged, and alerted to the administrator. Additionally, optional PIN protection (`/setpin`) adds two-factor security for sensitive commands.
+
+### Can I control multiple computers at once?
+Yes. Using the `/pcs` command, administrators can list all registered workstations (home PC, work laptop, gaming rig, cloud VPS) and toggle active control between them in seconds.
 
 ---
 

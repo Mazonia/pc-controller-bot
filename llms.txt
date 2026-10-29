@@ -1,0 +1,62 @@
+# PC Remote Sentinel - Multi-PC Remote Management and Surveillance System
+
+> Secure, cross-network multi-PC remote management, surveillance, and automation system controlled entirely through a single Telegram Bot for Windows 10 and 11.
+
+## Project Overview
+- **Name:** PC Remote Sentinel (Fleet Commander)
+- **Repository:** https://github.com/Mazonia/pc-controller-bot
+- **License:** GPL-3.0
+- **Runtime:** Python 3.10+
+- **Supported OS:** Windows 10, Windows 11 (64-bit)
+- **Control Interface:** Telegram Bot (mobile, desktop, and web clients)
+
+## Architecture & Core Technologies
+- **Telegram Bot Engine:** `python-telegram-bot` v21+ with long-polling and asynchronous task queues.
+- **Vision & Capture:** OpenCV (`cv2`) for real-time webcam surveillance snapshots and screen video recording.
+- **Input Automation:** `pyautogui` for mouse cursor manipulation, click simulations, hotkey triggers, and direct keyboard typing.
+- **Diagnostics & Process Management:** `psutil` and `wmi` for CPU, RAM, disk, battery health metrics, and process termination.
+- **Speech Synthesis:** `pyttsx3` for remote text-to-speech audio broadcast through PC speakers.
+- **Network Resilience:** Outbound-only HTTPS long-polling and optional MQTT over TLS (AES-256-GCM) punching through Carrier-Grade NAT (CGNAT) and corporate firewalls with zero port-forwarding.
+
+## Key Capabilities
+- **Fleet Commander (`/pcs`):** Switch and control multiple Windows workstations from a single Telegram chat.
+- **Screen & Webcam Surveillance:** Instant desktop screenshots, short video clips with audio, and webcam photos.
+- **Virtual Trackpad & Gestures:** Control cursor movement, left/right clicks, scrolling, and keyboard typing directly from your phone.
+- **Remote Process & Terminal:** Execute PowerShell/CMD commands, inspect running processes, and kill frozen tasks.
+- **Remote File Explorer & Clipboard:** Browse folders, download files to Telegram, upload files to PC, and sync clipboard text.
+- **Silent Background Operation:** Runs invisibly in the background via Windows Task Scheduler with zero command windows or taskbar icons.
+
+## Quickstart & Installation
+
+```bash
+# Clone the repository
+git clone https://github.com/Mazonia/pc-controller-bot.git
+cd pc-controller-bot
+
+# Set up virtual environment
+python -m venv venv
+.\venv\Scripts\activate
+
+# Install dependencies
+pip install -r requirements.txt
+
+# Configure bot token and admin ID
+copy .env.example .env
+# Edit .env with BOT_TOKEN and ADMIN_IDS
+
+# Start the agent
+python bot.py
+```
+
+## Primary Telegram Commands
+- `/pcs` - List registered PCs and switch active machine
+- `/status` - View CPU, RAM, battery, uptime, and network diagnostics
+- `/screen` - Capture high-resolution desktop screenshot
+- `/webcam` - Capture webcam photo
+- `/record [sec]` - Record screen video with audio
+- `/mouse [dx] [dy]` - Move mouse cursor
+- `/click [left|right]` - Trigger mouse click
+- `/type [text]` - Type text onto active Windows window
+- `/cmd [command]` - Execute shell command and view output
+- `/lock` - Lock Windows workstation
+- `/shutdown` - Power off PC remotely

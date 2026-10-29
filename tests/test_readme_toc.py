@@ -23,3 +23,4 @@ def test_readme_table_of_contents_anchors():
             missing.append(f"{label} -> #{anchor}")
             
     assert not missing, f"Missing target anchors in README.md: {missing}"
+
