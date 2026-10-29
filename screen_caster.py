@@ -39,6 +39,11 @@ except ImportError:
     cv2 = None
 
 try:
+    import numpy as np
+except ImportError:
+    np = None
+
+try:
     import av
 except ImportError:
     av = None
@@ -308,15 +313,13 @@ HTML_PLAYER_TEMPLATE = """<!DOCTYPE html>
             cursor: crosshair;
         }
 
-        /* High-Contrast Floating Cursor Radar & Crosshair */
+        /* High-Contrast Floating Cursor Radar & Crosshair (GPU-Accelerated) */
         #cursor-radar {
             position: absolute;
-            top: 50%;
-            left: 50%;
-            width: 30px;
-            height: 30px;
-            margin-left: -15px;
-            margin-top: -15px;
+            top: 0;
+            left: 0;
+            width: 32px;
+            height: 32px;
             border: 2px solid #38bdf8;
             border-radius: 50%;
             pointer-events: none;
@@ -325,8 +328,83 @@ HTML_PLAYER_TEMPLATE = """<!DOCTYPE html>
             display: flex;
             align-items: center;
             justify-content: center;
-            transition: transform 0.04s ease-out;
             will-change: transform;
+            transform: translate3d(50vw, 50vh, 0);
+        }
+
+        /* Centered Visual Gesture HUD Badge */
+        #gesture-hud {
+            position: fixed;
+            top: 40%;
+            left: 50%;
+            transform: translate(-50%, -50%) scale(0.85);
+            background: rgba(15, 23, 42, 0.92);
+            border: 1px solid rgba(56, 189, 248, 0.5);
+            box-shadow: 0 0 28px rgba(56, 189, 248, 0.35), 0 12px 32px rgba(0, 0, 0, 0.75);
+            color: #f8fafc;
+            padding: 10px 22px;
+            border-radius: 999px;
+            font-size: 0.92rem;
+            font-weight: 600;
+            backdrop-filter: blur(16px);
+            -webkit-backdrop-filter: blur(16px);
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            opacity: 0;
+            pointer-events: none;
+            z-index: 160;
+            transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+        }
+
+        #gesture-hud.show {
+            opacity: 1;
+            transform: translate(-50%, -50%) scale(1);
+        }
+
+        #gesture-hud-icon {
+            font-size: 1.2rem;
+        }
+
+        #gesture-hud-text {
+            letter-spacing: 0.02em;
+        }
+
+        /* Gestures Quick Ribbon */
+        .gestures-ribbon {
+            display: flex;
+            gap: 5px;
+            overflow-x: auto;
+            padding-bottom: 2px;
+            -webkit-overflow-scrolling: touch;
+            scrollbar-width: none;
+        }
+
+        .gestures-ribbon::-webkit-scrollbar {
+            display: none;
+        }
+
+        .gest-pill {
+            background: rgba(56, 189, 248, 0.12);
+            border: 1px solid rgba(56, 189, 248, 0.3);
+            color: #bae6fd;
+            padding: 5px 9px;
+            border-radius: 8px;
+            font-size: 0.72rem;
+            font-weight: 600;
+            white-space: nowrap;
+            cursor: pointer;
+            flex-shrink: 0;
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            transition: all 0.15s;
+        }
+
+        .gest-pill:active {
+            background: #38bdf8;
+            color: #040812;
+            transform: scale(0.96);
         }
 
         #cursor-radar::before {
@@ -813,6 +891,24 @@ HTML_PLAYER_TEMPLATE = """<!DOCTYPE html>
             <button class="btn-live-toggle" id="btn-live-type" onclick="toggleLiveType()" title="Stream keystrokes instantly">⚡ Live</button>
         </div>
 
+        <!-- Windows Multi-Touch Gestures Quick Ribbon -->
+        <div class="gestures-ribbon">
+            <button class="gest-pill" onclick="triggerNamedGesture('task_view', '🗔 Task View')">🗔 Task View (3-Up)</button>
+            <button class="gest-pill" onclick="triggerNamedGesture('show_desktop', '🖥️ Show Desktop')">🖥️ Desktop (3-Down)</button>
+            <button class="gest-pill" onclick="triggerNamedGesture('switch_app_next', '⇄ Next App')">⇄ Next App (3-Right)</button>
+            <button class="gest-pill" onclick="triggerNamedGesture('switch_app_prev', '⇆ Prev App')">⇆ Prev App (3-Left)</button>
+            <button class="gest-pill" onclick="triggerNamedGesture('search', '🔍 Search')">🔍 Search (3-Tap)</button>
+            <button class="gest-pill" onclick="triggerNamedGesture('next_desktop', '🗂️ Next Desktop')">🗂️ Next Desk (4-Right)</button>
+            <button class="gest-pill" onclick="triggerNamedGesture('prev_desktop', '🗂️ Prev Desktop')">🗂️ Prev Desk (4-Left)</button>
+            <button class="gest-pill" onclick="triggerNamedGesture('action_center', '🔔 Action Center')">🔔 Action Ctr (4-Up)</button>
+            <button class="gest-pill" onclick="triggerNamedGesture('settings', '⚙️ Settings')">⚙️ Settings (4-Tap)</button>
+            <button class="gest-pill" onclick="triggerNamedGesture('clipboard', '📋 Win+V Clipboard')">📋 Win+V</button>
+            <button class="gest-pill" onclick="triggerNamedGesture('snip', '✂️ Snipping Tool')">✂️ Snip</button>
+            <button class="gest-pill" onclick="triggerNamedGesture('zoom_in', '🔍 Zoom In')">🔍 Zoom In</button>
+            <button class="gest-pill" onclick="triggerNamedGesture('zoom_out', '🔍 Zoom Out')">🔍 Zoom Out</button>
+            <button class="gest-pill" onclick="triggerNamedGesture('lock', '🔒 Lock PC')">🔒 Lock</button>
+        </div>
+
         <!-- Tactile Mouse Buttons -->
         <div class="mouse-buttons-row">
             <button class="mouse-btn" onclick="sendMouseClick('left')">🖱️ Left Click</button>
@@ -917,6 +1013,12 @@ HTML_PLAYER_TEMPLATE = """<!DOCTYPE html>
         </div>
     </div>
 
+    <!-- Centered Visual Gesture HUD -->
+    <div id="gesture-hud">
+        <span id="gesture-hud-icon">🗔</span>
+        <span id="gesture-hud-text">Task View</span>
+    </div>
+
     <div class="toast" id="toast">Notice message</div>
 
     <script>
@@ -982,27 +1084,47 @@ HTML_PLAYER_TEMPLATE = """<!DOCTYPE html>
             document.getElementById('label-sens').textContent = sensitivity.toFixed(1) + 'x';
         }
 
-        // ── FULL-SCREEN TOUCH TRACKPAD GESTURES ──────────────────────────
-        let lastTouchX = 0;
-        let lastTouchY = 0;
+        // ── HARDWARE-ACCELERATED MULTI-TOUCH GESTURE ENGINE ─────────────
+        let activeTouches = 0;
+        let maxTouches = 0;
         let touchStartX = 0;
         let touchStartY = 0;
         let touchStartTime = 0;
+        let lastTouchTime = 0;
+        let lastTouchX = 0;
+        let lastTouchY = 0;
         let movedDist = 0;
+
+        // Multi-finger gesture tracking
+        let initialCenterX = 0;
+        let initialCenterY = 0;
+        let lastCenterX = 0;
+        let lastCenterY = 0;
+        let initialPinchDist = 0;
+        let lastPinchDist = 0;
+        let pinchThrottled = 0;
+        let gestureTriggered = false;
+
+        // Tap-and-drag tracking
+        let lastTapEndTime = 0;
+        let lastTapEndPos = { x: 0, y: 0 };
+        let isTapDragging = false;
         let longPressTimer = null;
+
+        // Pending movements & smooth 60fps raf
         let pendingDx = 0;
         let pendingDy = 0;
         let moveRafId = null;
 
-        // Virtual Radar cursor coordinates on screen
+        // Virtual Radar cursor coordinates
         let radarX = window.innerWidth / 2;
         let radarY = (window.innerHeight - 150) / 2;
 
         function updateRadarPos(x, y) {
-            radarX = Math.max(10, Math.min(window.innerWidth - 10, x));
-            radarY = Math.max(10, Math.min(window.innerHeight - 150, y));
-            radar.style.left = radarX + 'px';
-            radar.style.top = radarY + 'px';
+            radarX = Math.max(12, Math.min(window.innerWidth - 12, x));
+            radarY = Math.max(12, Math.min(window.innerHeight - 150, y));
+            // GPU-composited 3D transform (zero layout reflow)
+            radar.style.transform = `translate3d(${radarX - 16}px, ${radarY - 16}px, 0)`;
         }
         updateRadarPos(radarX, radarY);
 
@@ -1011,6 +1133,24 @@ HTML_PLAYER_TEMPLATE = """<!DOCTYPE html>
             void radar.offsetWidth;
             radar.classList.add('click-ripple');
             vibrate(30);
+        }
+
+        function showGestureHud(icon, text) {
+            const hud = document.getElementById('gesture-hud');
+            document.getElementById('gesture-hud-icon').textContent = icon;
+            document.getElementById('gesture-hud-text').textContent = text;
+            hud.classList.remove('show');
+            void hud.offsetWidth;
+            hud.classList.add('show');
+            vibrate(45);
+            setTimeout(() => hud.classList.remove('show'), 1400);
+        }
+
+        async function triggerNamedGesture(name, label) {
+            showGestureHud(label.split(' ')[0] || '⚡', label);
+            try {
+                await fetch(`/input/gesture?token=${token}&gesture=${encodeURIComponent(name)}`, { method: 'POST' });
+            } catch (e) {}
         }
 
         function flushPendingMove() {
@@ -1027,82 +1167,264 @@ HTML_PLAYER_TEMPLATE = """<!DOCTYPE html>
             moveRafId = null;
         }
 
+        function getTouchesCenter(touches) {
+            let sx = 0, sy = 0;
+            for (let i = 0; i < touches.length; i++) {
+                sx += touches[i].clientX;
+                sy += touches[i].clientY;
+            }
+            return { x: sx / touches.length, y: sy / touches.length };
+        }
+
         touchSurface.addEventListener('touchstart', (e) => {
-            if (e.touches.length === 1) {
+            const numTouches = e.touches.length;
+            maxTouches = Math.max(maxTouches, numTouches);
+            const now = performance.now();
+
+            if (numTouches === 1) {
                 const t = e.touches[0];
-                lastTouchX = t.clientX;
-                lastTouchY = t.clientY;
                 touchStartX = t.clientX;
                 touchStartY = t.clientY;
-                touchStartTime = performance.now();
+                lastTouchX = t.clientX;
+                lastTouchY = t.clientY;
+                touchStartTime = now;
+                lastTouchTime = now;
                 movedDist = 0;
+                maxTouches = 1;
+                gestureTriggered = false;
 
-                // Long press for Right Click
+                // Check for Tap-and-Drag (second tap within 280ms of previous tap)
+                const tapGap = now - lastTapEndTime;
+                const tapDist = Math.hypot(t.clientX - lastTapEndPos.x, t.clientY - lastTapEndPos.y);
+                if (tapGap < 280 && tapDist < 25) {
+                    isTapDragging = true;
+                    fetch(`/input/mouse?token=${token}&action=down&btn=left`, { method: 'POST', keepalive: true }).catch(() => {});
+                    showGestureHud('🖲️', 'Tap & Drag');
+                    vibrate(40);
+                }
+
+                // Long press for Right Click (if not tap-dragging)
                 if (longPressTimer) clearTimeout(longPressTimer);
-                longPressTimer = setTimeout(() => {
-                    if (movedDist < 12) {
-                        sendMouseClick('right');
-                        showToast('Right Click 🖱️');
-                        vibrate(55);
-                    }
-                }, 380);
-            } else if (e.touches.length === 2) {
-                // Two fingers: cancel long press
-                if (longPressTimer) clearTimeout(longPressTimer);
-                lastTouchY = (e.touches[0].clientY + e.touches[1].clientY) / 2;
+                if (!isTapDragging) {
+                    longPressTimer = setTimeout(() => {
+                        if (movedDist < 12 && maxTouches === 1 && !gestureTriggered) {
+                            sendMouseClick('right');
+                            showGestureHud('🖱️', 'Right Click');
+                            vibrate(55);
+                            gestureTriggered = true;
+                        }
+                    }, 400);
+                }
+            } else if (numTouches >= 2) {
+                // Multi-touch gestures initialization
+                if (longPressTimer) {
+                    clearTimeout(longPressTimer);
+                    longPressTimer = null;
+                }
+                const center = getTouchesCenter(e.touches);
+                initialCenterX = center.x;
+                initialCenterY = center.y;
+                lastCenterX = center.x;
+                lastCenterY = center.y;
+                touchStartTime = now;
+                lastTouchTime = now;
+
+                if (numTouches === 2) {
+                    const t0 = e.touches[0];
+                    const t1 = e.touches[1];
+                    initialPinchDist = Math.hypot(t0.clientX - t1.clientX, t0.clientY - t1.clientY);
+                    lastPinchDist = initialPinchDist;
+                }
             }
         }, { passive: false });
 
         touchSurface.addEventListener('touchmove', (e) => {
-            e.preventDefault(); // prevent pull to refresh and scroll
-            if (e.touches.length === 1) {
+            e.preventDefault(); // prevent pull-to-refresh and native scroll
+            const numTouches = e.touches.length;
+            maxTouches = Math.max(maxTouches, numTouches);
+            const now = performance.now();
+            const dt = Math.max(1, now - lastTouchTime);
+
+            if (numTouches === 1 && !gestureTriggered) {
                 const t = e.touches[0];
-                const dx = (t.clientX - lastTouchX) * sensitivity;
-                const dy = (t.clientY - lastTouchY) * sensitivity;
+                const rawDx = (t.clientX - lastTouchX) * sensitivity;
+                const rawDy = (t.clientY - lastTouchY) * sensitivity;
                 lastTouchX = t.clientX;
                 lastTouchY = t.clientY;
+                lastTouchTime = now;
 
-                movedDist += Math.hypot(dx, dy);
+                const stepDist = Math.hypot(rawDx, rawDy);
+                movedDist += stepDist;
+
                 if (movedDist > 10 && longPressTimer) {
                     clearTimeout(longPressTimer);
                     longPressTimer = null;
                 }
 
-                updateRadarPos(radarX + dx, radarY + dy);
-                pendingDx += dx;
-                pendingDy += dy;
+                // Non-linear acceleration: precision dampening on micro-movements, smooth boost on fast flicks
+                const vel = stepDist / dt; // px per ms
+                const accel = vel > 1.1 ? Math.min(2.4, 1.0 + (vel - 1.1) * 0.55) : 0.88;
+                const finalDx = rawDx * accel;
+                const finalDy = rawDy * accel;
+
+                updateRadarPos(radarX + finalDx, radarY + finalDy);
+                pendingDx += finalDx;
+                pendingDy += finalDy;
 
                 if (!moveRafId) {
                     moveRafId = requestAnimationFrame(flushPendingMove);
                 }
-            } else if (e.touches.length === 2) {
-                // 2-finger scroll
-                const curY = (e.touches[0].clientY + e.touches[1].clientY) / 2;
-                const dy = curY - lastTouchY;
-                lastTouchY = curY;
-                if (Math.abs(dy) > 3) {
-                    const scrollDelta = Math.round(dy * 15);
+            } else if (numTouches === 2 && !gestureTriggered) {
+                // 2-Finger scroll & Pinch-to-zoom
+                const t0 = e.touches[0];
+                const t1 = e.touches[1];
+                const curDist = Math.hypot(t0.clientX - t1.clientX, t0.clientY - t1.clientY);
+                const pinchDelta = curDist - lastPinchDist;
+                const center = getTouchesCenter(e.touches);
+                const panDx = center.x - lastCenterX;
+                const panDy = center.y - lastCenterY;
+                lastCenterX = center.x;
+                lastCenterY = center.y;
+                lastPinchDist = curDist;
+
+                // Pinch-to-zoom check
+                if (Math.abs(pinchDelta) > 16 && (now - pinchThrottled > 220)) {
+                    pinchThrottled = now;
+                    if (pinchDelta > 0) {
+                        triggerNamedGesture('zoom_in', '🔍 Zoom In');
+                    } else {
+                        triggerNamedGesture('zoom_out', '🔍 Zoom Out');
+                    }
+                    return;
+                }
+
+                // 2-Finger Pan (Vertical + Horizontal Scroll)
+                if (Math.abs(panDy) > 2) {
+                    const scrollDelta = Math.round(-panDy * 14);
                     fetch(`/input/mouse?token=${token}&action=scroll&delta=${scrollDelta}`, { method: 'POST', keepalive: true }).catch(() => {});
                 }
+                if (Math.abs(panDx) > 3) {
+                    const hDelta = Math.round(panDx * 14);
+                    fetch(`/input/mouse?token=${token}&action=scroll_h&delta=${hDelta}`, { method: 'POST', keepalive: true }).catch(() => {});
+                }
+            } else if (numTouches >= 3) {
+                const center = getTouchesCenter(e.touches);
+                lastCenterX = center.x;
+                lastCenterY = center.y;
             }
         }, { passive: false });
 
         touchSurface.addEventListener('touchend', (e) => {
+            const now = performance.now();
+            const elapsed = now - touchStartTime;
+
             if (longPressTimer) {
                 clearTimeout(longPressTimer);
                 longPressTimer = null;
             }
 
-            // Flush remaining move
+            // Flush remaining cursor moves
             if (pendingDx !== 0 || pendingDy !== 0) {
                 flushPendingMove();
             }
 
-            const elapsed = performance.now() - touchStartTime;
-            if (elapsed < 240 && movedDist < 10) {
-                // Quick tap -> Left Click
-                sendMouseClick('left');
-                triggerRadarRipple();
+            // Release tap-and-drag if active
+            if (isTapDragging && e.touches.length === 0) {
+                isTapDragging = false;
+                fetch(`/input/mouse?token=${token}&action=up&btn=left`, { method: 'POST', keepalive: true }).catch(() => {});
+                showToast('Drag Released');
+                vibrate(25);
+                lastTapEndTime = 0;
+                return;
+            }
+
+            // 1-Finger interactions
+            if (maxTouches === 1 && !gestureTriggered) {
+                if (elapsed < 240 && movedDist < 12) {
+                    // Quick tap -> Left click
+                    sendMouseClick('left');
+                    triggerRadarRipple();
+                    lastTapEndTime = now;
+                    lastTapEndPos = { x: lastTouchX, y: lastTouchY };
+                }
+            }
+            // 2-Finger interactions
+            else if (maxTouches === 2 && !gestureTriggered) {
+                const totalPanDist = Math.hypot(lastCenterX - initialCenterX, lastCenterY - initialCenterY);
+                if (elapsed < 280 && totalPanDist < 16) {
+                    // 2-finger tap -> Right Click
+                    sendMouseClick('right');
+                    showGestureHud('🖱️', 'Right Click (2-Tap)');
+                    vibrate(45);
+                    gestureTriggered = true;
+                }
+            }
+            // 3-Finger Windows Gestures
+            else if (maxTouches === 3 && !gestureTriggered) {
+                const diffX = lastCenterX - initialCenterX;
+                const diffY = lastCenterY - initialCenterY;
+                const totalDist = Math.hypot(diffX, diffY);
+
+                if (totalDist < 18 && elapsed < 320) {
+                    // 3-Finger Tap -> Windows Search
+                    triggerNamedGesture('search', '🔍 Windows Search (3-Tap)');
+                    gestureTriggered = true;
+                } else if (totalDist >= 36) {
+                    if (Math.abs(diffY) > Math.abs(diffX)) {
+                        if (diffY < -36) {
+                            // 3-Finger Swipe Up -> Task View (Win + Tab)
+                            triggerNamedGesture('task_view', '🗔 Task View (3-Up)');
+                        } else if (diffY > 36) {
+                            // 3-Finger Swipe Down -> Show Desktop (Win + D)
+                            triggerNamedGesture('show_desktop', '🖥️ Show Desktop (3-Down)');
+                        }
+                    } else {
+                        if (diffX > 36) {
+                            // 3-Finger Swipe Right -> Switch Next App (Alt + Tab)
+                            triggerNamedGesture('switch_app_next', '⇄ Next App (3-Right)');
+                        } else if (diffX < -36) {
+                            // 3-Finger Swipe Left -> Switch Prev App (Alt + Shift + Tab)
+                            triggerNamedGesture('switch_app_prev', '⇆ Prev App (3-Left)');
+                        }
+                    }
+                    gestureTriggered = true;
+                }
+            }
+            // 4-Finger Windows Gestures
+            else if (maxTouches === 4 && !gestureTriggered) {
+                const diffX = lastCenterX - initialCenterX;
+                const diffY = lastCenterY - initialCenterY;
+                const totalDist = Math.hypot(diffX, diffY);
+
+                if (totalDist < 18 && elapsed < 340) {
+                    // 4-Finger Tap -> Windows Settings
+                    triggerNamedGesture('settings', '⚙️ Windows Settings (4-Tap)');
+                    gestureTriggered = true;
+                } else if (totalDist >= 36) {
+                    if (Math.abs(diffX) > Math.abs(diffY)) {
+                        if (diffX > 36) {
+                            // 4-Finger Swipe Right -> Next Virtual Desktop (Win + Ctrl + Right)
+                            triggerNamedGesture('next_desktop', '🗂️ Next Desktop (4-Right)');
+                        } else if (diffX < -36) {
+                            // 4-Finger Swipe Left -> Previous Virtual Desktop (Win + Ctrl + Left)
+                            triggerNamedGesture('prev_desktop', '🗂️ Prev Desktop (4-Left)');
+                        }
+                    } else {
+                        if (diffY < -36) {
+                            // 4-Finger Swipe Up -> Windows Action Center (Win + A)
+                            triggerNamedGesture('action_center', '🔔 Action Center (4-Up)');
+                        } else if (diffY > 36) {
+                            // 4-Finger Swipe Down -> Show Desktop (Win + D)
+                            triggerNamedGesture('show_desktop', '🖥️ Show Desktop (4-Down)');
+                        }
+                    }
+                    gestureTriggered = true;
+                }
+            }
+
+            if (e.touches.length === 0) {
+                maxTouches = 0;
+                gestureTriggered = false;
             }
         });
 
@@ -1343,10 +1665,12 @@ HTML_PLAYER_TEMPLATE = """<!DOCTYPE html>
             } catch (e) {}
         }
 
-        // Diagnostics loop
+        // Diagnostics loop & Adaptive Stream Watchdog
         let frameCount = 0;
         let lastTime = performance.now();
+        let lastFrameArrival = performance.now();
         img.onload = () => {
+            lastFrameArrival = performance.now();
             frameCount++;
             const now = performance.now();
             if (now - lastTime >= 1000) {
@@ -1356,6 +1680,14 @@ HTML_PLAYER_TEMPLATE = """<!DOCTYPE html>
                 lastTime = now;
             }
         };
+
+        // Auto-reconnect watchdog (if stream stalls for 6s in active desktop mode)
+        setInterval(() => {
+            if (viewMode !== 'oled' && (performance.now() - lastFrameArrival > 6000)) {
+                lastFrameArrival = performance.now();
+                img.src = `/stream.mjpg?token=${token}&_t=${Date.now()}`;
+            }
+        }, 3000);
 
         async function fetchStatusAndPing() {
             const t0 = performance.now();
@@ -1502,6 +1834,10 @@ class StreamHTTPHandler(BaseHTTPRequestHandler):
                             b"Content-Length: " + str(len(frame_bytes)).encode() + b"\r\n\r\n"
                         )
                         self.wfile.write(header + frame_bytes + b"\r\n")
+                        try:
+                            self.wfile.flush()
+                        except Exception:
+                            pass
 
                     # Regulate frame rate
                     target_delay = 1.0 / max(1, self.caster.target_fps)
@@ -1516,7 +1852,7 @@ class StreamHTTPHandler(BaseHTTPRequestHandler):
             finally:
                 self.caster.active_viewers = max(0, self.caster.active_viewers - 1)
 
-        elif path in ("/input/cursor", "/input/mouse", "/input/type", "/input/key"):
+        elif path in ("/input/cursor", "/input/mouse", "/input/type", "/input/key", "/input/gesture"):
             self.handle_input_endpoint(path, query=parse_qs(parsed.query), payload={})
 
         else:
@@ -1581,12 +1917,27 @@ class StreamHTTPHandler(BaseHTTPRequestHandler):
                     val_delta = payload.get("delta") if payload.get("delta") is not None else query.get("delta", [0])[0]
                     delta = _safe_int(val_delta, 0)
                     ok = SystemController.mouse_scroll(delta)
+                elif action in ("scroll_h", "hscroll"):
+                    val_delta = payload.get("delta") if payload.get("delta") is not None else query.get("delta", [0])[0]
+                    delta = _safe_int(val_delta, 0)
+                    ok = SystemController.mouse_scroll_h(delta)
+                elif action == "gesture":
+                    val_g = payload.get("gesture") if payload.get("gesture") is not None else query.get("gesture", [""])[0]
+                    ok, _ = SystemController.execute_gesture(str(val_g or ""))
                 cur = SystemController.get_cursor_pos()
             except Exception as e:
                 logger.error(f"Mouse input handling error: {e}")
                 ok = False
                 cur = {}
             resp = json.dumps({"ok": ok, "cursor": cur}).encode("utf-8")
+
+        elif path == "/input/gesture":
+            val_g = payload.get("gesture") if payload.get("gesture") is not None else query.get("gesture", [""])[0]
+            try:
+                ok, msg = SystemController.execute_gesture(str(val_g or ""))
+            except Exception as e:
+                ok, msg = False, str(e)
+            resp = json.dumps({"ok": ok, "msg": msg, "cursor": SystemController.get_cursor_pos()}).encode("utf-8")
 
         elif path == "/input/type":
             text = payload.get("text")
@@ -1649,7 +2000,7 @@ class StreamHTTPHandler(BaseHTTPRequestHandler):
             self.wfile.write(b"OK")
             threading.Thread(target=self.caster.stop_web_cast, daemon=True).start()
 
-        elif path in ("/input/mouse", "/input/type", "/input/key", "/input/cursor"):
+        elif path in ("/input/mouse", "/input/type", "/input/key", "/input/cursor", "/input/gesture"):
             self.handle_input_endpoint(path, query=parse_qs(parsed.query), payload=get_payload())
 
         elif path == "/desktop/switch":
@@ -1770,10 +2121,20 @@ class ScreenCaster:
         self.last_viewer_activity = time.time()
 
     def capture_single_frame(self, quality: int = 70, max_w: int = 1280) -> bytes:
-        """Capture one instantaneous frame of Windows desktop."""
+        """Capture one instantaneous frame of Windows desktop using OpenCV acceleration if available."""
         ensure_desktop_access()
         try:
             img = ImageGrab.grab(all_screens=True)
+            if cv2 is not None and np is not None:
+                arr = np.asarray(img)
+                bgr = cv2.cvtColor(arr, cv2.COLOR_RGB2BGR)
+                if max_w and bgr.shape[1] > max_w:
+                    ratio = max_w / float(bgr.shape[1])
+                    new_h = int(bgr.shape[0] * ratio)
+                    bgr = cv2.resize(bgr, (max_w, new_h), interpolation=cv2.INTER_AREA)
+                _, enc = cv2.imencode(".jpg", bgr, [int(cv2.IMWRITE_JPEG_QUALITY), int(quality)])
+                return enc.tobytes()
+
             if img.width > max_w:
                 ratio = max_w / float(img.width)
                 new_h = int(float(img.height) * ratio)
@@ -1787,7 +2148,7 @@ class ScreenCaster:
             return b""
 
     def _frame_capture_worker(self):
-        """Background worker continuously pulling frames into memory buffer."""
+        """Background worker continuously pulling frames into memory buffer with OpenCV acceleration."""
         ensure_desktop_access()
         logger.info("Screen caster background frame capture started.")
         
@@ -1795,14 +2156,24 @@ class ScreenCaster:
             t0 = time.time()
             try:
                 img = ImageGrab.grab(all_screens=True)
-                if self.target_width and img.width > self.target_width:
-                    ratio = self.target_width / float(img.width)
-                    new_h = int(float(img.height) * ratio)
-                    img = img.resize((self.target_width, new_h))
+                if cv2 is not None and np is not None:
+                    arr = np.asarray(img)
+                    bgr = cv2.cvtColor(arr, cv2.COLOR_RGB2BGR)
+                    if self.target_width and bgr.shape[1] > self.target_width:
+                        ratio = self.target_width / float(bgr.shape[1])
+                        new_h = int(bgr.shape[0] * ratio)
+                        bgr = cv2.resize(bgr, (self.target_width, new_h), interpolation=cv2.INTER_AREA)
+                    _, enc = cv2.imencode(".jpg", bgr, [int(cv2.IMWRITE_JPEG_QUALITY), int(self.jpeg_quality)])
+                    frame_data = enc.tobytes()
+                else:
+                    if self.target_width and img.width > self.target_width:
+                        ratio = self.target_width / float(img.width)
+                        new_h = int(float(img.height) * ratio)
+                        img = img.resize((self.target_width, new_h))
 
-                buf = io.BytesIO()
-                img.save(buf, format="JPEG", quality=self.jpeg_quality)
-                frame_data = buf.getvalue()
+                    buf = io.BytesIO()
+                    img.save(buf, format="JPEG", quality=self.jpeg_quality)
+                    frame_data = buf.getvalue()
 
                 with self.frame_lock:
                     self.current_frame = frame_data

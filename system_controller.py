@@ -30,6 +30,9 @@ except ImportError:
 class SystemController:
     """Windows PC Controller for remote administration."""
 
+    _last_desktop_attach_time: float = 0.0
+    _dpi_initialized: bool = False
+
     @staticmethod
     def get_system_stats() -> Dict[str, Any]:
         """Collect real-time CPU, RAM, Disk, Battery, and Uptime diagnostics."""
@@ -67,17 +70,23 @@ class SystemController:
             "session_state": SystemController.get_session_state(),
         }
 
-    @staticmethod
-    def ensure_desktop_access() -> bool:
-        """Attach thread to active Windows input desktop."""
+    @classmethod
+    def ensure_desktop_access(cls, force: bool = False) -> bool:
+        """Attach thread to active Windows input desktop with 3.0s cache to eliminate input stutters."""
+        now = time.time()
+        if not force and (now - cls._last_desktop_attach_time < 3.0):
+            return True
         try:
-            try:
-                ctypes.windll.shcore.SetProcessDpiAwareness(2)
-            except Exception:
-                pass
+            if not cls._dpi_initialized:
+                try:
+                    ctypes.windll.shcore.SetProcessDpiAwareness(2)
+                except Exception:
+                    pass
+                cls._dpi_initialized = True
             hdesk = ctypes.windll.user32.OpenInputDesktop(0, False, 0x01FF)
             if hdesk:
                 ctypes.windll.user32.SetThreadDesktop(hdesk)
+                cls._last_desktop_attach_time = now
                 return True
         except Exception:
             pass
@@ -802,6 +811,137 @@ class SystemController:
         except Exception as e:
             logger.error(f"Mouse scroll error: {e}")
             return False
+
+    @staticmethod
+    def mouse_scroll_h(delta: int) -> bool:
+        """Simulate horizontal mouse wheel scrolling (positive = right, negative = left)."""
+        SystemController.ensure_desktop_access()
+        try:
+            MOUSEEVENTF_HWHEEL = 0x01000
+            ctypes.windll.user32.mouse_event(MOUSEEVENTF_HWHEEL, 0, 0, int(round(float(delta))), 0)
+            return True
+        except Exception as e:
+            logger.error(f"Mouse horizontal scroll error: {e}")
+            return False
+
+    @staticmethod
+    def execute_gesture(gesture: str) -> Tuple[bool, str]:
+        """
+        Execute standard Windows multi-touch gesture actions:
+        - 3-Finger gestures:
+            - task_view / swipe_up: Win + Tab (Show all open windows)
+            - show_desktop / swipe_down / minimize_all: Win + D (Toggle show desktop)
+            - switch_app_next / swipe_right: Alt + Tab (Cycle to next app)
+            - switch_app_prev / swipe_left: Alt + Shift + Tab (Cycle to previous app)
+            - search / tap: Win + S (Windows Search)
+        - 4-Finger gestures:
+            - next_desktop / swipe_right: Win + Ctrl + Right (Next Virtual Desktop)
+            - prev_desktop / swipe_left: Win + Ctrl + Left (Previous Virtual Desktop)
+            - action_center / swipe_up: Win + A (Windows Action Center / Quick Settings)
+            - swipe_down: Win + D (Show desktop)
+            - settings / tap: Win + I (Windows Settings)
+        - 2-Finger gestures:
+            - right_click / tap: Right Click
+            - zoom_in: Ctrl + Mouse Wheel Up
+            - zoom_out: Ctrl + Mouse Wheel Down
+            - zoom_reset: Ctrl + 0
+        - System shortcuts:
+            - file_explorer: Win + E
+            - clipboard: Win + V
+            - snip / screenshot: Win + Shift + S
+            - lock: Win + L
+        """
+        SystemController.ensure_desktop_access()
+        g = str(gesture or "").lower().strip()
+        user32 = ctypes.windll.user32
+
+        # 3-Finger gestures
+        if g in ("task_view", "show_all_windows", "three_finger_swipe_up", "3_finger_up", "taskview"):
+            return SystemController.switch_virtual_desktop("task_view")
+
+        elif g in ("show_desktop", "three_finger_swipe_down", "3_finger_down", "minimize_all", "desktop"):
+            return SystemController.switch_virtual_desktop("show_desktop")
+
+        elif g in ("switch_app_next", "switch_app", "three_finger_swipe_right", "3_finger_right", "alt_tab"):
+            return SystemController.cycle_window("next")
+
+        elif g in ("switch_app_prev", "three_finger_swipe_left", "3_finger_left", "alt_shift_tab"):
+            return SystemController.cycle_window("prev")
+
+        elif g in ("search", "three_finger_tap", "3_finger_tap", "win_s"):
+            return SystemController.press_key("win+s")
+
+        # 4-Finger gestures
+        elif g in ("next_desktop", "four_finger_swipe_right", "4_finger_right"):
+            return SystemController.switch_virtual_desktop("next")
+
+        elif g in ("prev_desktop", "four_finger_swipe_left", "4_finger_left"):
+            return SystemController.switch_virtual_desktop("prev")
+
+        elif g in ("action_center", "notifications", "four_finger_swipe_up", "4_finger_up", "win_a"):
+            return SystemController.press_key("win+a")
+
+        elif g in ("four_finger_swipe_down", "4_finger_down"):
+            return SystemController.switch_virtual_desktop("show_desktop")
+
+        elif g in ("settings", "four_finger_tap", "4_finger_tap", "win_i"):
+            return SystemController.press_key("win+i")
+
+        # 2-Finger gestures
+        elif g in ("right_click", "two_finger_tap", "2_finger_tap"):
+            ok = SystemController.mouse_click(button="right", action="click")
+            return ok, "Right Click executed"
+
+        elif g in ("middle_click", "3_finger_click"):
+            ok = SystemController.mouse_click(button="middle", action="click")
+            return ok, "Middle Click executed"
+
+        elif g in ("zoom_in", "pinch_out"):
+            try:
+                VK_CONTROL = 0x11
+                MOUSEEVENTF_WHEEL = 0x0800
+                KEYEVENTF_KEYUP = 0x0002
+                user32.keybd_event(VK_CONTROL, 0, 0, 0)
+                time.sleep(0.01)
+                user32.mouse_event(MOUSEEVENTF_WHEEL, 0, 0, 120, 0)
+                time.sleep(0.02)
+                user32.keybd_event(VK_CONTROL, 0, KEYEVENTF_KEYUP, 0)
+                return True, "Zoom In (Ctrl+Wheel Up)"
+            except Exception as e:
+                return False, f"Zoom In error: {e}"
+
+        elif g in ("zoom_out", "pinch_in"):
+            try:
+                VK_CONTROL = 0x11
+                MOUSEEVENTF_WHEEL = 0x0800
+                KEYEVENTF_KEYUP = 0x0002
+                user32.keybd_event(VK_CONTROL, 0, 0, 0)
+                time.sleep(0.01)
+                user32.mouse_event(MOUSEEVENTF_WHEEL, 0, 0, -120, 0)
+                time.sleep(0.02)
+                user32.keybd_event(VK_CONTROL, 0, KEYEVENTF_KEYUP, 0)
+                return True, "Zoom Out (Ctrl+Wheel Down)"
+            except Exception as e:
+                return False, f"Zoom Out error: {e}"
+
+        elif g in ("zoom_reset", "zoom_100"):
+            return SystemController.press_key("ctrl+0")
+
+        # Productivity and OS shortcuts
+        elif g in ("file_explorer", "win_e"):
+            return SystemController.press_key("win+e")
+
+        elif g in ("clipboard", "clipboard_history", "win_v"):
+            return SystemController.press_key("win+v")
+
+        elif g in ("snip", "screenshot_tool", "win_shift_s"):
+            return SystemController.press_key("win+shift+s")
+
+        elif g in ("lock", "lock_screen", "win_l"):
+            ok = SystemController.lock_workstation()
+            return ok, "PC Locked" if ok else "Lock failed"
+
+        return False, f"Unknown gesture '{gesture}'"
 
     @staticmethod
     def type_text(text: str) -> Tuple[bool, str]:

@@ -380,6 +380,13 @@ def handle_relay_command(data: dict) -> dict:
         elif action == "scroll":
             delta = _safe_int(params.get("delta", 0))
             ok = SystemController.mouse_scroll(delta)
+        elif action in ("scroll_h", "hscroll"):
+            delta = _safe_int(params.get("delta", 0))
+            ok = SystemController.mouse_scroll_h(delta)
+        elif action == "gesture":
+            gesture = str(params.get("gesture", ""))
+            ok, msg = SystemController.execute_gesture(gesture)
+            return {"ok": ok, "msg": msg, "cursor": SystemController.get_cursor_pos(), "pc_name": PC_NAME}
         return {"ok": ok, "cursor": SystemController.get_cursor_pos(), "pc_name": PC_NAME}
 
     elif cmd == "type_text":
@@ -789,7 +796,22 @@ async def api_input_mouse(request: Request):
     elif action == "scroll":
         delta = _api_safe_int(data.get("delta", 0))
         ok = SystemController.mouse_scroll(delta)
+    elif action in ("scroll_h", "hscroll"):
+        delta = _api_safe_int(data.get("delta", 0))
+        ok = SystemController.mouse_scroll_h(delta)
+    elif action == "gesture":
+        gesture = str(data.get("gesture", ""))
+        ok, msg = SystemController.execute_gesture(gesture)
+        return {"ok": ok, "msg": msg, "cursor": SystemController.get_cursor_pos()}
     return {"ok": ok, "cursor": SystemController.get_cursor_pos()}
+
+
+@app.api_route("/input/gesture", methods=["GET", "POST"])
+async def api_input_gesture(request: Request):
+    data = await _extract_request_data(request)
+    gesture = str(data.get("gesture", ""))
+    ok, msg = SystemController.execute_gesture(gesture)
+    return {"ok": ok, "msg": msg, "cursor": SystemController.get_cursor_pos()}
 
 
 @app.api_route("/input/type", methods=["GET", "POST"])

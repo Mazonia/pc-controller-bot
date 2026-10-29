@@ -11,7 +11,41 @@
 
 ---
 
-## 🌟 Why PC Remote Sentinel?
+## 📑 Table of Contents
+- [🌟 Why PC Remote Sentinel?](#why-pc-remote-sentinel)
+- [🏗️ Architecture](#architecture)
+- [✨ Features & Capabilities](#features-capabilities)
+  - [🖥️ Fleet Management & Multi-PC Switching](#fleet-management-multi-pc-switching)
+  - [📊 System Diagnostics & Surveillance](#system-diagnostics-surveillance)
+  - [🖱️ Phone as a Mouse, Multi-Touch Windows Gestures & Typing](#phone-as-a-mouse-ghost-trackpad-direct-typing-mouse-type-key)
+  - [🪟 Desktops & Windows Application Switching](#desktops-windows-application-switching)
+  - [📋 Process Manager & Terminal](#process-manager-terminal)
+  - [🔊 Audio, TTS & Speaker Controls](#audio-tts-speaker-controls)
+  - [📁 Remote File Explorer & Clipboard](#remote-file-explorer-clipboard)
+  - [🛡️ Anti-Timeout & Network Resilience Shield](#anti-timeout-network-resilience-shield)
+  - [🔒 Enterprise Security Architecture](#enterprise-security-architecture)
+- [🚀 Quick Start Guide](#quick-start-guide)
+  - [Step 1: Set Up Your Telegram Bot](#step-1-set-up-your-telegram-bot)
+  - [Step 2: Configure Master Settings](#step-2-configure-master-settings)
+  - [Step 3: Run the Fleet Commander Bot](#step-3-run-the-fleet-commander-bot)
+    - [📱 Option A: Android Phone (24/7 Always-On via Termux)](#option-a-android-phone-247-always-on-via-termux-recommended)
+    - [☁️ Option B: Free 24/7 Cloud Server (Render / Railway / Docker)](#option-b-free-247-cloud-server-render-railway-docker-zero-phone-battery)
+    - [💻 Option C: Windows Main PC / Laptop](#option-c-windows-main-pc-laptop-auto-start-on-boot)
+- [🔄 Redundancy & Offline Self-Healing](#redundancy-offline-self-healing)
+- [💾 Deploying on Target PCs (Two Effortless Methods)](#deploying-on-target-pcs-two-effortless-methods)
+  - [🌐 Method 1: Over-the-Air Network Deployment](#method-1-over-the-air-network-deployment-recommended-for-1100-pcs)
+  - [🔌 Method 2: Portable SSD & USB 1-Click Auto-Installer](#method-2-portable-ssd-usb-1-click-auto-installer-100-offline)
+- [🕹️ Telegram Commands Reference](#telegram-commands-reference)
+- [🧪 Test Suite & Quality Assurance](#test-suite-quality-assurance)
+- [🧹 Clean Uninstallation (Zero Trace)](#clean-uninstallation-zero-trace)
+  - [From Monitored Target PCs](#from-monitored-target-pcs)
+  - [From Your Main Host PC](#from-your-main-host-pc)
+- [🔒 Security Policy](#security-policy)
+- [📄 License](#license)
+
+---
+
+## 🌟 Why PC Remote Sentinel? <a id="why-pc-remote-sentinel"></a>
 
 Traditional remote desktop tools require port forwarding, static public IPs, complex VPN setups, or expensive subscription licenses. **PC Remote Sentinel** solves this with a modern, serverless architecture:
 
@@ -24,7 +58,7 @@ Traditional remote desktop tools require port forwarding, static public IPs, com
 
 ---
 
-## 🏗️ Architecture
+## 🏗️ Architecture <a id="architecture"></a>
 
 ```
                        ┌────────────────────────┐
@@ -59,36 +93,53 @@ Traditional remote desktop tools require port forwarding, static public IPs, com
 
 ---
 
-## ✨ Features & Capabilities
+## ✨ Features & Capabilities <a id="features-capabilities"></a>
 
-### 🖥️ Fleet Management & Multi-PC Switching
+### 🖥️ Fleet Management & Multi-PC Switching <a id="fleet-management-multi-pc-switching"></a>
 - **Interactive PC Selector (`/pcs`, `/start`)**: View all registered machines with live online/offline indicators and connection badges (e.g. `🟢 Work-Laptop (Mobile Hotspot)` or `🟢 Home-PC (Wi-Fi)`).
 - **Auto-Discovery**: Newly installed computers automatically appear in your Telegram menu the moment they boot.
 - **Last Will & Testament (LWT)**: If a computer is unplugged or loses network connection, your bot immediately updates its status to `🔴 Offline`.
 
-### 📊 System Diagnostics & Surveillance
+### 📊 System Diagnostics & Surveillance <a id="system-diagnostics-surveillance"></a>
 - **Real-time Diagnostics (`/status`)**: CPU utilization, RAM usage, disk storage, battery state, active window title, and system uptime.
 - **Desktop Screenshots (`/shot`, `/screenshot`)**: Instant high-resolution snapshot of active monitors sent directly to Telegram.
 - **Webcam Surveillance (`/webcam`, `/record_webcam`)**: Instant photo snapshot or short security video clip (10s/30s) from connected webcams.
 - **Multi-Duration Screen Recorder (`/record_screen`)**: Interactive duration picker for 10s, 20s, 30s, 40s, 50s, 1 min, or 2 mins of on-screen desktop action into an MP4 video file.
-- **Upgraded Live Screen Casting (`/cast`, `/stream`)**:
-  - **Cross-Network Global Access**: Streams reliably across separate networks, cellular data (4G/5G), and CGNAT via automated Cloudflare Quick Tunnels (`https://*.trycloudflare.com`) with zero port forwarding.
-  - **Dual-Engine Web Player**: Smooth MJPEG video streaming + resilient **Turbo Snapshot Fallback** with client-side mobile watchdog (auto-reconnects if cellular signal dips).
+- **Hardware-Accelerated 30 FPS Live Screen Casting (`/cast`, `/stream`)**:
+  - **OpenCV Hardware Encoding Acceleration**: Converted frame resizing and compression from PIL down to high-performance C++ OpenCV (`cv2.cvtColor`, `cv2.resize`, `cv2.imencode`), reducing per-frame encode latency by 15x (from ~80–120ms to ~6ms) for butter-smooth 30+ FPS live desktop streaming.
+  - **Zero-Stall Stream Pipeline**: Socket write buffer flushing prevents TCP frame buildup and eliminates jitter over both local Wi-Fi and mobile hotspots.
+  - **Cross-Network Global Access**: Streams reliably across separate networks, cellular data (4G/5G), and CGNAT via automated Cloudflare Quick Tunnels (`https://*.trycloudflare.com`) with zero router port forwarding.
+  - **Dual-Engine Web Player with Mobile Watchdog**: Smooth MJPEG video streaming + client-side watchdog that automatically re-syncs the stream if cellular signal dips.
   - **Interactive Remote Controls**: Control virtual desktops, inspect ping latency/FPS HUD, and capture high-res snapshots directly from your phone's browser.
   - **In-Chat Live Radar**: Rapid refreshing photo frames streamed directly inside your Telegram chat over the cloud relay.
 
-### 🖱️ Phone as a Mouse (Ghost Trackpad) & Direct Typing (`/mouse`, `/type`, `/key`)
+### 🖱️ Phone as a Mouse (Ghost Trackpad), Multi-Touch Windows Gestures & Direct Typing (`/mouse`, `/type`, `/key`) <a id="phone-as-a-mouse-ghost-trackpad-direct-typing-mouse-type-key"></a>
 - **Translucent "Ghost Trackpad"**: Turns your entire phone screen into a multi-touch mouse trackpad while faintly projecting the live PC desktop underneath so you can see exactly where you're pointing.
-- **Adjustable Desktop Opacity**: Slide between **25% (faint ghost trackpad)**, **100% (vivid full desktop view)**, or **0% (OLED black stealth touchpad)**.
-- **Pointer Crosshair Radar**: Floating high-contrast target ring with a glowing center dot that tracks the cursor on the PC screen in real time.
-- **Multi-Touch Gestures**:
-  - **1-Finger Glide**: Smooth cursor movement with adjustable sensitivity (0.5x to 3.0x).
-  - **Tap**: Left Click (with visual pulse indicator).
-  - **Double Tap**: Double Click (opens files/apps).
-  - **Two-Finger Tap or Long Press (350ms)**: Right Click (with phone haptic vibration feedback).
-  - **Two-Finger Vertical Drag**: Smooth mouse wheel scrolling.
-  - **Right-Edge Scroll Strip**: Dedicated vertical strip for one-thumb fast scrolling.
-  - **🖲️ Drag Lock**: Toggle button locks left mouse down to easily drag windows, move files, or select text.
+- **Adjustable Desktop Opacity**: Slide between **35% (faint ghost trackpad)**, **100% (vivid full desktop view)**, or **0% (OLED black stealth touchpad)**.
+- **GPU-Accelerated Virtual Radar**: Hardware `translate3d` eliminates layout reflow for 120Hz butter-smooth cursor tracking with no transition lag.
+- **Full Windows Multi-Touch Touchpad Gestures**:
+  - **1-Finger Glide**: Smooth cursor gliding with non-linear velocity curve (precision dampening on micro-adjustments, smooth boost on fast flicks) and 3.0s input desktop throttling to eliminate micro-stutters.
+  - **1-Finger Tap**: Left Click (with visual pulse indicator).
+  - **1-Finger Double Tap**: Double Click (opens files and apps).
+  - **1-Finger Tap-and-Drag**: Double-tap and hold to immediately grab windows, highlight text, or move desktop items.
+  - **1-Finger Long Press (400ms)**: Right Click with phone haptic vibration feedback.
+  - **2-Finger Tap**: Instant Right Click.
+  - **2-Finger Pan (Vertical & Horizontal)**: Smooth vertical wheel scrolling and horizontal scrolling (`MOUSEEVENTF_HWHEEL`).
+  - **2-Finger Pinch In / Pinch Out**: Hardware Zoom In / Zoom Out (`Ctrl + Wheel`).
+  - **3-Finger Swipe Up**: Task View / Show All Windows (`Win + Tab`).
+  - **3-Finger Swipe Down**: Show Desktop / Minimize All (`Win + D`).
+  - **3-Finger Swipe Right**: Cycle to Next Application (`Alt + Tab`).
+  - **3-Finger Swipe Left**: Cycle to Previous Application (`Alt + Shift + Tab`).
+  - **3-Finger Tap**: Windows Search (`Win + S`).
+  - **4-Finger Swipe Right**: Switch to Next Virtual Desktop (`Win + Ctrl + Right`).
+  - **4-Finger Swipe Left**: Switch to Previous Virtual Desktop (`Win + Ctrl + Left`).
+  - **4-Finger Swipe Up**: Windows Action Center / Notifications (`Win + A`).
+  - **4-Finger Swipe Down**: Show Desktop (`Win + D`).
+  - **4-Finger Tap**: Windows Settings (`Win + I`).
+- **Visual Gesture HUD Badge**: Centered glass pill lights up dynamically with gesture icons and titles whenever any multi-finger gesture is triggered.
+- **Quick-Action Gestures Ribbon**: 1-tap pills for Task View, Desktop, Alt+Tab, Search, Action Center, Settings, Clipboard History (`Win+V`), Snipping Tool (`Win+Shift+S`), and Zoom In/Out.
+- **Right-Edge Scroll Strip**: Dedicated vertical strip for one-thumb fast scrolling.
+- **🖲️ Drag Lock**: Toggle button locks left mouse down to easily drag windows, move files, or select text.
 - **Phone-to-PC Direct Typing & Voice Dictation**:
   - Tap the floating input field on your phone to open your native smartphone keyboard.
   - Full support for **voice dictation / speech-to-text**, autocorrect, predictive typing, and swipe.
@@ -103,7 +154,7 @@ Traditional remote desktop tools require port forwarding, static public IPs, com
   - `/key <key>` — Simulates keystrokes or hotkeys (e.g., `/key enter`, `/key ctrl+v`, `/key win+d`, `/key alt+f4`).
   - `/mouse` — Opens the mouse controller dashboard.
 
-### 🪟 Desktops & Windows Application Switching
+### 🪟 Desktops & Windows Application Switching <a id="desktops-windows-application-switching"></a>
 - **Dedicated Remote Control (`/desktop`, `/windows`, `/switch`)**: Switch, create, or inspect Windows Virtual Desktops and cycle or focus active application windows with 1 tap from Telegram or the live web stream player.
 - **Active Window Selection**: Tap any running application from the interactive Telegram keyboard or select it from the Live Stream dropdown to bring it directly to the front (even if minimized).
 - **Fast Window Cycling**:
@@ -120,18 +171,18 @@ Traditional remote desktop tools require port forwarding, static public IPs, com
 - **Instant Lock (`/lock` or buttons)**: Locks the Windows workstation session immediately.
 - **Power Management**: Put PC to sleep, turn off monitors, turn on/wake monitors (`/monitor on`), reboot, or schedule shutdown timers (15m, 30m, 60m).
 
-### 📋 Process Manager & Terminal
+### 📋 Process Manager & Terminal <a id="process-manager-terminal"></a>
 - **Process Viewer (`/top`)**: Interactive list of top CPU and memory consuming processes with live refresh.
 - **Process Killer (`/kill <name_or_pid>`)**: Terminate frozen applications or games remotely. Features a built-in **Process Safety Shield** that blocks blanket killing of `python.exe` by name (safeguarding your trading bots, background automation, and other Python tools) and prevents terminating critical Windows OS processes or Sentinel itself.
 - **Remote Terminal (`/cmd <command>`)**: Execute Windows shell commands remotely with automatic token masking.
 
-### 🔊 Audio, TTS & Speaker Controls
+### 🔊 Audio, TTS & Speaker Controls <a id="audio-tts-speaker-controls"></a>
 - **Text-to-Speech (`/say <text>`)**: Speak any message aloud through PC speakers using native Windows speech synthesis.
 - **Voice Note Speaker Playback**: Send any voice note or audio file (.ogg, .mp3, .wav) to play your actual voice directly through the PC speakers.
 - **PC Alarms & Timers (`/alarm [time] [label]`)**: Set countdown timers or specific clock alarms with siren alerts and speech synthesis.
 - **Media Player Controls**: Play, pause, skip tracks, volume up/down, and mute for Spotify, YouTube, Chrome, VLC, and media players.
 
-### 📁 Remote File Explorer & Clipboard
+### 📁 Remote File Explorer & Clipboard <a id="remote-file-explorer-clipboard"></a>
 - **Interactive File Explorer (`/get`, `/files`, `/browse`, `/explore`)**:
   - **No Need to Memorize Paths**: Sending `/get` or `/files` without arguments launches an interactive visual file browser right inside Telegram starting at your Desktop.
   - **Visual Directory Navigation**: Tap any folder button (`[📁 Folder Name]`) to navigate inside, tap `[⬆️ Up]` to go to the parent directory, or tap `[🔄 Refresh]` to re-scan.
@@ -143,7 +194,7 @@ Traditional remote desktop tools require port forwarding, static public IPs, com
 - **Clipboard Sync (`/clip <text>`, `/getclip`)**: Read or push text directly to and from the Windows clipboard.
 - **Storage Cleaner (`/clean`)**: Audit and clean up cached recordings and downloads with explicit confirmation.
 
-### 🛡️ Anti-Timeout & Network Resilience Shield
+### 🛡️ Anti-Timeout & Network Resilience Shield <a id="anti-timeout-network-resilience-shield"></a>
 - **Engineered for High Latency & Unstable Connections**: Built specifically to survive bad internet, weak mobile hotspots, packet drop, 3G/4G/5G tethering, and cellular CGNAT environments where commands frequently time out.
 - **Intelligent Telegram API Retries (`safe_telegram_call`)**: Automatically intercepts transient timeouts, connection resets, and Telegram flood limits (`RetryAfter`) with exponential backoff retry cycles and extended 60-second read/write timeouts.
 - **Direct Local HTTP Loopback (`127.0.0.1`)**: Host PC commands automatically detect local residence and bypass cloud brokers and internet routing entirely, guaranteeing 0ms ping latency and zero cloud dependency.
@@ -152,7 +203,7 @@ Traditional remote desktop tools require port forwarding, static public IPs, com
 - **Real-Time Network Diagnostics (`/net`, `/ping`)**: Tap the new **"🌐 Network Ping"** button or type `/net` to measure live roundtrip Telegram API latency in milliseconds, MQTT cloud broker connection health, and target PC reachability with color-coded connection ratings.
 - **Immediate Typing Feedback**: Emits immediate `ChatAction.TYPING` and `ChatAction.UPLOAD_PHOTO` signals so you always know a command is being processed, even over high-latency connections.
 
-### 🔒 Enterprise Security Architecture
+### 🔒 Enterprise Security Architecture <a id="enterprise-security-architecture"></a>
 - **User Whitelist Enforcement**: Only numeric Telegram user IDs configured in `AUTHORIZED_USER_IDS` can communicate with the bot.
 - **Intruder Alerts**: Unrecognized users are blocked immediately, and an alert with their Telegram ID and username is dispatched to the owner.
 - **Process Isolation & Trading Bot Protection**: Built-in safeguards strictly prevent accidental termination of user trading bots, other running Python applications, or critical Windows OS system services (`csrss.exe`, `lsass.exe`, `smss.exe`, etc.). Blanket termination of Python by process name is strictly blocked.
@@ -162,14 +213,14 @@ Traditional remote desktop tools require port forwarding, static public IPs, com
 
 ---
 
-## 🚀 Quick Start Guide
+## 🚀 Quick Start Guide <a id="quick-start-guide"></a>
 
-### Step 1: Set Up Your Telegram Bot
+### Step 1: Set Up Your Telegram Bot <a id="step-1-set-up-your-telegram-bot"></a>
 1. Open Telegram and message **[@BotFather](https://t.me/BotFather)**.
 2. Send `/newbot`, choose a name and username, and copy your **Bot Token**.
 3. Message **[@userinfobot](https://t.me/userinfobot)** in Telegram to find your numeric **User ID** (e.g. `6513180621`).
 
-### Step 2: Configure Master Settings
+### Step 2: Configure Master Settings <a id="step-2-configure-master-settings"></a>
 1. Clone the repository:
    ```bash
    git clone https://github.com/Mazonia/pc-controller-bot.git
@@ -190,11 +241,11 @@ Traditional remote desktop tools require port forwarding, static public IPs, com
    ```
    Fill in your `FLEET_SECRET`, `TELEGRAM_BOT_TOKEN`, and `AUTHORIZED_USER_IDS`.
 
-### Step 3: Run the Fleet Commander Bot
+### Step 3: Run the Fleet Commander Bot <a id="step-3-run-the-fleet-commander-bot"></a>
 
 You have **three flexible ways** to run your Commander Bot 24/7:
 
-#### 📱 Option A: Android Phone (24/7 Always-On via Termux) — Recommended
+#### 📱 Option A: Android Phone (24/7 Always-On via Termux) — Recommended <a id="option-a-android-phone-247-always-on-via-termux-recommended"></a>
 Because smartphones stay powered and connected to Wi-Fi/4G 24/7, you can run the Commander Bot directly on your Android phone!
 1. Install **[Termux](https://f-droid.org/en/packages/com.termux/)** (free from F-Droid or GitHub Releases).
 2. Open Termux and clone the repo:
@@ -213,7 +264,7 @@ Because smartphones stay powered and connected to Wi-Fi/4G 24/7, you can run the
    ```
    *The script activates `termux-wake-lock` so Android never suspends your bot when the phone screen is off!*
 
-#### ☁️ Option B: Free 24/7 Cloud Server (Render / Railway / Docker) — Zero Phone Battery
+#### ☁️ Option B: Free 24/7 Cloud Server (Render / Railway / Docker) — Zero Phone Battery <a id="option-b-free-247-cloud-server-render-railway-docker-zero-phone-battery"></a>
 Run the Commander Bot 24/7 in the cloud with zero hardware maintenance:
 
 **Via Render.com (Free Tier):**
@@ -228,7 +279,7 @@ docker compose up -d
 ```
 *Zero phone battery drain, 99.99% uptime, and instant access from anywhere via your Telegram app.*
 
-#### 💻 Option C: Windows Main PC / Laptop (Auto-Start on Boot)
+#### 💻 Option C: Windows Main PC / Laptop (Auto-Start on Boot) <a id="option-c-windows-main-pc-laptop-auto-start-on-boot"></a>
 Run the Commander Bot on your local Windows PC:
 
 1. **Auto-Start on Windows Boot/Logon (Recommended):**
@@ -243,7 +294,7 @@ Run the Commander Bot on your local Windows PC:
 
 ---
 
-## 🔄 Redundancy & Offline Self-Healing
+## 🔄 Redundancy & Offline Self-Healing <a id="redundancy-offline-self-healing"></a>
 
 What happens if your Main PC or Commander server goes offline?
 
@@ -256,13 +307,13 @@ What happens if your Main PC or Commander server goes offline?
   4. You immediately regain full interactive control over your entire fleet.
 - **Automatic Last Will & Testament (LWT)**: If any monitored PC loses power or drops offline while you are away, the broker immediately updates that PC's status to `🔴 Offline` so your bot never displays stale data.
 
-## 💾 Deploying on Target PCs (Two Effortless Methods)
+## 💾 Deploying on Target PCs (Two Effortless Methods) <a id="deploying-on-target-pcs-two-effortless-methods"></a>
 
 You can easily deploy PC-Remote-Sentinel to any number of target Windows PCs (personal laptops, office desktops, gaming rigs, or brand-new PCs) using either **WiFi Network Deployment** or a **Clean USB Pendrive**.
 
 Target PCs only receive the lightweight agent runtime (~250 KB). Master bot code (`bot.py`), configurations, and credentials are never deployed to target machines.
 
-### 🌐 Method 1: Over-the-Air Network Deployment (Recommended for 1–100+ PCs)
+### 🌐 Method 1: Over-the-Air Network Deployment (Recommended for 1–100+ PCs) <a id="method-1-over-the-air-network-deployment-recommended-for-1100-pcs"></a>
 
 Deploy to any PC on your local Wi-Fi or LAN without touching a USB drive:
 
@@ -277,7 +328,7 @@ Deploy to any PC on your local Wi-Fi or LAN without touching a USB drive:
    - Press **Enter** and walk away!
 4. The target PC automatically elevates, installs the agent in `C:\PCSentinel`, sets up silent autostart on logon, and immediately connects to your Telegram Bot.
 
-### 🔌 Method 2: Portable SSD & USB 1-Click Auto-Installer (100% Offline)
+### 🔌 Method 2: Portable SSD & USB 1-Click Auto-Installer (100% Offline) <a id="method-2-portable-ssd-usb-1-click-auto-installer-100-offline"></a>
 
 Deploy effortlessly to external PCs with zero internet dependency using your external SSD or USB flash drive:
 
@@ -303,7 +354,7 @@ Deploy effortlessly to external PCs with zero internet dependency using your ext
 
 ---
 
-## 🕹️ Telegram Commands Reference
+## 🕹️ Telegram Commands Reference <a id="telegram-commands-reference"></a>
 
 | Command | Description |
 | :--- | :--- |
@@ -343,7 +394,7 @@ Deploy effortlessly to external PCs with zero internet dependency using your ext
 
 ---
 
-## 🧪 Test Suite & Quality Assurance
+## 🧪 Test Suite & Quality Assurance <a id="test-suite-quality-assurance"></a>
 
 PC Remote Sentinel includes a comprehensive automated test suite verifying network resilience, retry mechanisms, encryption, and local routing:
 
@@ -362,27 +413,27 @@ The test suite covers:
 
 ---
 
-## 🧹 Clean Uninstallation (Zero Trace)
+## 🧹 Clean Uninstallation (Zero Trace) <a id="clean-uninstallation-zero-trace"></a>
 
 Removing Sentinel from any PC is just as simple as installing it:
 
-### From Monitored Target PCs:
+### From Monitored Target PCs <a id="from-monitored-target-pcs"></a>
 1. Plug your USB pendrive into the target PC and double-click **`uninstall.bat`**.
 2. Click **"Yes"** on the Windows UAC elevation prompt.
 3. The script terminates all running agent processes, deletes the Task Scheduler task, removes startup hooks, deletes firewall rules, and wipes `C:\PCSentinel` completely.
 4. In Telegram, the PC will show as `🔴 Offline`. Simply tap **"🗑️ Remove PC from Fleet"** (or send `/removepc <name>`) to clear it from your menu.
 
-### From Your Main Host PC:
+### From Your Main Host PC <a id="from-your-main-host-pc"></a>
 - Double-click **`remove_autostart.bat`** to cleanly remove the startup task and background process.
 
 ---
 
-## 🔒 Security Policy
+## 🔒 Security Policy <a id="security-policy"></a>
 
 For security guidelines, vulnerability disclosure, and details on encryption protocols, please refer to [SECURITY.md](SECURITY.md).
 
 ---
 
-## 📄 License
+## 📄 License <a id="license"></a>
 
 This project is licensed under the GNU General Public License v3.0 - see the [LICENSE](LICENSE) file for details.
