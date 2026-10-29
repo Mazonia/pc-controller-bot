@@ -12,3 +12,4 @@ loguru>=0.7.0
 pywin32>=306
 av>=11.0.0
 playsound3>=3.3.0
+python-multipart>=0.0.9

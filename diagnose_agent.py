@@ -73,6 +73,7 @@ def check_dependencies():
     modules = [
         ("fastapi", "FastAPI Web Engine"),
         ("uvicorn", "Uvicorn ASGI Server"),
+        ("multipart", "Multipart Form/Upload Parser"),
         ("paho.mqtt", "Paho MQTT Client"),
         ("cryptography", "AES-256-GCM Encryption"),
         ("psutil", "System Process Monitor"),
@@ -80,8 +81,10 @@ def check_dependencies():
         ("dotenv", "Python Dotenv Config"),
         ("loguru", "Loguru Logging"),
         ("httpx", "HTTP Client"),
-        ("mss", "Fast Screen Grabber"),
         ("cv2", "OpenCV Video/Camera"),
+        ("av", "PyAV Audio/Video Streamer"),
+        ("playsound3", "Audio Playback Engine"),
+        ("win32api", "PyWin32 Windows Automation"),
     ]
     all_ok = True
     for mod_name, desc in modules:
