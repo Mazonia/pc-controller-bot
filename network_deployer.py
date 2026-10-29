@@ -50,6 +50,9 @@ AGENT_CORE_FILES = [
     "deploy_config.env",
     "uninstall.bat",
     "INSTRUCTIONS.txt",
+    "DIAGNOSE-PC.bat",
+    "diagnose_agent.py",
+    "register_target_pc.py",
 ]
 
 # Large optional files — downloaded only if needed

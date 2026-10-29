@@ -19,8 +19,9 @@ if %errorlevel% neq 0 (
         echo     [Windows firewall may prompt to allow network access]
     ) else (
         echo [!] Requesting Administrator privileges for firewall rules...
-        powershell -Command "Start-Process cmd.exe -ArgumentList '/k cd /d \"\"%~dp0\"\" && \"\"%~f0\"\" --elevated' -Verb RunAs" 2>nul
-        if %errorlevel% equ 0 exit /b
+        set "TARGET_BAT=%~f0"
+        powershell -NoProfile -ExecutionPolicy Bypass -Command "Start-Process cmd.exe -ArgumentList @('/k', 'call', ('\"' + $env:TARGET_BAT + '\"'), '--elevated') -Verb RunAs" 2>nul
+        if !errorlevel! equ 0 exit /b
         echo [!] Elevation bypassed. Continuing in current window...
     )
 )
