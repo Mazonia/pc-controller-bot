@@ -65,8 +65,11 @@ def main():
             "network": network_type,
         })
 
-    fleet_path.write_text(json.dumps(fleet_data, indent=4), encoding="utf-8")
-    print(f"[OK] Successfully registered PC '{pc_name}' (IP: {local_ip}) into {fleet_path.name}")
+    try:
+        fleet_path.write_text(json.dumps(fleet_data, indent=4), encoding="utf-8")
+        print(f"[OK] Successfully registered PC '{pc_name}' (IP: {local_ip}) into {fleet_path.name}")
+    except Exception as e:
+        print(f"[!] Note: Could not update {fleet_path.name} on drive: {e}")
 
 
 if __name__ == "__main__":

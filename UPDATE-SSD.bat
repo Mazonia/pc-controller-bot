@@ -113,8 +113,8 @@ echo      [+] Pre-bundled 100%% offline Python wheels
 echo.
 echo    Next steps on the target PC:
 echo      1. Plug this SSD into the target PC
-echo      2. Right-click uninstall.bat -> 'Run as administrator'
-echo      3. Right-click 1-CLICK-INSTALL.bat -> 'Run as administrator'
+echo      2. Right-click uninstall.bat [Run as administrator]
+echo      3. Right-click 1-CLICK-INSTALL.bat [Run as administrator]
 echo      4. Run DIAGNOSE-PC.bat to verify online status
 echo ==============================================================
 echo.

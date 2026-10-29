@@ -84,8 +84,9 @@ set "PY_CMD=python"
  
 :found_py
 :run_loop
+if not exist "%~dp0agent.py" exit /b 0
 echo [%DATE% %TIME%] Starting Agent using: %PY_CMD% >> "%~dp0agent_boot.log"
 "%PY_CMD%" "%~dp0agent.py" >> "%~dp0agent_boot.log" 2>&1
-echo [%DATE% %TIME%] Agent exited with code %errorlevel%. Restarting in 3s... >> "%~dp0agent_boot.log"
+echo [%DATE% %TIME%] Agent exited with code !errorlevel!. Restarting in 3s... >> "%~dp0agent_boot.log"
 timeout /t 3 /nobreak >nul
 goto :run_loop

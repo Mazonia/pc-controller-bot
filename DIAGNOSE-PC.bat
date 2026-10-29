@@ -71,7 +71,7 @@ if %errorlevel% neq 0 (
     echo  RECOMMENDED ACTION:
     echo    1. Right-click '1-CLICK-INSTALL.bat' on this drive
     echo    2. Select 'Run as administrator'
-    echo    (It will automatically install Python from the SSD offline bundle).
+    echo    [It will automatically install Python from the SSD offline bundle].
     echo.
     echo ==============================================================
     echo Diagnostics aborted. Press any key to exit this window...

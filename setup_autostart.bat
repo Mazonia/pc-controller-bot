@@ -68,7 +68,7 @@ echo [1/3] Registering Task Scheduler tasks with battery resilience...
 powershell -NoProfile -ExecutionPolicy Bypass -Command "& { $dir = '%~dp0'.TrimEnd('\'); $trig = New-ScheduledTaskTrigger -AtLogOn; $set = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Days 0) -StartWhenAvailable -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1); $princ = New-ScheduledTaskPrincipal -UserId \"$env:USERDOMAIN\$env:USERNAME\" -LogonType Interactive -RunLevel Highest; $botAct = New-ScheduledTaskAction -Execute 'wscript.exe' -Argument ('\"' + $dir + '\start_hidden.vbs\"') -WorkingDirectory $dir; Register-ScheduledTask -TaskName 'PC-Sentinel-Commander' -Action $botAct -Trigger $trig -Settings $set -Principal $princ -Force | Out-Null; $agentAct = New-ScheduledTaskAction -Execute 'wscript.exe' -Argument ('\"' + $dir + '\start_agent_hidden.vbs\"') -WorkingDirectory $dir; Register-ScheduledTask -TaskName 'PC-Sentinel-Agent' -Action $agentAct -Trigger $trig -Settings $set -Principal $princ -Force | Out-Null; }" >nul 2>&1
 
 if %errorlevel% equ 0 (
-    echo     [+] Task Scheduler tasks (Commander + Agent) configured with 24/7 battery resilience!
+    echo     [+] Task Scheduler tasks [Commander + Agent] configured with 24/7 battery resilience!
 ) else (
     echo     [!] Note: Falling back to schtasks /create...
     schtasks /create /tn "PC-Sentinel-Commander" /tr "wscript.exe \"%~dp0start_hidden.vbs\"" /sc onlogon /rl highest /f >nul 2>&1

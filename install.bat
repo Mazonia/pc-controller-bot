@@ -17,46 +17,56 @@ echo.
 
 :: 1. Check for Admin privileges and auto-elevate
 net session >nul 2>&1
-if %errorlevel% neq 0 (
-    echo.
-    echo ==============================================================
-    echo  [!] ADMINISTRATOR PRIVILEGES REQUIRED
-    echo ==============================================================
-    echo.
-    echo  [*] Requesting Administrator elevation (click YES if prompted by Windows)...
-    powershell -NoProfile -ExecutionPolicy Bypass -Command "Start-Process cmd.exe -WorkingDirectory '%~dp0' -ArgumentList '/k install.bat %*' -Verb RunAs" >nul 2>&1
-    if !errorlevel! equ 0 (
-        echo  [OK] Elevated Administrator installation window opened.
-        echo  [*] Installation is running in the elevated window.
-        timeout /t 3 /nobreak >nul
-        exit /b 0
-    )
-    
-    :: Fallback to VBScript elevation if PowerShell was blocked
-    echo Set UAC = CreateObject^("Shell.Application"^) > "%TEMP%\sentinel_elevate.vbs"
-    echo UAC.ShellExecute "cmd.exe", "/k cd /d """"%~dp0"""" ^&^& install.bat %*", "", "runas", 1 >> "%TEMP%\sentinel_elevate.vbs"
-    cscript //nologo "%TEMP%\sentinel_elevate.vbs" >nul 2>&1
-    set "VBS_ERR=!errorlevel!"
-    del /f /q "%TEMP%\sentinel_elevate.vbs" >nul 2>&1
-    if !VBS_ERR! equ 0 (
-        echo  [OK] Elevated Administrator installation window opened.
-        echo  [*] Installation is running in the elevated window.
-        timeout /t 3 /nobreak >nul
-        exit /b 0
-    )
-    
-    color 0C
-    echo  [X] Could not automatically request Administrator privileges.
-    echo.
-    echo  PLEASE DO THIS:
-    echo    1. Right-click 'install.bat' (or '1-CLICK-INSTALL.bat')
-    echo    2. Select 'Run as administrator'
-    echo.
-    echo  Press any key to exit...
-    pause >nul
-    exit /b 1
+if %errorlevel% equ 0 goto :is_admin
+
+echo.
+echo ==============================================================
+echo  [!] ADMINISTRATOR PRIVILEGES REQUIRED
+echo ==============================================================
+echo.
+echo  [*] Requesting Administrator elevation [click YES if prompted by Windows]...
+
+set "TARGET_BAT=%~f0"
+if "%~1"=="" (
+    powershell -NoProfile -ExecutionPolicy Bypass -Command "Start-Process cmd.exe -ArgumentList @('/k', 'call', ('\"' + $env:TARGET_BAT + '\"')) -Verb RunAs" >nul 2>&1
+) else (
+    powershell -NoProfile -ExecutionPolicy Bypass -Command "Start-Process cmd.exe -ArgumentList @('/k', 'call', ('\"' + $env:TARGET_BAT + '\"'), '%*') -Verb RunAs" >nul 2>&1
+)
+if !errorlevel! equ 0 (
+    echo  [OK] Elevated Administrator installation window opened.
+    echo  [*] Installation is running in the elevated window.
+    timeout /t 3 /nobreak >nul
+    exit /b 0
 )
 
+:: Fallback to VBScript elevation if PowerShell was blocked
+set "VBS_FILE=%TEMP%\sentinel_elevate.vbs"
+(
+    echo Set UAC = CreateObject("Shell.Application"^)
+    echo UAC.ShellExecute "cmd.exe", "/k call " ^& Chr(34^) ^& "%~f0" ^& Chr(34^) ^& " %*", "", "runas", 1
+) > "!VBS_FILE!"
+cscript //nologo "!VBS_FILE!" >nul 2>&1
+set "VBS_ERR=!errorlevel!"
+del /f /q "!VBS_FILE!" >nul 2>&1
+if !VBS_ERR! equ 0 (
+    echo  [OK] Elevated Administrator installation window opened.
+    echo  [*] Installation is running in the elevated window.
+    timeout /t 3 /nobreak >nul
+    exit /b 0
+)
+
+color 0C
+echo  [X] Could not automatically request Administrator privileges.
+echo.
+echo  PLEASE DO THIS:
+echo    1. Right-click 'install.bat' or '1-CLICK-INSTALL.bat'
+echo    2. Select 'Run as administrator'
+echo.
+echo  Press any key to exit...
+pause >nul
+exit /b 1
+
+:is_admin
 
 set "SRC_DIR=%~dp0"
 set "DEST_DIR=C:\PCSentinel"
@@ -147,7 +157,7 @@ echo [*] Starting silent automated Python installation...
 :: Priority A: Offline installer on USB drive (Target C:\PCSentinel\Python)
 if exist "%SRC_DIR%python-installer.exe" (
     echo [*] Installing Python using offline installer from USB drive...
-    start /wait "" "%SRC_DIR%python-installer.exe" /quiet TargetDir="%DEST_DIR%\Python" PrependPath=1 Include_pip=1 AssociateFiles=0 Shortcuts=0 Include_doc=0 Include_test=0
+    start /wait "" "%SRC_DIR%python-installer.exe" /quiet TargetDir="%DEST_DIR%\Python" InstallAllUsers=1 PrependPath=1 Include_pip=1 AssociateFiles=0 Shortcuts=0 Include_doc=0 Include_test=0 SimpleInstall=1
     timeout /t 3 /nobreak >nul
 ) else (
     :: Priority B: Download official installer silently via PowerShell
@@ -155,7 +165,7 @@ if exist "%SRC_DIR%python-installer.exe" (
     powershell -Command "[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; (New-Object Net.WebClient).DownloadFile('https://www.python.org/ftp/python/3.11.9/python-3.11.9-amd64.exe', '%TEMP%\python-installer.exe')"
     if exist "%TEMP%\python-installer.exe" (
         echo [*] Installing Python silently...
-        start /wait "" "%TEMP%\python-installer.exe" /quiet TargetDir="%DEST_DIR%\Python" PrependPath=1 Include_pip=1 AssociateFiles=0 Shortcuts=0 Include_doc=0 Include_test=0
+        start /wait "" "%TEMP%\python-installer.exe" /quiet TargetDir="%DEST_DIR%\Python" InstallAllUsers=1 PrependPath=1 Include_pip=1 AssociateFiles=0 Shortcuts=0 Include_doc=0 Include_test=0 SimpleInstall=1
         timeout /t 3 /nobreak >nul
         del /f /q "%TEMP%\python-installer.exe" >nul 2>&1
     ) else (
@@ -223,10 +233,11 @@ exit /b 1
 echo [OK] Python is ready: %PY_CMD%
 echo.
 
-:: 3. Stop existing running agent if upgrading
-echo [*] Stopping existing Sentinel agent processes (if any)...
+:: 3. Stop existing running agent processes (including launcher loops) if upgrading
+echo [*] Stopping existing Sentinel agent processes [if any]...
 taskkill /f /im pc-sentinel-agent.exe >nul 2>&1
-powershell -NoProfile -ExecutionPolicy Bypass -EncodedCommand RwBlAHQALQBDAGkAbQBJAG4AcwB0AGEAbgBjAGUAIABXAGkAbgAzADIAXwBQAHIAbwBjAGUAcwBzACAALQBFAHIAcgBvAHIAQQBjAHQAaQBvAG4AIABTAGkAbABlAG4AdABsAHkAQwBvAG4AdABpAG4AdQBlACAAfAAgAFcAaABlAHIAZQAtAE8AYgBqAGUAYwB0ACAAewAgACQAXwAuAEMAbwBtAG0AYQBuAGQATABpAG4AZQAgAC0AbABpAGsAZQAgACcAKgBhAGcAZQBuAHQALgBwAHkAKgAnACAALQBvAHIAIAAkAF8ALgBFAHgAZQBjAHUAdABhAGIAbABlAFAAYQB0AGgAIAAtAGwAaQBrAGUAIAAnACoAUABDAFMAZQBuAHQAaQBuAGUAbAAqACcAIAB9ACAAfAAgAEYAbwByAEUAYQBjAGgALQBPAGIAagBlAGMAdAAgAHsAIABTAHQAbwBwAC0AUAByAG8AYwBlAHMAcwAgAC0ASQBkACAAJABfAC4AUAByAG8AYwBlAHMAcwBJAGQAIAAtAEYAbwByAGMAZQAgAC0ARQByAHIAbwByAEEAYwB0AGkAbwBuACAAUwBpAGwAZQBuAHQAbAB5AEMAbwBuAHQAaQBuAHUAZQAgAH0A >nul 2>&1
+taskkill /f /im cloudflared.exe >nul 2>&1
+powershell -NoProfile -ExecutionPolicy Bypass -Command "Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object { $_.CommandLine -like '*agent.py*' -or $_.CommandLine -like '*start_agent*' -or $_.CommandLine -like '*PCSentinel*' -or $_.ExecutablePath -like '*PCSentinel*' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }" >nul 2>&1
 schtasks /end /tn "PCSentinelAgent" >nul 2>&1
 timeout /t 1 /nobreak >nul
 
@@ -295,7 +306,7 @@ echo [*] Installing required Python packages...
 
 set "PIP_SUCCESS=0"
 if exist "%SRC_DIR%wheels" (
-    echo [*] Installing pre-bundled packages from SSD (100%% offline)...
+    echo [*] Installing pre-bundled packages from SSD [100%% offline]...
     "%PY_CMD%" -m pip install --quiet --no-index --find-links="%SRC_DIR%wheels" -r "%DEST_DIR%\requirements_agent.txt" >nul 2>&1
     if !errorlevel! equ 0 (
         echo   [OK] Offline packages installed successfully!
@@ -316,19 +327,21 @@ echo [*] Configuring Windows Defender Firewall permissions...
 netsh advfirewall firewall delete rule name="PCSentinelAgent" >nul 2>&1
 netsh advfirewall firewall delete rule name="PCSentinelPython" >nul 2>&1
 netsh advfirewall firewall delete rule name="PCSentinelPort" >nul 2>&1
+netsh advfirewall firewall delete rule name="PCSentinelStream" >nul 2>&1
 netsh advfirewall firewall add rule name="PCSentinelAgent" dir=in action=allow program="%DEST_DIR%\pc-sentinel-agent.exe" enable=yes profile=any >nul 2>&1
 netsh advfirewall firewall add rule name="PCSentinelPython" dir=in action=allow program="%PY_CMD%" enable=yes profile=any >nul 2>&1
 netsh advfirewall firewall add rule name="PCSentinelPort" dir=in action=allow protocol=TCP localport=9010 enable=yes profile=any >nul 2>&1
+netsh advfirewall firewall add rule name="PCSentinelStream" dir=in action=allow protocol=TCP localport=8585 enable=yes profile=any >nul 2>&1
 
 :: 10. Register Task Scheduler auto-start (Runs completely silent on user logon with battery resilience)
 echo [*] Registering auto-start background task in Windows Task Scheduler...
-powershell -NoProfile -ExecutionPolicy Bypass -Command "& { $trig = New-ScheduledTaskTrigger -AtLogOn; $set = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Days 0) -StartWhenAvailable -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1); $princ = New-ScheduledTaskPrincipal -UserId \"$env:USERDOMAIN\$env:USERNAME\" -LogonType Interactive -RunLevel Highest; $act = New-ScheduledTaskAction -Execute 'wscript.exe' -Argument '\"%DEST_DIR%\start_agent_hidden.vbs\"' -WorkingDirectory '%DEST_DIR%'; Register-ScheduledTask -TaskName 'PCSentinelAgent' -Action $act -Trigger $trig -Settings $set -Principal $princ -Force >$null; }" >nul 2>&1
+powershell -NoProfile -ExecutionPolicy Bypass -Command "& { try { $trig = New-ScheduledTaskTrigger -AtLogOn; $set = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Days 0) -StartWhenAvailable -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1); $princ = New-ScheduledTaskPrincipal -UserId \"$env:USERDOMAIN\$env:USERNAME\" -LogonType Interactive -RunLevel Highest; $act = New-ScheduledTaskAction -Execute 'wscript.exe' -Argument '\"%DEST_DIR%\start_agent_hidden.vbs\"' -WorkingDirectory '%DEST_DIR%'; Register-ScheduledTask -TaskName 'PCSentinelAgent' -Action $act -Trigger $trig -Settings $set -Principal $princ -Force >$null; } catch { exit 1 } }" >nul 2>&1
 if %errorlevel% neq 0 (
     schtasks /delete /tn "PCSentinelAgent" /f >nul 2>&1
     schtasks /create /tn "PCSentinelAgent" /tr "wscript.exe \"%DEST_DIR%\start_agent_hidden.vbs\"" /sc ONLOGON /rl HIGHEST /f >nul 2>&1
 )
 
-:: Startup folder & Registry Run fallbacks
+:: Startup folder & Registry Run fallbacks (Triple redundancy)
 copy /y "%DEST_DIR%\start_agent_hidden.vbs" "C:\ProgramData\Microsoft\Windows\Start Menu\Programs\Startup\PCSentinelAgent.vbs" >nul 2>&1
 reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\Run" /v "PCSentinelAgent" /t REG_SZ /d "wscript.exe \"%DEST_DIR%\start_agent_hidden.vbs\"" /f >nul 2>&1
 
@@ -371,7 +384,7 @@ if "!AGENT_HEALTHY!"=="1" (
     echo    PC Name:     %COMPUTERNAME%
     echo    Location:    %DEST_DIR%
     echo    Status:      ACTIVE & LISTENING ON PORT 9010
-    echo    Execution:   Running SILENTLY IN THE BACKGROUND (No Window)
+    echo    Execution:   Running SILENTLY IN THE BACKGROUND [No Window]
     echo    Auto-Start:  Enabled on Every Boot / Logon
     echo    Networking:  Cloud Relay + Direct LAN
     echo.
@@ -403,5 +416,3 @@ if "%SILENT_MODE%"=="1" (
 )
 echo Press any key to finish installation and close this window...
 pause >nul
-
-

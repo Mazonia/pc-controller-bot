@@ -61,6 +61,7 @@ copy /y "%~dp0sync_fleet.py" "%CLEAN_DRIVE%\" >nul
 copy /y "%~dp0register_target_pc.py" "%CLEAN_DRIVE%\" >nul
 copy /y "%~dp0DIAGNOSE-PC.bat" "%CLEAN_DRIVE%\" >nul
 copy /y "%~dp0diagnose_agent.py" "%CLEAN_DRIVE%\" >nul
+copy /y "%~dp0UPDATE-SSD.bat" "%CLEAN_DRIVE%\" >nul 2>&1
 copy /y "%~dp0INSTRUCTIONS.txt" "%CLEAN_DRIVE%\" >nul
 
 :: Copy cloudflared tunnel engine if available
@@ -84,18 +85,18 @@ echo   [OK] Core agent and installer files copied successfully.
 :: Offline Python installer for PCs without internet
 if exist "%~dp0python-installer.exe" (
     echo.
-    echo [*] Offline Python installer found (25 MB).
+    echo [*] Offline Python installer found [25 MB].
     copy /y "%~dp0python-installer.exe" "%CLEAN_DRIVE%\" >nul
     echo   [OK] Offline Python installer included on drive.
 )
 
-:: Offline pip packages folder (100% internet-free installation)
+:: Offline pip packages folder [100% internet-free installation]
 if exist "%~dp0wheels" (
     echo.
-    echo [*] Offline Python packages (wheels) found. Copying to drive...
+    echo [*] Offline Python packages [wheels] found. Copying to drive...
     if not exist "%CLEAN_DRIVE%\wheels" mkdir "%CLEAN_DRIVE%\wheels"
     xcopy /y /q "%~dp0wheels\*.whl" "%CLEAN_DRIVE%\wheels\" >nul
-    echo   [OK] Offline Python wheels copied (100% offline installation enabled).
+    echo   [OK] Offline Python wheels copied [100% offline installation enabled].
 )
 
 echo.
