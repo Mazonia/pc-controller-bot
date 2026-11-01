@@ -292,6 +292,9 @@ Run the Commander Bot on your local Windows PC:
    - With visible terminal: Double-click **`run.bat`** (or `python bot.py`).
    - Hidden background mode: Double-click **`start_hidden.vbs`**.
 
+3. **Stop the Bot:**
+   - Double-click **`stop_bot.bat`** (or `stop.bat`) to immediately stop the Commander Bot and terminate all background auto-restart loops.
+
 ---
 
 ## 🔄 Redundancy & Offline Self-Healing <a id="redundancy-offline-self-healing"></a>
@@ -424,6 +427,7 @@ Removing Sentinel from any PC is just as simple as installing it:
 4. In Telegram, the PC will show as `🔴 Offline`. Simply tap **"🗑️ Remove PC from Fleet"** (or send `/removepc <name>`) to clear it from your menu.
 
 ### From Your Main Host PC <a id="from-your-main-host-pc"></a>
+- Double-click **`stop_bot.bat`** (or `stop.bat`) to stop any active Commander Bot processes.
 - Double-click **`remove_autostart.bat`** to cleanly remove the startup task and background process.
 
 ---

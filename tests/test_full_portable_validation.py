@@ -41,25 +41,30 @@ def run_tests():
         "prepare_usb.bat",
     ]
     
-    all_matched = True
-    for f in core_files:
-        p_repo = os.path.join(repo_dir, f)
-        p_ssd = os.path.join(ssd_dir, f)
-        assert os.path.exists(p_repo), f"Missing in repo: {f}"
-        assert os.path.exists(p_ssd), f"Missing in SSD folder: {f}"
-        with open(p_repo, "rb") as fp: c_repo = fp.read()
-        with open(p_ssd, "rb") as fp: c_ssd = fp.read()
-        if c_repo != c_ssd:
-            print(f"    [FAIL] Mismatch in {f} ({len(c_repo)} vs {len(c_ssd)} bytes)")
-            all_matched = False
-        else:
-            print(f"    [OK] {f:<26} (Identical MD5, {len(c_repo):>6,} bytes)")
-    assert all_matched, "Some core files are not in sync between repo and SSD folder"
+    if not os.path.exists(ssd_dir):
+        print(f"    [SKIP] SSD folder not found at {ssd_dir}. Skipping external sync verification.")
+    else:
+        all_matched = True
+        for f in core_files:
+            p_repo = os.path.join(repo_dir, f)
+            p_ssd = os.path.join(ssd_dir, f)
+            assert os.path.exists(p_repo), f"Missing in repo: {f}"
+            assert os.path.exists(p_ssd), f"Missing in SSD folder: {f}"
+            with open(p_repo, "rb") as fp: c_repo = fp.read()
+            with open(p_ssd, "rb") as fp: c_ssd = fp.read()
+            if c_repo != c_ssd:
+                print(f"    [FAIL] Mismatch in {f} ({len(c_repo)} vs {len(c_ssd)} bytes)")
+                all_matched = False
+            else:
+                print(f"    [OK] {f:<26} (Identical MD5, {len(c_repo):>6,} bytes)")
+        assert all_matched, "Some core files are not in sync between repo and SSD folder"
+
+    target_dir = ssd_dir if os.path.exists(ssd_dir) else repo_dir
 
     # 2. Binary Bundles MZ header check
-    print("\n[TEST 2] Bundled Executables PE Header Verification:")
+    print(f"\n[TEST 2] Bundled Executables PE Header Verification (target: {target_dir}):")
     for exe in ["python-installer.exe", "cloudflared.exe"]:
-        ep = os.path.join(ssd_dir, exe)
+        ep = os.path.join(target_dir, exe)
         assert os.path.exists(ep), f"Missing {exe}"
         with open(ep, "rb") as fp:
             header = fp.read(2)
@@ -71,7 +76,7 @@ def run_tests():
     print("\n[TEST 3] Python Bytecode Compilation Check:")
     py_files = ["agent.py", "fleet_relay.py", "system_controller.py", "screen_caster.py", "sync_fleet.py", "register_target_pc.py", "diagnose_agent.py"]
     for pf in py_files:
-        full_path = os.path.join(ssd_dir, pf)
+        full_path = os.path.join(target_dir, pf)
         py_compile.compile(full_path, doraise=True)
         print(f"    [OK] {pf:<26} Compiled with 0 syntax errors")
 
@@ -80,7 +85,7 @@ def run_tests():
     bat_files = [f for f in core_files if f.endswith(".bat")]
     total_ps_checked = 0
     for bf in bat_files:
-        bpath = os.path.join(ssd_dir, bf)
+        bpath = os.path.join(target_dir, bf)
         with open(bpath, "r", encoding="utf-8", errors="ignore") as fp:
             content = fp.read()
             
@@ -109,7 +114,7 @@ def run_tests():
     # 5. Batch Syntax & Unescaped Characters Check
     print("\n[TEST 5] Batch Syntax & Parenthesis/Redirection Integrity:")
     for bf in bat_files:
-        bpath = os.path.join(ssd_dir, bf)
+        bpath = os.path.join(target_dir, bf)
         with open(bpath, "r", encoding="utf-8", errors="ignore") as fp:
             lines = fp.readlines()
         
@@ -121,9 +126,9 @@ def run_tests():
 
     # 6. Offline Wheels Completeness Check
     print("\n[TEST 6] Offline Wheels Bundle Completeness:")
-    wheels_dir = os.path.join(ssd_dir, "wheels")
+    wheels_dir = os.path.join(target_dir, "wheels")
     whl_files = [w for w in os.listdir(wheels_dir) if w.endswith(".whl")]
-    req_file = os.path.join(ssd_dir, "requirements_agent.txt")
+    req_file = os.path.join(target_dir, "requirements_agent.txt")
     with open(req_file) as f:
         reqs = [l.strip() for l in f if l.strip() and not l.startswith('#')]
         
