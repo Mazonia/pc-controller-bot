@@ -7,15 +7,21 @@ Dual-mode agent that runs on each monitored PC:
 3. Uploads screenshots/videos directly to Telegram API for zero broker bandwidth.
 """
 
-import ctypes
-
-try:
-    ctypes.windll.kernel32.SetConsoleTitleW('PC-Sentinel-Agent')
-except Exception:
-    pass
-
 import os
 import sys
+import ctypes
+
+if sys.platform == "win32":
+    try:
+        ctypes.windll.kernel32.SetConsoleTitleW('PC-Sentinel-Agent')
+    except Exception:
+        pass
+else:
+    try:
+        sys.stdout.write("\x1b]2;PC-Sentinel-Agent\x07")
+        sys.stdout.flush()
+    except Exception:
+        pass
 import io
 import hmac
 import json
@@ -52,7 +58,7 @@ logger.add(
     encoding="utf-8",
 )
 
-PC_NAME = os.getenv("PC_NAME", "").strip() or os.environ.get("COMPUTERNAME", "Unknown-PC")
+PC_NAME = os.getenv("PC_NAME", "").strip() or os.environ.get("COMPUTERNAME") or socket.gethostname() or "Unknown-PC"
 AGENT_PORT = int(os.getenv("AGENT_PORT", "9010"))
 AGENT_SECRET = os.getenv("AGENT_SECRET", "").strip()
 FLEET_SECRET = os.getenv("FLEET_SECRET", "").strip() or AGENT_SECRET or "sentinel-fleet-secret-2026"

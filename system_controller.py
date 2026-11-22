@@ -10,12 +10,22 @@ import math
 import re
 import threading
 import ctypes
-import ctypes.wintypes
+try:
+    import ctypes.wintypes
+except Exception:
+    pass
 import subprocess
-import winsound
+try:
+    import winsound
+except ImportError:
+    winsound = None
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Dict, Any, List, Optional, Tuple
+
+IS_WINDOWS = sys.platform == "win32"
+IS_MAC = sys.platform == "darwin"
+IS_LINUX = sys.platform.startswith("linux")
 
 import psutil
 from PIL import ImageGrab
@@ -28,7 +38,7 @@ except ImportError:
 
 
 class SystemController:
-    """Windows PC Controller for remote administration."""
+    """Universal OS Controller for remote administration (Windows & macOS)."""
 
     _last_desktop_attach_time: float = 0.0
     _dpi_initialized: bool = False
@@ -39,7 +49,8 @@ class SystemController:
         cpu_pct = psutil.cpu_percent(interval=0.5)
         per_core = psutil.cpu_percent(percpu=True)
         mem = psutil.virtual_memory()
-        disk = psutil.disk_usage("C:\\")
+        disk_target = "C:\\" if IS_WINDOWS else "/"
+        disk = psutil.disk_usage(disk_target)
         
         # Battery / Power status
         battery = psutil.sensors_battery()
@@ -73,6 +84,8 @@ class SystemController:
     @classmethod
     def ensure_desktop_access(cls, force: bool = False) -> bool:
         """Attach thread to active Windows input desktop with 3.0s cache to eliminate input stutters."""
+        if not IS_WINDOWS:
+            return True
         now = time.time()
         if not force and (now - cls._last_desktop_attach_time < 3.0):
             return True
@@ -94,7 +107,9 @@ class SystemController:
 
     @staticmethod
     def get_session_state() -> str:
-        """Detect if Windows is at interactive desktop, lock screen, or Session 0."""
+        """Detect if OS is at interactive desktop, lock screen, or Session 0."""
+        if IS_MAC:
+            return "macOS Desktop (Unlocked) 🟢"
         try:
             hdesk = ctypes.windll.user32.OpenInputDesktop(0, False, 0x0100)
             if hdesk:
@@ -114,6 +129,13 @@ class SystemController:
     @staticmethod
     def take_screenshot(output_path: Path) -> Tuple[bool, str]:
         """Capture full desktop screenshot with graceful pre-login detection."""
+        if IS_MAC:
+            try:
+                res = subprocess.run(["/usr/sbin/screencapture", "-x", str(output_path)], capture_output=True, timeout=5.0)
+                if res.returncode == 0 and output_path.exists() and output_path.stat().st_size > 0:
+                    return True, "Screenshot captured"
+            except Exception as se:
+                logger.debug(f"macOS screencapture error: {se}, falling back to ImageGrab")
         try:
             SystemController.ensure_desktop_access()
             screenshot = ImageGrab.grab(all_screens=True)
@@ -132,7 +154,8 @@ class SystemController:
         if cv2 is None:
             return False, "OpenCV (cv2) is not installed."
         
-        cap = cv2.VideoCapture(camera_index, cv2.CAP_DSHOW)
+        backend = cv2.CAP_AVFOUNDATION if IS_MAC else cv2.CAP_DSHOW
+        cap = cv2.VideoCapture(camera_index, backend)
         if not cap.isOpened():
             return False, "Could not access webcam device."
 
@@ -156,7 +179,8 @@ class SystemController:
         if cv2 is None:
             return False, "OpenCV is not installed."
         
-        cap = cv2.VideoCapture(camera_index, cv2.CAP_DSHOW)
+        backend = cv2.CAP_AVFOUNDATION if IS_MAC else cv2.CAP_DSHOW
+        cap = cv2.VideoCapture(camera_index, backend)
         if not cap.isOpened():
             return False, "Could not open webcam."
 
@@ -228,7 +252,19 @@ class SystemController:
 
     @staticmethod
     def lock_workstation() -> bool:
-        """Lock Windows PC instantly using user32 API, rundll32, or session disconnect."""
+        """Lock PC/Mac instantly using OS native APIs."""
+        if IS_MAC:
+            try:
+                cgsession = "/System/Library/CoreServices/Menu Extras/User.menu/Contents/Resources/CGSession"
+                if os.path.exists(cgsession):
+                    subprocess.run([cgsession, "-suspend"], check=True)
+                else:
+                    subprocess.run(["pmset", "displaysleepnow"], check=True)
+                return True
+            except Exception as e:
+                logger.error(f"macOS lock error: {e}")
+                return False
+
         try:
             res = ctypes.windll.user32.LockWorkStation()
             if res != 0:
@@ -257,7 +293,19 @@ class SystemController:
 
     @staticmethod
     def sleep_pc() -> bool:
-        """Put PC into sleep state using powrprof API and powershell fallback."""
+        """Put PC or Mac into sleep state."""
+        if IS_MAC:
+            try:
+                subprocess.run(["pmset", "sleepnow"], check=True)
+                return True
+            except Exception:
+                try:
+                    subprocess.run(["osascript", "-e", 'tell application "System Events" to sleep'], check=True)
+                    return True
+                except Exception as e:
+                    logger.error(f"macOS sleep error: {e}")
+                    return False
+
         try:
             res = subprocess.run(["rundll32.exe", "powrprof.dll,SetSuspendState", "0,1,0"], shell=False, timeout=5)
             if res.returncode == 0:
@@ -278,7 +326,15 @@ class SystemController:
 
     @staticmethod
     def shutdown_pc(seconds: int = 0) -> bool:
-        """Shutdown PC now or with timer."""
+        """Shutdown PC or Mac now or with timer."""
+        if IS_MAC:
+            try:
+                subprocess.run(["osascript", "-e", 'tell application "System Events" to shut down'], check=True)
+                return True
+            except Exception as e:
+                logger.error(f"macOS shutdown error: {e}")
+                return False
+
         try:
             subprocess.run(["shutdown", "/s", "/t", str(seconds)], check=True)
             return True
@@ -288,7 +344,15 @@ class SystemController:
 
     @staticmethod
     def restart_pc(seconds: int = 0) -> bool:
-        """Restart PC now or with timer."""
+        """Restart PC or Mac now or with timer."""
+        if IS_MAC:
+            try:
+                subprocess.run(["osascript", "-e", 'tell application "System Events" to restart'], check=True)
+                return True
+            except Exception as e:
+                logger.error(f"macOS restart error: {e}")
+                return False
+
         try:
             subprocess.run(["shutdown", "/r", "/t", str(seconds)], check=True)
             return True
@@ -299,6 +363,9 @@ class SystemController:
     @staticmethod
     def cancel_shutdown() -> bool:
         """Cancel any pending shutdown timer."""
+        if IS_MAC:
+            return True
+
         try:
             subprocess.run(["shutdown", "/a"], check=True)
             return True
@@ -308,6 +375,14 @@ class SystemController:
     @staticmethod
     def turn_off_monitors() -> bool:
         """Put monitors to sleep immediately (wakes up on mouse move/key press)."""
+        if IS_MAC:
+            try:
+                subprocess.run(["pmset", "displaysleepnow"], check=True)
+                return True
+            except Exception as e:
+                logger.error(f"macOS display sleep error: {e}")
+                return False
+
         try:
             HWND_BROADCAST = 0xFFFF
             WM_SYSCOMMAND = 0x0112
@@ -329,6 +404,14 @@ class SystemController:
     @staticmethod
     def turn_on_monitors() -> bool:
         """Wake up and power on monitors immediately."""
+        if IS_MAC:
+            try:
+                subprocess.run(["caffeinate", "-u", "-t", "2"], check=True)
+                return True
+            except Exception as e:
+                logger.error(f"macOS display wake error: {e}")
+                return False
+
         try:
             HWND_BROADCAST = 0xFFFF
             WM_SYSCOMMAND = 0x0112
@@ -358,10 +441,29 @@ class SystemController:
     @staticmethod
     def control_media(action: str) -> bool:
         """
-        Adjust volume and media playback via Windows virtual keystrokes with extended scan codes.
-        Executes a clean, single hardware-level keystroke without duplicate broadcasts to prevent double-toggling.
+        Adjust volume and media playback via OS native keystrokes or AppleScript.
         action: 'up', 'down', 'mute', 'play_pause', 'play', 'pause', 'next', 'prev', 'stop'
         """
+        if IS_MAC:
+            try:
+                act = action.lower().strip()
+                if act in ("up",):
+                    subprocess.run(["osascript", "-e", 'set volume output volume ((output volume of (get volume settings)) + 6)'], check=True)
+                elif act in ("down",):
+                    subprocess.run(["osascript", "-e", 'set volume output volume ((output volume of (get volume settings)) - 6)'], check=True)
+                elif act in ("mute",):
+                    subprocess.run(["osascript", "-e", 'set volume output muted (not (output muted of (get volume settings)))'], check=True)
+                elif act in ("play_pause", "play", "pause"):
+                    subprocess.run(["osascript", "-e", 'tell application "Music" to playpause'], check=True)
+                elif act in ("next",):
+                    subprocess.run(["osascript", "-e", 'tell application "Music" to next track'], check=True)
+                elif act in ("prev",):
+                    subprocess.run(["osascript", "-e", 'tell application "Music" to previous track'], check=True)
+                return True
+            except Exception as e:
+                logger.error(f"macOS media control error: {e}")
+                return False
+
         KEYEVENTF_EXTENDEDKEY = 0x0001
         KEYEVENTF_KEYUP = 0x0002
 
@@ -406,6 +508,14 @@ class SystemController:
     @staticmethod
     def get_active_window_title_fast() -> str:
         """Return title of current foreground window quickly without external imports."""
+        if IS_MAC:
+            try:
+                as_cmd = 'tell application "System Events" to get name of first application process whose frontmost is true'
+                title = subprocess.check_output(["osascript", "-e", as_cmd], timeout=1.5).decode().strip()
+                return title or "macOS Desktop"
+            except Exception:
+                return "macOS Desktop"
+
         try:
             SystemController.ensure_desktop_access()
             user32 = ctypes.windll.user32
@@ -425,11 +535,29 @@ class SystemController:
     @staticmethod
     def switch_virtual_desktop(action: str) -> Tuple[bool, str]:
         """
-        Switch, create, or navigate Windows Virtual Desktops via hardware key events.
+        Switch, create, or navigate Virtual Desktops / Spaces via native OS events.
         action: 'next', 'prev', 'new', 'close', 'task_view', 'show_desktop'
         """
-        SystemController.ensure_desktop_access()
         action = action.lower().strip()
+        if IS_MAC:
+            try:
+                if action == "next":
+                    subprocess.run(["osascript", "-e", 'tell application "System Events" to key code 124 using {control down}'], check=True)
+                    return True, "Switched to next Space"
+                elif action == "prev":
+                    subprocess.run(["osascript", "-e", 'tell application "System Events" to key code 123 using {control down}'], check=True)
+                    return True, "Switched to previous Space"
+                elif action in ("task_view", "mission_control"):
+                    subprocess.run(["osascript", "-e", 'tell application "System Events" to key code 126 using {control down}'], check=True)
+                    return True, "Triggered Mission Control"
+                elif action == "show_desktop":
+                    subprocess.run(["osascript", "-e", 'tell application "System Events" to key code 103'], check=True)
+                    return True, "Toggled Show Desktop"
+                return True, f"macOS Space action '{action}' executed"
+            except Exception as e:
+                return False, f"macOS Space error: {e}"
+
+        SystemController.ensure_desktop_access()
         KEYEVENTF_EXTENDEDKEY = 0x0001
         KEYEVENTF_KEYUP = 0x0002
 
@@ -494,9 +622,21 @@ class SystemController:
         First tries to advance sequentially through open application windows (Alt+Tab equivalent).
         Falls back to hardware Alt+Tab key events.
         """
-        SystemController.ensure_desktop_access()
         direction = direction.lower().strip()
         is_prev = direction in ("prev", "previous", "back", "left")
+
+        if IS_MAC:
+            try:
+                wins = SystemController.get_open_windows(limit=25)
+                if wins:
+                    target = wins[1]["title"] if len(wins) > 1 and not is_prev else wins[-1]["title"]
+                    ok, msg = SystemController.focus_window(target)
+                    return ok, msg
+                return True, "Cycled application"
+            except Exception as e:
+                return False, f"macOS cycle window error: {e}"
+
+        SystemController.ensure_desktop_access()
 
         # 1. Smart sequential window list cycling
         try:
@@ -559,6 +699,25 @@ class SystemController:
         Includes minimized application windows so they can be brought to focus.
         Filters out invisible helper / background system utility windows.
         """
+        if IS_MAC:
+            try:
+                as_cmd = 'tell application "System Events" to get name of every process whose visible is true'
+                out = subprocess.check_output(["osascript", "-e", as_cmd], timeout=3.0).decode("utf-8").strip()
+                names = [n.strip() for n in out.split(",") if n.strip()]
+                results = []
+                for idx, name in enumerate(names[:limit], start=1):
+                    results.append({
+                        "hwnd": idx,
+                        "title": name,
+                        "process": name,
+                        "pid": idx,
+                        "is_minimized": False,
+                    })
+                return results
+            except Exception as e:
+                logger.error(f"macOS list windows error: {e}")
+                return []
+
         SystemController.ensure_desktop_access()
         user32 = ctypes.windll.user32
         WNDENUMPROC = ctypes.WINFUNCTYPE(ctypes.wintypes.BOOL, ctypes.wintypes.HWND, ctypes.wintypes.LPARAM)
@@ -637,6 +796,19 @@ class SystemController:
         Bring a specific application window to the foreground by HWND or partial title search.
         Restores window if minimized. Uses SwitchToThisWindow and input simulation to bypass Windows focus restrictions.
         """
+        if IS_MAC:
+            try:
+                open_wins = SystemController.get_open_windows(limit=50)
+                target_app = str(target)
+                for w in open_wins:
+                    if str(w["hwnd"]) == str(target) or str(target).lower() in w["title"].lower() or str(target).lower() in w["process"].lower():
+                        target_app = w["process"]
+                        break
+                subprocess.run(["osascript", "-e", f'tell application "{target_app}" to activate'], check=True)
+                return True, f"Focused '{target_app}'"
+            except Exception as e:
+                return False, f"macOS focus window error: {e}"
+
         SystemController.ensure_desktop_access()
         user32 = ctypes.windll.user32
         open_wins = SystemController.get_open_windows(limit=50)
@@ -701,6 +873,32 @@ class SystemController:
     @staticmethod
     def get_cursor_pos() -> Dict[str, int]:
         """Get current screen resolution and cursor position."""
+        if IS_MAC:
+            try:
+                cg = ctypes.cdll.LoadLibrary("/System/Library/Frameworks/ApplicationServices.framework/Frameworks/CoreGraphics.framework/CoreGraphics")
+                class CGPoint(ctypes.Structure):
+                    _fields_ = [("x", ctypes.c_double), ("y", ctypes.c_double)]
+                class CGRect(ctypes.Structure):
+                    _fields_ = [("origin", CGPoint), ("size", CGPoint)]
+                cg.CGEventGetLocation.restype = CGPoint
+                cg.CGEventGetLocation.argtypes = [ctypes.c_void_p]
+                cg.CGEventCreate.restype = ctypes.c_void_p
+                cg.CGEventCreate.argtypes = [ctypes.c_void_p]
+                event = cg.CGEventCreate(None)
+                loc = cg.CGEventGetLocation(event)
+                cg.CGMainDisplayID.restype = ctypes.c_uint32
+                cg.CGDisplayBounds.restype = CGRect
+                cg.CGDisplayBounds.argtypes = [ctypes.c_uint32]
+                bounds = cg.CGDisplayBounds(cg.CGMainDisplayID())
+                return {
+                    "x": int(loc.x),
+                    "y": int(loc.y),
+                    "screen_w": int(bounds.size.x),
+                    "screen_h": int(bounds.size.y)
+                }
+            except Exception:
+                return {"x": 0, "y": 0, "screen_w": 1920, "screen_h": 1080}
+
         SystemController.ensure_desktop_access()
         user32 = ctypes.windll.user32
         w = user32.GetSystemMetrics(0)
@@ -721,6 +919,21 @@ class SystemController:
     @staticmethod
     def mouse_move(dx: int, dy: int) -> bool:
         """Simulate relative hardware mouse movement."""
+        if IS_MAC:
+            try:
+                cur = SystemController.get_cursor_pos()
+                new_x = max(0, min(cur["screen_w"] - 1, cur["x"] + dx))
+                new_y = max(0, min(cur["screen_h"] - 1, cur["y"] + dy))
+                cg = ctypes.cdll.LoadLibrary("/System/Library/Frameworks/ApplicationServices.framework/Frameworks/CoreGraphics.framework/CoreGraphics")
+                class CGPoint(ctypes.Structure):
+                    _fields_ = [("x", ctypes.c_double), ("y", ctypes.c_double)]
+                cg.CGWarpMouseCursorPosition.argtypes = [CGPoint]
+                cg.CGWarpMouseCursorPosition(CGPoint(new_x, new_y))
+                return True
+            except Exception as e:
+                logger.error(f"macOS mouse move error: {e}")
+                return False
+
         SystemController.ensure_desktop_access()
         try:
             MOUSEEVENTF_MOVE = 0x0001
@@ -733,6 +946,22 @@ class SystemController:
     @staticmethod
     def mouse_move_abs(x: float, y: float, normalized: bool = False) -> bool:
         """Move cursor to absolute coordinates (pixels or normalized 0.0-1.0)."""
+        if IS_MAC:
+            try:
+                cur = SystemController.get_cursor_pos()
+                sw, sh = cur["screen_w"], cur["screen_h"]
+                px = float(max(0.0, min(1.0, float(x))) * (sw - 1)) if normalized else float(x)
+                py = float(max(0.0, min(1.0, float(y))) * (sh - 1)) if normalized else float(y)
+                cg = ctypes.cdll.LoadLibrary("/System/Library/Frameworks/ApplicationServices.framework/Frameworks/CoreGraphics.framework/CoreGraphics")
+                class CGPoint(ctypes.Structure):
+                    _fields_ = [("x", ctypes.c_double), ("y", ctypes.c_double)]
+                cg.CGWarpMouseCursorPosition.argtypes = [CGPoint]
+                cg.CGWarpMouseCursorPosition(CGPoint(px, py))
+                return True
+            except Exception as e:
+                logger.error(f"macOS mouse abs move error: {e}")
+                return False
+
         SystemController.ensure_desktop_access()
         try:
             user32 = ctypes.windll.user32
@@ -757,6 +986,37 @@ class SystemController:
         button: 'left', 'right', 'middle', 'double'
         action: 'click', 'down', 'up'
         """
+        if IS_MAC:
+            try:
+                cur = SystemController.get_cursor_pos()
+                btn = button.lower().strip()
+                act = action.lower().strip()
+                cg = ctypes.cdll.LoadLibrary("/System/Library/Frameworks/ApplicationServices.framework/Frameworks/CoreGraphics.framework/CoreGraphics")
+                class CGPoint(ctypes.Structure):
+                    _fields_ = [("x", ctypes.c_double), ("y", ctypes.c_double)]
+                pt = CGPoint(cur["x"], cur["y"])
+                cg.CGEventCreateMouseEvent.restype = ctypes.c_void_p
+                cg.CGEventCreateMouseEvent.argtypes = [ctypes.c_void_p, ctypes.c_uint32, CGPoint, ctypes.c_uint32]
+                cg.CGEventPost.argtypes = [ctypes.c_uint32, ctypes.c_void_p]
+                kCGHIDEventTap = 0
+                evt_down, evt_up = (3, 4) if btn == "right" else (1, 2)
+                if act in ("down", "click", "double"):
+                    ev = cg.CGEventCreateMouseEvent(None, evt_down, pt, 0 if btn != "right" else 1)
+                    cg.CGEventPost(kCGHIDEventTap, ev)
+                if act in ("up", "click", "double"):
+                    ev = cg.CGEventCreateMouseEvent(None, evt_up, pt, 0 if btn != "right" else 1)
+                    cg.CGEventPost(kCGHIDEventTap, ev)
+                if act == "double":
+                    time.sleep(0.05)
+                    ev = cg.CGEventCreateMouseEvent(None, evt_down, pt, 0 if btn != "right" else 1)
+                    cg.CGEventPost(kCGHIDEventTap, ev)
+                    ev = cg.CGEventCreateMouseEvent(None, evt_up, pt, 0 if btn != "right" else 1)
+                    cg.CGEventPost(kCGHIDEventTap, ev)
+                return True
+            except Exception as e:
+                logger.error(f"macOS mouse click error: {e}")
+                return False
+
         SystemController.ensure_desktop_access()
         user32 = ctypes.windll.user32
         btn = button.lower().strip()
@@ -803,6 +1063,20 @@ class SystemController:
     @staticmethod
     def mouse_scroll(delta: int) -> bool:
         """Simulate mouse wheel scrolling (positive = up, negative = down)."""
+        if IS_MAC:
+            try:
+                cg = ctypes.cdll.LoadLibrary("/System/Library/Frameworks/ApplicationServices.framework/Frameworks/CoreGraphics.framework/CoreGraphics")
+                cg.CGEventCreateScrollWheelEvent.restype = ctypes.c_void_p
+                cg.CGEventCreateScrollWheelEvent.argtypes = [ctypes.c_void_p, ctypes.c_uint32, ctypes.c_uint32, ctypes.c_int32]
+                cg.CGEventPost.argtypes = [ctypes.c_uint32, ctypes.c_void_p]
+                wheel_step = int(delta / 20) if abs(delta) >= 20 else (1 if delta > 0 else -1)
+                ev = cg.CGEventCreateScrollWheelEvent(None, 1, 1, wheel_step)
+                cg.CGEventPost(0, ev)
+                return True
+            except Exception as e:
+                logger.error(f"macOS mouse scroll error: {e}")
+                return False
+
         SystemController.ensure_desktop_access()
         try:
             MOUSEEVENTF_WHEEL = 0x0800
@@ -815,6 +1089,20 @@ class SystemController:
     @staticmethod
     def mouse_scroll_h(delta: int) -> bool:
         """Simulate horizontal mouse wheel scrolling (positive = right, negative = left)."""
+        if IS_MAC:
+            try:
+                cg = ctypes.cdll.LoadLibrary("/System/Library/Frameworks/ApplicationServices.framework/Frameworks/CoreGraphics.framework/CoreGraphics")
+                cg.CGEventCreateScrollWheelEvent.restype = ctypes.c_void_p
+                cg.CGEventCreateScrollWheelEvent.argtypes = [ctypes.c_void_p, ctypes.c_uint32, ctypes.c_uint32, ctypes.c_int32, ctypes.c_int32]
+                cg.CGEventPost.argtypes = [ctypes.c_uint32, ctypes.c_void_p]
+                wheel_step = int(delta / 20) if abs(delta) >= 20 else (1 if delta > 0 else -1)
+                ev = cg.CGEventCreateScrollWheelEvent(None, 1, 2, 0, wheel_step)
+                cg.CGEventPost(0, ev)
+                return True
+            except Exception as e:
+                logger.error(f"macOS mouse scroll_h error: {e}")
+                return False
+
         SystemController.ensure_desktop_access()
         try:
             MOUSEEVENTF_HWHEEL = 0x01000
@@ -827,32 +1115,85 @@ class SystemController:
     @staticmethod
     def execute_gesture(gesture: str) -> Tuple[bool, str]:
         """
-        Execute standard Windows multi-touch gesture actions:
+        Execute standard Windows/macOS multi-touch gesture actions:
         - 3-Finger gestures:
-            - task_view / swipe_up: Win + Tab (Show all open windows)
-            - show_desktop / swipe_down / minimize_all: Win + D (Toggle show desktop)
-            - switch_app_next / swipe_right: Alt + Tab (Cycle to next app)
-            - switch_app_prev / swipe_left: Alt + Shift + Tab (Cycle to previous app)
-            - search / tap: Win + S (Windows Search)
+            - task_view / swipe_up: Win + Tab / Mission Control
+            - show_desktop / swipe_down / minimize_all: Win + D / Cmd + F3
+            - switch_app_next / swipe_right: Alt + Tab / Next App
+            - switch_app_prev / swipe_left: Alt + Shift + Tab / Prev App
+            - search / tap: Win + S / Spotlight (Cmd + Space)
         - 4-Finger gestures:
-            - next_desktop / swipe_right: Win + Ctrl + Right (Next Virtual Desktop)
-            - prev_desktop / swipe_left: Win + Ctrl + Left (Previous Virtual Desktop)
-            - action_center / swipe_up: Win + A (Windows Action Center / Quick Settings)
-            - swipe_down: Win + D (Show desktop)
-            - settings / tap: Win + I (Windows Settings)
+            - next_desktop / swipe_right: Win + Ctrl + Right / Ctrl + Right
+            - prev_desktop / swipe_left: Win + Ctrl + Left / Ctrl + Left
+            - action_center / swipe_up: Win + A / Notification Center
+            - swipe_down: Win + D / Cmd + F3
+            - settings / tap: Win + I / System Settings
         - 2-Finger gestures:
             - right_click / tap: Right Click
-            - zoom_in: Ctrl + Mouse Wheel Up
-            - zoom_out: Ctrl + Mouse Wheel Down
-            - zoom_reset: Ctrl + 0
+            - zoom_in: Ctrl + Mouse Wheel Up / Cmd + Plus
+            - zoom_out: Ctrl + Mouse Wheel Down / Cmd + Minus
+            - zoom_reset: Ctrl + 0 / Cmd + 0
         - System shortcuts:
-            - file_explorer: Win + E
+            - file_explorer: Win + E / Finder
             - clipboard: Win + V
-            - snip / screenshot: Win + Shift + S
-            - lock: Win + L
+            - snip / screenshot: Win + Shift + S / Cmd + Shift + 4
+            - lock: Win + L / Lock Screen
         """
-        SystemController.ensure_desktop_access()
         g = str(gesture or "").lower().strip()
+
+        if IS_MAC:
+            if g in ("task_view", "show_all_windows", "three_finger_swipe_up", "3_finger_up", "taskview"):
+                try:
+                    subprocess.Popen(["open", "-a", "Mission Control"])
+                    return True, "Mission Control opened"
+                except Exception as e:
+                    return False, str(e)
+            elif g in ("show_desktop", "three_finger_swipe_down", "3_finger_down", "minimize_all", "desktop", "four_finger_swipe_down", "4_finger_down"):
+                return SystemController.press_key("cmd+f3")
+            elif g in ("switch_app_next", "switch_app", "three_finger_swipe_right", "3_finger_right", "alt_tab"):
+                return SystemController.cycle_window("next")
+            elif g in ("switch_app_prev", "three_finger_swipe_left", "3_finger_left", "alt_shift_tab"):
+                return SystemController.cycle_window("prev")
+            elif g in ("search", "three_finger_tap", "3_finger_tap", "win_s"):
+                return SystemController.press_key("cmd+space")
+            elif g in ("next_desktop", "four_finger_swipe_right", "4_finger_right"):
+                return SystemController.press_key("ctrl+right")
+            elif g in ("prev_desktop", "four_finger_swipe_left", "4_finger_left"):
+                return SystemController.press_key("ctrl+left")
+            elif g in ("action_center", "notifications", "four_finger_swipe_up", "4_finger_up", "win_a"):
+                return SystemController.press_key("ctrl+down")
+            elif g in ("settings", "four_finger_tap", "4_finger_tap", "win_i"):
+                try:
+                    subprocess.Popen(["open", "x-apple.systempreferences:"])
+                    return True, "System Settings opened"
+                except Exception as e:
+                    return False, str(e)
+            elif g in ("right_click", "two_finger_tap", "2_finger_tap"):
+                ok = SystemController.mouse_click(button="right", action="click")
+                return ok, "Right Click executed"
+            elif g in ("middle_click", "3_finger_click"):
+                ok = SystemController.mouse_click(button="middle", action="click")
+                return ok, "Middle Click executed"
+            elif g in ("zoom_in", "pinch_out"):
+                return SystemController.press_key("cmd+plus")
+            elif g in ("zoom_out", "pinch_in"):
+                return SystemController.press_key("cmd+-")
+            elif g in ("zoom_reset", "zoom_100"):
+                return SystemController.press_key("cmd+0")
+            elif g in ("file_explorer", "win_e"):
+                try:
+                    subprocess.Popen(["open", str(Path.home())])
+                    return True, "Finder opened"
+                except Exception as e:
+                    return False, str(e)
+            elif g in ("snip", "screenshot_tool", "win_shift_s"):
+                return SystemController.press_key("cmd+shift+4")
+            elif g in ("lock", "lock_screen", "win_l"):
+                ok = SystemController.lock_workstation()
+                return ok, "Mac Locked" if ok else "Lock failed"
+            return False, f"Unknown gesture '{gesture}' on macOS"
+
+        SystemController.ensure_desktop_access()
         user32 = ctypes.windll.user32
 
         # 3-Finger gestures
@@ -947,11 +1288,24 @@ class SystemController:
     def type_text(text: str) -> Tuple[bool, str]:
         """
         Type text directly into active PC input field using Win32 SendInput Unicode events
-        with keybd_event unicode fallback.
+        or AppleScript keystroke on macOS.
         Preserves unicode characters, emojis, accents, and symbols.
         """
         if not text:
             return True, "No text provided"
+
+        if IS_MAC:
+            try:
+                escaped = text.replace('\\', '\\\\').replace('"', '\\"')
+                script = f'tell application "System Events" to keystroke "{escaped}"'
+                res = subprocess.run(["osascript", "-e", script], capture_output=True, text=True, timeout=10)
+                if res.returncode == 0:
+                    return True, f"Typed {len(text)} characters into active window"
+                return False, f"macOS typing failed: {res.stderr.strip()}"
+            except Exception as e:
+                logger.error(f"macOS type_text error: {e}")
+                return False, f"Typing error: {e}"
+
         SystemController.ensure_desktop_access()
 
         PUL = ctypes.POINTER(ctypes.c_ulong)
@@ -1028,11 +1382,54 @@ class SystemController:
     @staticmethod
     def press_key(key: str) -> Tuple[bool, str]:
         """
-        Press special key or shortcut combo (e.g., 'enter', 'backspace', 'ctrl+v', 'win+d').
+        Press special key or shortcut combo (e.g., 'enter', 'backspace', 'ctrl+v', 'win+d', 'cmd+c').
         """
+        k = key.lower().strip()
+
+        if IS_MAC:
+            mac_keycodes = {
+                "enter": 36, "return": 36,
+                "tab": 48,
+                "space": 49,
+                "backspace": 51, "bksp": 51, "delete": 51, "del": 51,
+                "escape": 53, "esc": 53,
+                "left": 123, "right": 124, "down": 125, "up": 126,
+                "pageup": 116, "pagedown": 121, "home": 115, "end": 119,
+                "f1": 122, "f2": 120, "f3": 99, "f4": 118, "f5": 96, "f6": 97,
+                "f7": 98, "f8": 100, "f9": 101, "f10": 109, "f11": 103, "f12": 111,
+            }
+            parts = [p.strip() for p in k.split("+")]
+            mods = []
+            for p in parts[:-1]:
+                if p in ("ctrl", "control"):
+                    mods.append("control down")
+                elif p in ("alt", "option", "opt"):
+                    mods.append("option down")
+                elif p in ("shift",):
+                    mods.append("shift down")
+                elif p in ("cmd", "command", "win", "super"):
+                    mods.append("command down")
+
+            using_clause = f" using {{{', '.join(mods)}}}" if mods else ""
+            last = parts[-1]
+            try:
+                if last in mac_keycodes:
+                    script = f'tell application "System Events" to key code {mac_keycodes[last]}{using_clause}'
+                elif len(last) == 1:
+                    escaped_char = last.replace('\\', '\\\\').replace('"', '\\"')
+                    script = f'tell application "System Events" to keystroke "{escaped_char}"{using_clause}'
+                else:
+                    return False, f"Unknown key '{key}' on macOS"
+                res = subprocess.run(["osascript", "-e", script], capture_output=True, text=True, timeout=5)
+                if res.returncode == 0:
+                    return True, f"Key '{key}' pressed"
+                return False, f"macOS key press failed: {res.stderr.strip()}"
+            except Exception as e:
+                logger.error(f"macOS press_key error: {e}")
+                return False, f"Error pressing key: {e}"
+
         SystemController.ensure_desktop_access()
         user32 = ctypes.windll.user32
-        k = key.lower().strip()
 
         KEYEVENTF_EXTENDEDKEY = 0x0001
         KEYEVENTF_KEYUP = 0x0002
@@ -1103,7 +1500,15 @@ class SystemController:
 
     @staticmethod
     def speak_text(text: str) -> bool:
-        """Speak message aloud on PC speakers using Windows Speech Synthesis."""
+        """Speak message aloud on PC/Mac speakers using native Speech Synthesis."""
+        if IS_MAC:
+            try:
+                subprocess.Popen(["/usr/bin/say", text])
+                return True
+            except Exception as e:
+                logger.error(f"macOS TTS error: {e}")
+                return False
+
         try:
             safe_text = text.replace("'", "''").replace('"', '`"')
             cmd = f'Add-Type -AssemblyName System.Speech; $synth = New-Object System.Speech.Synthesis.SpeechSynthesizer; $synth.Speak("{safe_text}")'
@@ -1115,7 +1520,45 @@ class SystemController:
 
     @staticmethod
     def play_audio_file(file_path: Path) -> Tuple[bool, str]:
-        """Play any audio file (Telegram voice note .ogg, .mp3, .wav, etc.) through PC speakers."""
+        """Play any audio file (Telegram voice note .ogg, .mp3, .wav, etc.) through speakers."""
+        if IS_MAC:
+            try:
+                target_path = file_path
+                temp_wav = None
+                if file_path.suffix.lower() in (".ogg", ".oga"):
+                    temp_wav = file_path.with_suffix(".temp.wav")
+                    try:
+                        import av
+                        in_container = av.open(str(file_path))
+                        out_container = av.open(str(temp_wav), mode="w", format="wav")
+                        in_stream = in_container.streams.audio[0]
+                        out_stream = out_container.add_stream("pcm_s16le", rate=44100, layout="stereo")
+                        resampler = av.AudioResampler(format="s16", layout="stereo", rate=44100)
+                        for frame in in_container.decode(in_stream):
+                            for rf in resampler.resample(frame):
+                                for packet in out_stream.encode(rf):
+                                    out_container.mux(packet)
+                        for packet in out_stream.encode(None):
+                            out_container.mux(packet)
+                        out_container.close()
+                        in_container.close()
+                        target_path = temp_wav
+                    except Exception as conv_err:
+                        logger.warning(f"Audio conversion warning: {conv_err}")
+
+                res = subprocess.run(["/usr/bin/afplay", str(target_path)], capture_output=True, timeout=60)
+                if temp_wav and temp_wav.exists():
+                    try:
+                        temp_wav.unlink()
+                    except Exception:
+                        pass
+                if res.returncode == 0:
+                    return True, "Audio played on Mac speakers"
+                return False, f"afplay failed: {res.stderr.decode('utf-8', errors='ignore')}"
+            except Exception as e:
+                logger.error(f"Failed to play audio on macOS: {e}")
+                return False, str(e)
+
         try:
             target_path = file_path
             temp_wav = None
@@ -1302,7 +1745,16 @@ class SystemController:
 
     @staticmethod
     def get_clipboard() -> str:
-        """Read current text contents from Windows clipboard."""
+        """Read current text contents from clipboard."""
+        if IS_MAC:
+            try:
+                res = subprocess.run(["/usr/bin/pbpaste"], capture_output=True, text=True, timeout=5)
+                val = res.stdout
+                return val if val else "[Clipboard text is empty]"
+            except Exception as e:
+                logger.error(f"Clipboard read error: {e}")
+                return f"[Error reading clipboard: {e}]"
+
         try:
             import win32clipboard, win32con
             win32clipboard.OpenClipboard()
@@ -1319,7 +1771,16 @@ class SystemController:
 
     @staticmethod
     def set_clipboard(text: str) -> bool:
-        """Copy text to Windows clipboard."""
+        """Copy text to clipboard."""
+        if IS_MAC:
+            try:
+                proc = subprocess.Popen(["/usr/bin/pbcopy"], stdin=subprocess.PIPE, text=True)
+                proc.communicate(input=text, timeout=5)
+                return proc.returncode == 0
+            except Exception as e:
+                logger.error(f"macOS pbcopy error: {e}")
+                return False
+
         try:
             import win32clipboard, win32con
             win32clipboard.OpenClipboard()
@@ -1435,7 +1896,19 @@ class SystemController:
 
     @staticmethod
     def get_system_drives() -> List[str]:
-        """Detect all active logical drive roots on Windows."""
+        """Detect all active logical drive roots."""
+        if IS_MAC:
+            drives = ["/"]
+            vols = Path("/Volumes")
+            if vols.exists():
+                try:
+                    for v in vols.iterdir():
+                        if v.is_dir() and not v.name.startswith("."):
+                            drives.append(str(v))
+                except Exception:
+                    pass
+            return drives
+
         drives = []
         try:
             for p in psutil.disk_partitions():
@@ -1630,8 +2103,15 @@ class SystemController:
     def open_target(target: str) -> bool:
         """Open web URL or local file path."""
         try:
-            os.startfile(target)
-            return True
+            if IS_MAC:
+                subprocess.Popen(["open", target])
+                return True
+            elif IS_LINUX:
+                subprocess.Popen(["xdg-open", target])
+                return True
+            else:
+                os.startfile(target)
+                return True
         except Exception as e:
             logger.error(f"Open target error: {e}")
             return False
@@ -1733,10 +2213,16 @@ class AlarmManager:
         start_time = time.time()
         while not self._stop_event.is_set() and (time.time() - start_time < 60):
             try:
-                winsound.Beep(1200, 250)
-                if self._stop_event.is_set():
-                    break
-                winsound.Beep(800, 250)
+                if IS_MAC:
+                    subprocess.run(["/usr/bin/afplay", "/System/Library/Sounds/Ping.aiff"], timeout=1)
+                    time.sleep(0.3)
+                elif winsound:
+                    winsound.Beep(1200, 250)
+                    if self._stop_event.is_set():
+                        break
+                    winsound.Beep(800, 250)
+                else:
+                    time.sleep(0.5)
             except Exception:
                 time.sleep(0.5)
 

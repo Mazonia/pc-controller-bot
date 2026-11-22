@@ -28,6 +28,8 @@ from pathlib import Path
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
+WIN_FLAGS = {"creationflags": subprocess.CREATE_NO_WINDOW} if sys.platform == "win32" else {}
+
 # ========================================================================
 # CONFIGURATION
 # ========================================================================
@@ -139,7 +141,7 @@ def scan_network_arp():
         subprocess.run(
             ["ping", "-n", "1", "-w", "500", f"{subnet}.255"],
             capture_output=True, timeout=5,
-            creationflags=subprocess.CREATE_NO_WINDOW,
+            **WIN_FLAGS,
         )
     except Exception:
         pass
@@ -150,7 +152,7 @@ def scan_network_arp():
             subprocess.run(
                 ["ping", "-n", "1", "-w", "300", ip],
                 capture_output=True, timeout=3,
-                creationflags=subprocess.CREATE_NO_WINDOW,
+                **WIN_FLAGS,
             )
         except Exception:
             pass
@@ -168,7 +170,7 @@ def scan_network_arp():
         result = subprocess.run(
             ["arp", "-a"],
             capture_output=True, text=True, timeout=10,
-            creationflags=subprocess.CREATE_NO_WINDOW,
+            **WIN_FLAGS,
         )
         arp_output = result.stdout
     except Exception:
@@ -181,7 +183,7 @@ def scan_network_arp():
             ["powershell", "-NoProfile", "-Command",
              "Get-NetNeighbor -AddressFamily IPv4 | Where-Object {$_.State -ne 'Unreachable'} | Select-Object IPAddress, LinkLayerAddress, State | Format-Table -AutoSize"],
             capture_output=True, text=True, timeout=15,
-            creationflags=subprocess.CREATE_NO_WINDOW,
+            **WIN_FLAGS,
         )
         ps_neighbors = result.stdout
     except Exception:
@@ -719,7 +721,7 @@ def push_deploy_psexec(ip, username, password, server_ip):
     try:
         result = subprocess.run(
             cmd, capture_output=True, text=True, timeout=30,
-            creationflags=subprocess.CREATE_NO_WINDOW,
+            **WIN_FLAGS,
         )
         if result.returncode == 0:
             return True, "PsExec push successful"
@@ -744,7 +746,7 @@ Invoke-Command -ComputerName '{ip}' -Credential $cred -ScriptBlock {{
         result = subprocess.run(
             ["powershell", "-NoProfile", "-ep", "bypass", "-Command", ps_cmd],
             capture_output=True, text=True, timeout=120,
-            creationflags=subprocess.CREATE_NO_WINDOW,
+            **WIN_FLAGS,
         )
         if result.returncode == 0:
             return True, "WinRM push successful"
@@ -904,7 +906,7 @@ def interactive_menu(server_ip):
             try:
                 subprocess.run(
                     ["clip.exe"], input=one_liner.encode(), check=True,
-                    creationflags=subprocess.CREATE_NO_WINDOW,
+                    **WIN_FLAGS,
                 )
                 print("\n  Copied to clipboard! Paste it on target PCs.\n")
             except Exception:
@@ -977,7 +979,7 @@ def main():
     try:
         subprocess.run(
             ["clip.exe"], input=one_liner.encode(), check=True,
-            creationflags=subprocess.CREATE_NO_WINDOW,
+            **WIN_FLAGS,
         )
         print(f"  ONE-LINER COPIED TO YOUR CLIPBOARD!\n")
     except Exception:

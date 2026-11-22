@@ -1,0 +1,10 @@
+# Auto-detect text files and normalize line endings
+* text=auto
+
+# Unix shell scripts and LaunchAgent plist files must always have LF line endings
+*.sh text eol=lf
+*.plist text eol=lf
+
+# Windows batch files must always have CRLF line endings
+*.bat text eol=crlf
+*.cmd text eol=crlf

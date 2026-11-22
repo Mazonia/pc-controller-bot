@@ -132,16 +132,18 @@ def ensure_local_agent_running():
 
         agent_exe = config.BASE_DIR / "pc-sentinel-agent.exe"
         exe = str(agent_exe) if agent_exe.exists() else sys.executable
-        creation_flags = (subprocess.CREATE_NO_WINDOW | 0x00000008) if sys.platform == "win32" else 0
+        extra_kwargs = {}
+        if sys.platform == "win32":
+            extra_kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW | 0x00000008
         logger.info(f"Auto-launching local PC Agent silently ({Path(exe).name})...")
         subprocess.Popen(
             [exe, str(agent_py)],
             cwd=str(config.BASE_DIR),
-            creationflags=creation_flags,
             close_fds=True,
             stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
+            **extra_kwargs
         )
     except Exception as e:
         logger.error(f"Could not auto-start local agent: {e}")

@@ -80,6 +80,8 @@ def find_available_port(start_port: int = 8585, max_attempts: int = 20) -> int:
 
 def ensure_desktop_access():
     """Ensure current thread is attached to the active Windows input desktop."""
+    if sys.platform != "win32":
+        return True
     try:
         # DPI awareness
         try:
@@ -95,6 +97,13 @@ def ensure_desktop_access():
 
 def get_active_window_title() -> str:
     """Return title of current foreground window."""
+    if sys.platform == "darwin":
+        try:
+            as_cmd = 'tell application "System Events" to get name of first application process whose frontmost is true'
+            out = subprocess.check_output(["osascript", "-e", as_cmd], timeout=2.0).decode("utf-8").strip()
+            return out if out else "Desktop"
+        except Exception:
+            return "Desktop"
     if not win32gui:
         return "Desktop"
     try:
@@ -2201,18 +2210,29 @@ class ScreenCaster:
 
     def _launch_tunnel_worker(self):
         """Worker executing cloudflared and parsing public HTTPS tunnel URL."""
+        import platform
         base_dir = Path(__file__).resolve().parent
-        cf_bin = base_dir / "cloudflared.exe"
+        cf_name = "cloudflared.exe" if sys.platform == "win32" else "cloudflared"
+        cf_bin = base_dir / cf_name
         if not cf_bin.exists():
             system_cf = shutil.which("cloudflared")
             if system_cf:
                 cf_bin = Path(system_cf)
             else:
-                logger.info("Downloading cloudflared.exe binary for global streaming...")
+                logger.info(f"Downloading {cf_name} binary for global streaming...")
                 try:
-                    url = "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-windows-amd64.exe"
+                    if sys.platform == "win32":
+                        url = "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-windows-amd64.exe"
+                    elif sys.platform == "darwin":
+                        arch = "arm64" if platform.machine().lower() in ("arm64", "aarch64") else "amd64"
+                        url = f"https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-darwin-{arch}"
+                    else:
+                        arch = "arm64" if platform.machine().lower() in ("arm64", "aarch64") else "amd64"
+                        url = f"https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-{arch}"
                     urllib.request.urlretrieve(url, cf_bin)
-                    logger.info("cloudflared.exe successfully downloaded!")
+                    if sys.platform != "win32":
+                        os.chmod(cf_bin, 0o755)
+                    logger.info(f"{cf_name} successfully downloaded!")
                 except Exception as e:
                     logger.warning(f"Failed to auto-download cloudflared: {e}")
                     return
