@@ -1119,9 +1119,21 @@ def ensure_single_agent_instance():
 
 
 def send_startup_announcement():
-    """Notify Telegram chat immediately that this PC has booted and is online."""
+    """Notify Telegram chat that this PC has booted and is online, retrying until network is up."""
+    global TELEGRAM_BOT_TOKEN, AUTHORIZED_USER_IDS
+
+    # Ensure tokens are loaded even if agent.env was generated with delays
     if not TELEGRAM_BOT_TOKEN or not AUTHORIZED_USER_IDS:
+        for env_file in [BASE_DIR / "agent.env", BASE_DIR / ".env", BASE_DIR / "deploy_config.env"]:
+            if env_file.exists():
+                load_dotenv(env_file)
+        TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip() or TELEGRAM_BOT_TOKEN
+        AUTHORIZED_USER_IDS = os.getenv("AUTHORIZED_USER_IDS", "").strip() or AUTHORIZED_USER_IDS
+
+    if not TELEGRAM_BOT_TOKEN or not AUTHORIZED_USER_IDS:
+        logger.warning("Startup announcement skipped: TELEGRAM_BOT_TOKEN or AUTHORIZED_USER_IDS missing.")
         return
+
     net = get_network_info()
     text = (
         f"🟢 <b>PC Sentinel Agent Online!</b>\n\n"
@@ -1131,19 +1143,31 @@ def send_startup_announcement():
         f"🕒 <b>Boot Time:</b> <code>{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</code>\n\n"
         f"✨ <i>Send /pcs or /start to control this PC.</i>"
     )
-    for uid in AUTHORIZED_USER_IDS.split(","):
-        uid = uid.strip()
-        if not uid.isdigit():
-            continue
-        try:
-            httpx.post(
-                f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
-                json={"chat_id": int(uid), "text": text, "parse_mode": "HTML"},
-                timeout=12.0,
-            )
-            logger.info(f"Direct startup announcement sent to Telegram user {uid}")
-        except Exception as e:
-            logger.debug(f"Could not send startup announcement to {uid}: {e}")
+
+    max_retries = 30  # Retry for up to 5 minutes (30 * 10s)
+    for attempt in range(1, max_retries + 1):
+        delivered = False
+        for uid in AUTHORIZED_USER_IDS.split(","):
+            uid = uid.strip()
+            if not uid.isdigit():
+                continue
+            try:
+                r = httpx.post(
+                    f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
+                    json={"chat_id": int(uid), "text": text, "parse_mode": "HTML"},
+                    timeout=12.0,
+                )
+                if r.status_code == 200:
+                    logger.info(f"Direct startup announcement sent to Telegram user {uid} (attempt {attempt})")
+                    delivered = True
+                else:
+                    logger.debug(f"Telegram API returned status {r.status_code} for user {uid}")
+            except Exception as e:
+                logger.debug(f"Attempt {attempt}/{max_retries} could not send startup announcement to {uid}: {e}")
+
+        if delivered:
+            return
+        time.sleep(10)
 
 
 def main():

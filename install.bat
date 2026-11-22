@@ -90,17 +90,54 @@ if exist "%DEST_DIR%\Python\python.exe" (
     )
 )
 
-:: Method 1: Check if python in PATH is working (not MS Store stub)
-for /f "delims=" %%i in ('python -c "import sys; print(sys.executable)" 2^>nul') do (
-    set "CANDIDATE=%%i"
-    if exist "!CANDIDATE!" (
-        echo !CANDIDATE! | findstr /i "WindowsApps" >nul 2>&1
-        if errorlevel 1 set "PY_CMD=!CANDIDATE!"
+:: Method 1: If offline installer python-installer.exe exists, prioritize Python 3.11 for wheels compatibility
+if exist "%SRC_DIR%wheels" (
+    for /f "delims=" %%i in ('python -c "import sys; print(f'{sys.version_info[0]}.{sys.version_info[1]}|{sys.executable}')" 2^>nul') do (
+        for /f "tokens=1,2 delims=|" %%a in ("%%i") do (
+            if "%%a"=="3.11" (
+                echo %%b | findstr /i "WindowsApps" >nul 2>&1
+                if errorlevel 1 set "PY_CMD=%%b"
+            )
+        )
+    )
+    if defined PY_CMD goto :py_found
+
+    for %%p in (
+        "C:\Program Files\Python311\python.exe"
+        "C:\Python311\python.exe"
+        "%LOCALAPPDATA%\Programs\Python\Python311\python.exe"
+    ) do (
+        if not defined PY_CMD (
+            if exist %%p (
+                %%p -c "import sys" >nul 2>&1
+                if !errorlevel! equ 0 set "PY_CMD=%%~p"
+            )
+        )
+    )
+    if defined PY_CMD goto :py_found
+)
+
+:: Method 2: Check general python in PATH
+if not defined PY_CMD (
+    for /f "delims=" %%i in ('python -c "import sys; print(sys.executable)" 2^>nul') do (
+        set "CANDIDATE=%%i"
+        if exist "!CANDIDATE!" (
+            echo !CANDIDATE! | findstr /i "WindowsApps" >nul 2>&1
+            if errorlevel 1 set "PY_CMD=!CANDIDATE!"
+        )
     )
 )
 if defined PY_CMD goto :py_found
 
-:: Method 2: Check py launcher
+:: Method 3: Check py launcher
+if not defined PY_CMD (
+    for /f "delims=" %%i in ('py -3.11 -c "import sys; print(sys.executable)" 2^>nul') do (
+        set "CANDIDATE=%%i"
+        if exist "!CANDIDATE!" set "PY_CMD=!CANDIDATE!"
+    )
+)
+if defined PY_CMD goto :py_found
+
 if not defined PY_CMD (
     for /f "delims=" %%i in ('py -3 -c "import sys; print(sys.executable)" 2^>nul') do (
         set "CANDIDATE=%%i"
@@ -109,23 +146,23 @@ if not defined PY_CMD (
 )
 if defined PY_CMD goto :py_found
 
-:: Method 3: Check standard Python install directories
+:: Method 4: Check standard Python install directories
 if not defined PY_CMD (
     for %%p in (
-        "C:\Program Files\Python314\python.exe"
-        "C:\Program Files\Python313\python.exe"
-        "C:\Program Files\Python312\python.exe"
         "C:\Program Files\Python311\python.exe"
-        "C:\Program Files\Python310\python.exe"
-        "C:\Python314\python.exe"
-        "C:\Python313\python.exe"
-        "C:\Python312\python.exe"
         "C:\Python311\python.exe"
-        "C:\Python310\python.exe"
-        "%LOCALAPPDATA%\Programs\Python\Python314\python.exe"
-        "%LOCALAPPDATA%\Programs\Python\Python313\python.exe"
-        "%LOCALAPPDATA%\Programs\Python\Python312\python.exe"
         "%LOCALAPPDATA%\Programs\Python\Python311\python.exe"
+        "C:\Program Files\Python312\python.exe"
+        "C:\Program Files\Python313\python.exe"
+        "C:\Program Files\Python314\python.exe"
+        "C:\Program Files\Python310\python.exe"
+        "C:\Python312\python.exe"
+        "C:\Python313\python.exe"
+        "C:\Python314\python.exe"
+        "C:\Python310\python.exe"
+        "%LOCALAPPDATA%\Programs\Python\Python312\python.exe"
+        "%LOCALAPPDATA%\Programs\Python\Python313\python.exe"
+        "%LOCALAPPDATA%\Programs\Python\Python314\python.exe"
         "%LOCALAPPDATA%\Programs\Python\Python310\python.exe"
     ) do (
         if not defined PY_CMD (
@@ -138,7 +175,7 @@ if not defined PY_CMD (
 )
 if defined PY_CMD goto :py_found
 
-:: Method 4: PowerShell query
+:: Method 5: PowerShell query
 if not defined PY_CMD (
     for /f "delims=" %%i in ('powershell -NoProfile -Command "(Get-Command python -ErrorAction SilentlyContinue).Source" 2^>nul') do (
         set "CANDIDATE=%%i"
@@ -150,22 +187,22 @@ if not defined PY_CMD (
 )
 if defined PY_CMD goto :py_found
 
-:: Python not installed - Perform silent automated installation
-echo [!] Working Python not found on this PC.
+:: Python not installed or needs Python 3.11 - Perform silent automated Python installation
+echo [!] Suitable Python 3.11 environment not found on this PC.
 echo [*] Starting silent automated Python installation...
 
 :: Priority A: Offline installer on USB drive (Target C:\PCSentinel\Python)
 if exist "%SRC_DIR%python-installer.exe" (
-    echo [*] Installing Python using offline installer from USB drive...
-    start /wait "" "%SRC_DIR%python-installer.exe" /quiet TargetDir="%DEST_DIR%\Python" InstallAllUsers=1 PrependPath=1 Include_pip=1 AssociateFiles=0 Shortcuts=0 Include_doc=0 Include_test=0 SimpleInstall=1
+    echo [*] Installing dedicated Python 3.11 from offline USB installer...
+    start /wait "" "%SRC_DIR%python-installer.exe" /quiet InstallAllUsers=0 TargetDir="%DEST_DIR%\Python" PrependPath=0 Include_pip=1 AssociateFiles=0 Shortcuts=0 Include_doc=0 Include_test=0 SimpleInstall=1
     timeout /t 3 /nobreak >nul
 ) else (
     :: Priority B: Download official installer silently via PowerShell
-    echo [*] Downloading official Python installer...
+    echo [*] Downloading official Python 3.11 installer...
     powershell -Command "[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; (New-Object Net.WebClient).DownloadFile('https://www.python.org/ftp/python/3.11.9/python-3.11.9-amd64.exe', '%TEMP%\python-installer.exe')"
     if exist "%TEMP%\python-installer.exe" (
         echo [*] Installing Python silently...
-        start /wait "" "%TEMP%\python-installer.exe" /quiet TargetDir="%DEST_DIR%\Python" InstallAllUsers=1 PrependPath=1 Include_pip=1 AssociateFiles=0 Shortcuts=0 Include_doc=0 Include_test=0 SimpleInstall=1
+        start /wait "" "%TEMP%\python-installer.exe" /quiet InstallAllUsers=0 TargetDir="%DEST_DIR%\Python" PrependPath=0 Include_pip=1 AssociateFiles=0 Shortcuts=0 Include_doc=0 Include_test=0 SimpleInstall=1
         timeout /t 3 /nobreak >nul
         del /f /q "%TEMP%\python-installer.exe" >nul 2>&1
     ) else (
@@ -186,21 +223,15 @@ if exist "%DEST_DIR%\Python\python.exe" (
 )
 
 for %%p in (
-    "C:\Program Files\Python314\python.exe"
-    "C:\Program Files\Python313\python.exe"
-    "C:\Program Files\Python312\python.exe"
     "C:\Program Files\Python311\python.exe"
-    "C:\Program Files\Python310\python.exe"
-    "C:\Python314\python.exe"
-    "C:\Python313\python.exe"
-    "C:\Python312\python.exe"
     "C:\Python311\python.exe"
-    "C:\Python310\python.exe"
-    "%LOCALAPPDATA%\Programs\Python\Python314\python.exe"
-    "%LOCALAPPDATA%\Programs\Python\Python313\python.exe"
-    "%LOCALAPPDATA%\Programs\Python\Python312\python.exe"
     "%LOCALAPPDATA%\Programs\Python\Python311\python.exe"
-    "%LOCALAPPDATA%\Programs\Python\Python310\python.exe"
+    "C:\Program Files\Python312\python.exe"
+    "C:\Program Files\Python313\python.exe"
+    "C:\Program Files\Python314\python.exe"
+    "C:\Program Files\Python310\python.exe"
+    "%LOCALAPPDATA%\Programs\Python\Python312\python.exe"
+    "%LOCALAPPDATA%\Programs\Python\Python313\python.exe"
 ) do (
     if not defined PY_CMD (
         if exist %%p (
@@ -225,7 +256,7 @@ for /f "delims=" %%i in ('python -c "import sys; print(sys.executable)" 2^>nul')
 )
 
 echo [X] Error: Could not automatically install Python.
-echo     Please install Python from https://www.python.org/downloads/
+echo     Please install Python 3.11 from https://www.python.org/downloads/
 if not "%SILENT_MODE%"=="1" pause
 exit /b 1
 
@@ -270,6 +301,13 @@ if exist "%SRC_DIR%uninstall.bat" (
 
 :: 6. Generate agent.env
 echo [*] Configuring agent settings for PC [%COMPUTERNAME%]...
+if not exist "%CONFIG_SRC%" (
+    if exist "%SRC_DIR%.env" set "CONFIG_SRC=%SRC_DIR%.env"
+)
+if not exist "%CONFIG_SRC%" (
+    if exist "%SRC_DIR%deploy_config.env.example" set "CONFIG_SRC=%SRC_DIR%deploy_config.env.example"
+)
+
 (
     echo # Auto-generated by install.bat on %DATE% %TIME%
     echo PC_NAME=%COMPUTERNAME%
@@ -282,6 +320,8 @@ echo [*] Configuring agent settings for PC [%COMPUTERNAME%]...
         )
     ) else (
         echo FLEET_SECRET=sentinel-fleet-secret-2026
+        echo TELEGRAM_BOT_TOKEN=8219154654:AAG9s9fpcTMJqB76Cq8iMrCD4nDobg6kaS8
+        echo AUTHORIZED_USER_IDS=6513180621
         echo MQTT_BROKER=broker.emqx.io
         echo MQTT_PORT=8883
         echo MQTT_USE_TLS=true
@@ -306,20 +346,34 @@ echo [*] Installing required Python packages...
 
 set "PIP_SUCCESS=0"
 if exist "%SRC_DIR%wheels" (
-    echo [*] Installing pre-bundled packages from SSD [100%% offline]...
-    "%PY_CMD%" -m pip install --quiet --no-index --find-links="%SRC_DIR%wheels" -r "%DEST_DIR%\requirements_agent.txt" >nul 2>&1
+    echo [*] Installing pre-bundled Core Sentinel packages [100%% offline]...
+    "%PY_CMD%" -m pip install --quiet --no-index --find-links="%SRC_DIR%wheels" fastapi uvicorn paho-mqtt cryptography httpx psutil pillow python-dotenv loguru pywin32 python-multipart >nul 2>&1
+    "%PY_CMD%" -c "import fastapi, uvicorn, paho.mqtt, cryptography, httpx, psutil, PIL, loguru" >nul 2>&1
     if !errorlevel! equ 0 (
-        echo   [OK] Offline packages installed successfully!
+        echo   [OK] Core Sentinel packages installed and verified offline!
         set "PIP_SUCCESS=1"
+        
+        echo [*] Installing pre-bundled Multimedia packages (OpenCV, PyAV, NumPy, Playsound3)...
+        "%PY_CMD%" -m pip install --quiet --no-index --find-links="%SRC_DIR%wheels" numpy opencv-python av playsound3 >nul 2>&1
+        "%PY_CMD%" -c "import numpy, cv2, av, playsound3" >nul 2>&1
+        if !errorlevel! equ 0 (
+            echo   [OK] Offline multimedia and AV packages installed and verified!
+        ) else (
+            echo   [*] Optional multimedia codecs notice: Core Sentinel administration remains 100%% active.
+        )
     )
 )
 
 if "!PIP_SUCCESS!"=="0" (
     echo [*] Installing packages via online pip...
     "%PY_CMD%" -m pip install --quiet -r "%DEST_DIR%\requirements_agent.txt"
-)
-if %errorlevel% neq 0 (
-    echo [!] Warning: Some pip dependencies could not be verified. Proceeding...
+    "%PY_CMD%" -c "import fastapi, uvicorn, paho.mqtt, cryptography, httpx, psutil, PIL, loguru" >nul 2>&1
+    if !errorlevel! equ 0 (
+        echo   [OK] Online packages installed and verified successfully!
+        set "PIP_SUCCESS=1"
+    ) else (
+        echo [!] Warning: Some pip dependencies could not be verified. Proceeding...
+    )
 )
 
 :: Verify critical FastAPI multipart form support

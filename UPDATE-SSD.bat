@@ -66,7 +66,13 @@ copy /y "%~dp0fleet_relay.py" "%FOUND_DRIVE%\" >nul
 copy /y "%~dp0system_controller.py" "%FOUND_DRIVE%\" >nul
 copy /y "%~dp0screen_caster.py" "%FOUND_DRIVE%\" >nul
 copy /y "%~dp0requirements_agent.txt" "%FOUND_DRIVE%\" >nul
-copy /y "%~dp0deploy_config.env" "%FOUND_DRIVE%\" >nul
+if exist "%~dp0deploy_config.env" (
+    copy /y "%~dp0deploy_config.env" "%FOUND_DRIVE%\" >nul
+) else if exist "%~dp0.env" (
+    copy /y "%~dp0.env" "%FOUND_DRIVE%\deploy_config.env" >nul
+) else if exist "%~dp0deploy_config.env.example" (
+    copy /y "%~dp0deploy_config.env.example" "%FOUND_DRIVE%\deploy_config.env" >nul
+)
 copy /y "%~dp0fleet.json" "%FOUND_DRIVE%\" >nul
 copy /y "%~dp0INSTRUCTIONS.txt" "%FOUND_DRIVE%\" >nul
 copy /y "%~dp0sync_fleet.bat" "%FOUND_DRIVE%\" >nul

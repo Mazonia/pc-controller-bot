@@ -72,6 +72,8 @@ if exist "%~dp0cloudflared.exe" (
 :: Configuration template & fleet list
 if exist "%~dp0deploy_config.env" (
     copy /y "%~dp0deploy_config.env" "%CLEAN_DRIVE%\" >nul
+) else if exist "%~dp0.env" (
+    copy /y "%~dp0.env" "%CLEAN_DRIVE%\deploy_config.env" >nul
 ) else if exist "%~dp0deploy_config.env.example" (
     copy /y "%~dp0deploy_config.env.example" "%CLEAN_DRIVE%\deploy_config.env" >nul
 )
