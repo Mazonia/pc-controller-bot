@@ -353,7 +353,7 @@ if exist "%SRC_DIR%wheels" (
         echo   [OK] Core Sentinel packages installed and verified offline!
         set "PIP_SUCCESS=1"
         
-        echo [*] Installing pre-bundled Multimedia packages (OpenCV, PyAV, NumPy, Playsound3)...
+        echo [*] Installing pre-bundled Multimedia packages [OpenCV, PyAV, NumPy, Playsound3]...
         "%PY_CMD%" -m pip install --quiet --no-index --find-links="%SRC_DIR%wheels" numpy opencv-python av playsound3 >nul 2>&1
         "%PY_CMD%" -c "import numpy, cv2, av, playsound3" >nul 2>&1
         if !errorlevel! equ 0 (

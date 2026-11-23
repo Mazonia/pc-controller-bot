@@ -12,3 +12,7 @@ fleet_deploy_log.json
 wheels/
 *.whl
 .pytest_cache/
+managers.json
+audit_log.json
+backup_updates/
+update_staging/

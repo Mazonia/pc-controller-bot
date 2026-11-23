@@ -32,6 +32,7 @@ from telegram import (
     InlineKeyboardMarkup,
     Update,
     BotCommand,
+    BotCommandScopeChat,
     InputMediaPhoto,
 )
 from telegram.constants import ChatAction
@@ -48,6 +49,7 @@ from telegram.ext import (
 
 import config
 from fleet_relay import FleetCommanderRelay
+from manager_auth import manager_auth, DEFAULT_ROLE_PERMISSIONS, PERMISSION_KEYS
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -56,6 +58,32 @@ from fleet_relay import FleetCommanderRelay
 
 FLEET_FILE = config.BASE_DIR / "fleet.json"
 commander_relay: Optional[FleetCommanderRelay] = None
+
+# Core Agent files distributed during Over-The-Air (OTA) updates
+CORE_AGENT_FILES = [
+    "agent.py",
+    "fleet_relay.py",
+    "system_controller.py",
+    "screen_caster.py",
+    "diagnose_agent.py",
+    "requirements_agent.txt",
+    "start_agent.bat",
+    "start_agent_hidden.vbs",
+]
+
+
+def create_agent_update_bundle() -> Tuple[bytes, List[str]]:
+    """Package current workspace agent scripts into an in-memory zip bundle."""
+    import zipfile
+    buf = io.BytesIO()
+    packaged = []
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        for fname in CORE_AGENT_FILES:
+            fpath = config.BASE_DIR / fname
+            if fpath.exists():
+                zf.write(fpath, arcname=fname)
+                packaged.append(fname)
+    return buf.getvalue(), packaged
 
 
 def ensure_host_pc_registered(fleet: dict) -> bool:
@@ -702,6 +730,81 @@ class AgentClient:
         except Exception:
             return []
 
+    async def get_tracking(self) -> dict:
+        if self.is_local:
+            try:
+                r = await self._get("/tracking", timeout=10.0)
+                r.raise_for_status()
+                return r.json().get("tracking", {})
+            except Exception as e:
+                logger.debug(f"Local tracking HTTP failed: {e}. Trying relay...")
+        if self.should_use_relay():
+            res = await commander_relay.send_command(self.name, "tracking", timeout=20.0)
+            if res.get("ok"):
+                return res.get("tracking", {})
+            raise Exception(res.get("error", "Failed to retrieve tracking over relay"))
+        r = await self._get("/tracking", timeout=20.0)
+        r.raise_for_status()
+        return r.json().get("tracking", {})
+
+    async def lockdown_enable(self, silent: bool = False, alarm: bool = True, chat_id: Optional[int] = None) -> dict:
+        payload = {"silent": silent, "alarm": alarm, "chat_id": chat_id}
+        if self.is_local:
+            try:
+                r = await self._post("/lockdown/enable", json=payload, timeout=15.0)
+                r.raise_for_status()
+                return r.json()
+            except Exception as e:
+                logger.debug(f"Local lockdown_enable HTTP failed: {e}. Trying relay...")
+        if self.should_use_relay():
+            return await commander_relay.send_command(self.name, "lockdown_enable", payload, timeout=25.0)
+        r = await self._post("/lockdown/enable", json=payload, timeout=25.0)
+        r.raise_for_status()
+        return r.json()
+
+    async def lockdown_disable(self) -> dict:
+        if self.is_local:
+            try:
+                r = await self._post("/lockdown/disable", timeout=15.0)
+                r.raise_for_status()
+                return r.json()
+            except Exception as e:
+                logger.debug(f"Local lockdown_disable HTTP failed: {e}. Trying relay...")
+        if self.should_use_relay():
+            return await commander_relay.send_command(self.name, "lockdown_disable", timeout=15.0)
+        r = await self._post("/lockdown/disable", timeout=15.0)
+        r.raise_for_status()
+        return r.json()
+
+    async def lockdown_status(self) -> dict:
+        if self.is_local:
+            try:
+                r = await self._get("/lockdown/status", timeout=10.0)
+                r.raise_for_status()
+                return r.json()
+            except Exception as e:
+                logger.debug(f"Local lockdown_status HTTP failed: {e}. Trying relay...")
+        if self.should_use_relay():
+            return await commander_relay.send_command(self.name, "lockdown_status", timeout=10.0)
+        r = await self._get("/lockdown/status", timeout=10.0)
+        r.raise_for_status()
+        return r.json()
+
+    async def push_agent_update(self, zip_b64: Optional[str] = None, files_dict: Optional[dict] = None) -> dict:
+        payload = {"zip_b64": zip_b64, "files": files_dict}
+        if self.is_local:
+            try:
+                r = await self._post("/agent/update", json=payload, timeout=45.0)
+                r.raise_for_status()
+                return r.json()
+            except Exception as e:
+                logger.debug(f"Local agent update failed: {e}. Trying relay...")
+        if self.should_use_relay():
+            return await commander_relay.send_command(self.name, "agent_update", payload, timeout=45.0)
+        r = await self._post("/agent/update", json=payload, timeout=45.0)
+        r.raise_for_status()
+        return r.json()
+
 
 # ═══════════════════════════════════════════════════════════════════════
 #   SECURITY & LOCKS
@@ -713,9 +816,7 @@ failed_login_attempts: dict[int, list[float]] = {}
 
 
 def is_authorized(user_id: int) -> bool:
-    if not config.AUTHORIZED_USER_IDS:
-        return False
-    return user_id in config.AUTHORIZED_USER_IDS
+    return manager_auth.is_authorized(user_id)
 
 
 def is_authenticated(user_id: int) -> bool:
@@ -727,9 +828,23 @@ def is_authenticated(user_id: int) -> bool:
 
 async def check_access(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
     user = update.effective_user
-    if not user or not is_authorized(user.id):
+    if not user:
+        return False
+
+    # Check if user matches a pending @username authorization
+    if not is_authorized(user.id) and user.username:
+        claimed = manager_auth.claim_pending_username(
+            user_id=user.id,
+            username=user.username,
+            display_name=user.full_name or user.first_name or "",
+        )
+        if claimed:
+            logger.info(f"User {user.id} claimed pending username @{user.username}")
+
+    if not is_authorized(user.id):
         await notify_unauthorized_access(update, context)
         return False
+
     if not is_authenticated(user.id):
         text = (
             "🔒 <b>COMMAND CENTER LOCKED</b>\n"
@@ -744,6 +859,66 @@ async def check_access(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bo
             await update.effective_message.reply_text(text, parse_mode="HTML")
         return False
     return True
+
+
+async def check_permission(update: Update, context: ContextTypes.DEFAULT_TYPE, perm_key: str, action_name: str) -> bool:
+    """Verify that user has required capability. Owner bypasses all checks."""
+    user = update.effective_user
+    if not user:
+        return False
+    if manager_auth.is_owner(user.id):
+        return True
+    if not manager_auth.has_permission(user.id, perm_key):
+        msg = (
+            f"⛔ <b>ACCESS DENIED: INSUFFICIENT PRIVILEGES</b>\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"Action: <b>{html.escape(action_name)}</b>\n"
+            f"Required Permission: <code>{perm_key}</code>\n"
+            f"Your Role: <code>{manager_auth.get_user_role(user.id).upper()}</code>\n\n"
+            f"<i>Contact the fleet owner to request this capability.</i>"
+        )
+        if update.callback_query:
+            await update.callback_query.answer(f"⛔ Denied: requires {perm_key}", show_alert=True)
+        else:
+            await update.effective_message.reply_text(msg, parse_mode="HTML")
+        manager_auth.record_audit(user.id, user.username or str(user.id), "PERMISSION_DENIED", "", f"{perm_key} for {action_name}")
+        return False
+    return True
+
+
+async def check_owner_only(update: Update, context: ContextTypes.DEFAULT_TYPE, action_name: str) -> bool:
+    """Verify that user is the primary Super Admin Owner."""
+    user = update.effective_user
+    if not user or not manager_auth.is_owner(user.id):
+        msg = (
+            f"⛔ <b>FLEET OWNER PRIVILEGE REQUIRED</b>\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"<b>{html.escape(action_name)}</b> is strictly restricted to the primary Fleet Owner."
+        )
+        if update.callback_query:
+            await update.callback_query.answer("⛔ Restricted to Fleet Owner only.", show_alert=True)
+        else:
+            await update.effective_message.reply_text(msg, parse_mode="HTML")
+        if user:
+            manager_auth.record_audit(user.id, user.username or str(user.id), "OWNER_ONLY_BLOCKED", "", f"Blocked: {action_name}")
+        return False
+    return True
+
+
+async def execute_remove_manager(user_id: int, bot) -> bool:
+    """Remove manager from storage and wipe all bot artifacts from their phone."""
+    removed = manager_auth.remove_manager(user_id)
+    authenticated_sessions.pop(user_id, None)
+    try:
+        await bot.delete_chat_menu_button(chat_id=user_id)
+    except Exception as e:
+        logger.debug(f"Could not delete chat menu button for {user_id}: {e}")
+    try:
+        await bot.set_my_commands([], scope=BotCommandScopeChat(chat_id=user_id))
+    except Exception as e:
+        logger.debug(f"Could not wipe commands for {user_id}: {e}")
+    manager_auth.record_audit(user_id, str(user_id), "MANAGER_REVOKED", "", "Manager access revoked and Telegram UI wiped")
+    return removed
 
 
 async def notify_unauthorized_access(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -777,13 +952,17 @@ async def notify_unauthorized_access(update: Update, context: ContextTypes.DEFAU
 #   PC SELECTION HELPERS
 # ═══════════════════════════════════════════════════════════════════════
 
-def get_selected_pc(context: ContextTypes.DEFAULT_TYPE) -> Optional[dict]:
+def get_selected_pc(context: ContextTypes.DEFAULT_TYPE, user_id: int = 0) -> Optional[dict]:
     """Get the currently selected PC info from user session (defaults to Host PC or first available)."""
     pc = context.user_data.get("selected_pc")
     if pc:
-        return pc
+        if not user_id or manager_auth.can_manage_pc(user_id, pc.get("name", "")):
+            return pc
+        context.user_data.pop("selected_pc", None)
     fleet = load_fleet()
     pcs = fleet.get("pcs", [])
+    if user_id:
+        pcs = manager_auth.get_allowed_pcs(user_id, pcs)
     if pcs:
         host_pc = next((p for p in pcs if p.get("is_host")), pcs[0])
         context.user_data["selected_pc"] = host_pc
@@ -791,9 +970,9 @@ def get_selected_pc(context: ContextTypes.DEFAULT_TYPE) -> Optional[dict]:
     return None
 
 
-def get_agent(context: ContextTypes.DEFAULT_TYPE) -> Optional[AgentClient]:
+def get_agent(context: ContextTypes.DEFAULT_TYPE, user_id: int = 0) -> Optional[AgentClient]:
     """Get AgentClient for currently selected PC."""
-    pc = get_selected_pc(context)
+    pc = get_selected_pc(context, user_id)
     if not pc:
         return None
     fleet = load_fleet()
@@ -802,9 +981,11 @@ def get_agent(context: ContextTypes.DEFAULT_TYPE) -> Optional[AgentClient]:
 
 async def require_pc(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Optional[AgentClient]:
     """Require a PC to be selected. Returns agent or None (with user prompt)."""
-    agent = get_agent(context)
+    user = update.effective_user
+    user_id = user.id if user else 0
+    agent = get_agent(context, user_id)
     if not agent:
-        await show_pc_picker(update, context, prompt="⚠️ <b>No PC selected!</b>\nPlease select a PC first:")
+        await show_pc_picker(update, context, prompt="⚠️ <b>No accessible PC selected!</b>\nPlease select a PC:")
         return None
     return agent
 
@@ -864,43 +1045,68 @@ async def check_fleet_health(fleet: dict) -> Dict[str, dict]:
     return results
 
 
-def get_pc_picker_keyboard(fleet: dict, health: Dict[str, dict]) -> InlineKeyboardMarkup:
-    """Build PC selector keyboard with online/offline indicators."""
+def get_pc_picker_keyboard(fleet: dict, health: Dict[str, dict], user_id: int = 0) -> InlineKeyboardMarkup:
+    """Build PC selector keyboard with online/offline indicators and scoping."""
     buttons = []
     row = []
-    for i, pc in enumerate(fleet["pcs"]):
+    all_pcs = fleet.get("pcs", [])
+    if user_id and not manager_auth.is_owner(user_id):
+        visible_pcs = manager_auth.get_allowed_pcs(user_id, all_pcs)
+    else:
+        visible_pcs = all_pcs
+
+    for pc in visible_pcs:
         name = pc["name"]
         label = pc.get("label", name)
         h_info = health.get(name, {})
         is_online = h_info.get("online", False)
         emoji = "🟢" if is_online else "🔴"
         btn_text = f"{emoji} {label}"
-        row.append(InlineKeyboardButton(btn_text, callback_data=f"pc_select_{i}"))
+        try:
+            idx = all_pcs.index(pc)
+        except ValueError:
+            idx = 0
+        row.append(InlineKeyboardButton(btn_text, callback_data=f"pc_select_{idx}"))
         if len(row) == 2:
             buttons.append(row)
             row = []
     if row:
         buttons.append(row)
 
-    buttons.append([
-        InlineKeyboardButton("✏️ Rename PC", callback_data="fleet_rename_menu"),
-        InlineKeyboardButton("📊 Overview", callback_data="fleet_overview"),
-        InlineKeyboardButton("🔄 Refresh", callback_data="fleet_refresh"),
-    ])
+    if not user_id or manager_auth.is_owner(user_id):
+        buttons.append([
+            InlineKeyboardButton("✏️ Rename PC", callback_data="fleet_rename_menu"),
+            InlineKeyboardButton("📊 Overview", callback_data="fleet_overview"),
+            InlineKeyboardButton("🔄 Refresh", callback_data="fleet_refresh"),
+        ])
+        buttons.append([
+            InlineKeyboardButton("👥 Manage Managers", callback_data="cb_mgr_list"),
+        ])
+    else:
+        buttons.append([
+            InlineKeyboardButton("🔄 Refresh", callback_data="fleet_refresh"),
+        ])
     return InlineKeyboardMarkup(buttons)
 
 
 async def show_pc_picker(update: Update, context: ContextTypes.DEFAULT_TYPE, prompt: str = None):
     """Show the PC selection menu."""
+    user = update.effective_user
+    user_id = user.id if user else 0
     fleet = load_fleet()
     health = await check_fleet_health(fleet)
 
-    if not fleet["pcs"]:
+    all_pcs = fleet.get("pcs", [])
+    if user_id and not manager_auth.is_owner(user_id):
+        visible_pcs = manager_auth.get_allowed_pcs(user_id, all_pcs)
+    else:
+        visible_pcs = all_pcs
+
+    if not visible_pcs:
         text = (
-            "⚠️ <b>NO PCs REGISTERED</b>\n\n"
-            "No PCs have been registered yet.\n"
-            "Plug your USB pendrive into any PC and double-click <code>install.bat</code>.\n\n"
-            "The PC will automatically register and appear here within seconds."
+            "⚠️ <b>NO ACCESSIBLE PCs</b>\n\n"
+            "There are currently no PCs assigned to your account or registered in the fleet.\n"
+            "Please contact the fleet owner to assign devices to your profile."
         )
         if update.callback_query:
             await update.callback_query.edit_message_text(text, parse_mode="HTML")
@@ -908,15 +1114,16 @@ async def show_pc_picker(update: Update, context: ContextTypes.DEFAULT_TYPE, pro
             await update.effective_message.reply_text(text, parse_mode="HTML")
         return
 
-    online_count = sum(1 for v in health.values() if v.get("online"))
+    online_count = sum(1 for p in visible_pcs if health.get(p["name"], {}).get("online"))
 
     header = prompt or (
         f"🛡️ <b>PC REMOTE SENTINEL — FLEET COMMAND CENTER</b>\n"
         f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"📡 <b>Fleet Status:</b> <code>{online_count}/{len(fleet['pcs'])}</code> PCs online\n\n"
+        f"📡 <b>Fleet Status:</b> <code>{online_count}/{len(visible_pcs)}</code> PCs online\n"
+        f"👤 <b>Role:</b> <code>{manager_auth.get_user_role(user_id).upper()}</code>\n\n"
         f"<i>Select a PC to control:</i>"
     )
-    keyboard = get_pc_picker_keyboard(fleet, health)
+    keyboard = get_pc_picker_keyboard(fleet, health, user_id)
 
     if update.callback_query:
         try:
@@ -984,46 +1191,115 @@ async def show_rename_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 #   COMMAND CENTER KEYBOARDS (same layout as before, with "Back to PCs")
 # ═══════════════════════════════════════════════════════════════════════
 
-def get_main_keyboard() -> InlineKeyboardMarkup:
+def get_main_keyboard(user_id: int = 0) -> InlineKeyboardMarkup:
+    is_own = manager_auth.is_owner(user_id) if user_id else True
+    buttons = []
+
+    # Row 1: System Status & Screenshot
+    r1 = [InlineKeyboardButton("📊 System Status", callback_data="cb_status")]
+    if is_own or manager_auth.has_permission(user_id, "can_screen"):
+        r1.append(InlineKeyboardButton("📸 Screenshot", callback_data="cb_shot"))
+    buttons.append(r1)
+
+    # Row 2: Track & Lockdown
+    r2 = []
+    if is_own or manager_auth.has_permission(user_id, "can_track"):
+        r2.append(InlineKeyboardButton("📍 Track Laptop", callback_data="cb_track"))
+    if is_own or manager_auth.has_permission(user_id, "can_lockdown"):
+        r2.append(InlineKeyboardButton("🚨 Lockdown", callback_data="cb_lockdown_menu"))
+    if r2:
+        buttons.append(r2)
+
+    # Row 3: Live Screen Cast & Mouse
+    r3 = []
+    if is_own or manager_auth.has_permission(user_id, "can_screen"):
+        r3.append(InlineKeyboardButton("📺 Live Screen Cast", callback_data="cb_cast_menu"))
+    if is_own or manager_auth.has_permission(user_id, "can_input"):
+        r3.append(InlineKeyboardButton("🖱️ Remote Mouse & Type", callback_data="cb_mouse_menu"))
+    if r3:
+        buttons.append(r3)
+
+    # Row 4: Desktops & Screen Video
+    r4 = []
+    if is_own or manager_auth.has_permission(user_id, "can_screen"):
+        r4.append(InlineKeyboardButton("🪟 Desktops & Windows", callback_data="cb_desktop_menu"))
+        r4.append(InlineKeyboardButton("🎥 Screen Video", callback_data="cb_screen_menu"))
+    if r4:
+        buttons.append(r4)
+
+    # Row 5: Webcam & Media
+    r5 = []
+    if is_own or manager_auth.has_permission(user_id, "can_webcam"):
+        r5.append(InlineKeyboardButton("📷 Webcam Menu", callback_data="cb_webcam_menu"))
+    if is_own or manager_auth.has_permission(user_id, "can_media"):
+        r5.append(InlineKeyboardButton("🎵 Media & Volume", callback_data="cb_media_menu"))
+    if r5:
+        buttons.append(r5)
+
+    # Row 6: Power & Processes
+    r6 = []
+    if is_own or manager_auth.has_permission(user_id, "can_power"):
+        r6.append(InlineKeyboardButton("⚡ Power & Sleep", callback_data="cb_power_menu"))
+    r6.append(InlineKeyboardButton("💻 Top Processes", callback_data="cb_top"))
+    buttons.append(r6)
+
+    # Row 7: Clipboard & TTS
+    r7 = []
+    if is_own or manager_auth.has_permission(user_id, "can_input"):
+        r7.append(InlineKeyboardButton("📋 Clipboard Tools", callback_data="cb_clip_menu"))
+    if is_own or manager_auth.has_permission(user_id, "can_media"):
+        r7.append(InlineKeyboardButton("🗣️ Speak / TTS", callback_data="cb_tts_info"))
+    if r7:
+        buttons.append(r7)
+
+    # Row 8: Alarm & Update
+    r8 = []
+    if is_own or manager_auth.has_permission(user_id, "can_media"):
+        r8.append(InlineKeyboardButton("⏰ Alarm & Siren", callback_data="cb_alarm_menu"))
+    if is_own:
+        r8.append(InlineKeyboardButton("🔄 Push Update", callback_data="cb_update_agent"))
+    if r8:
+        buttons.append(r8)
+
+    # Row 9: File Explorer & Storage
+    r9 = []
+    if is_own or manager_auth.has_permission(user_id, "can_files"):
+        r9.append(InlineKeyboardButton("📁 File Explorer", callback_data="cb_fs_menu"))
+        r9.append(InlineKeyboardButton("🧹 Clean Storage", callback_data="cb_clean"))
+    if r9:
+        buttons.append(r9)
+
+    # Row 10: Rename & Refresh
+    r10 = []
+    if is_own:
+        r10.append(InlineKeyboardButton("✏️ Rename PC", callback_data="cb_rename_current"))
+    r10.append(InlineKeyboardButton("🔄 Refresh", callback_data="cb_menu"))
+    buttons.append(r10)
+
+    # Bottom Row: Network & Switch PC
+    buttons.append([
+        InlineKeyboardButton("🌐 Network Ping", callback_data="cb_net_ping"),
+        InlineKeyboardButton("🔙 Switch PC", callback_data="fleet_picker"),
+    ])
+    return InlineKeyboardMarkup(buttons)
+
+
+def get_lockdown_keyboard(is_active: bool = False) -> InlineKeyboardMarkup:
+    if is_active:
+        return InlineKeyboardMarkup([
+            [InlineKeyboardButton("🔓 Disarm / Release Lockdown", callback_data="cb_lockdown_disarm")],
+            [
+                InlineKeyboardButton("📍 Track Location", callback_data="cb_track"),
+                InlineKeyboardButton("📸 Intruder Photo", callback_data="cb_webcam_shot"),
+            ],
+            [InlineKeyboardButton("🔙 Back to Menu", callback_data="cb_menu")],
+        ])
     return InlineKeyboardMarkup([
+        [InlineKeyboardButton("🚨 Trigger Emergency Lockdown (Loud Siren)", callback_data="cb_lockdown_loud")],
+        [InlineKeyboardButton("🤫 Silent Lockdown (Stealth Lock)", callback_data="cb_lockdown_silent")],
         [
-            InlineKeyboardButton("📊 System Status", callback_data="cb_status"),
-            InlineKeyboardButton("📸 Screenshot", callback_data="cb_shot"),
-        ],
-        [
-            InlineKeyboardButton("📺 Live Screen Cast", callback_data="cb_cast_menu"),
-            InlineKeyboardButton("🖱️ Remote Mouse & Type", callback_data="cb_mouse_menu"),
-        ],
-        [
-            InlineKeyboardButton("🪟 Desktops & Windows", callback_data="cb_desktop_menu"),
-            InlineKeyboardButton("🎥 Screen Video", callback_data="cb_screen_menu"),
-        ],
-        [
-            InlineKeyboardButton("📷 Webcam Menu", callback_data="cb_webcam_menu"),
-            InlineKeyboardButton("🎵 Media & Volume", callback_data="cb_media_menu"),
-        ],
-        [
-            InlineKeyboardButton("⚡ Power & Sleep", callback_data="cb_power_menu"),
-            InlineKeyboardButton("💻 Top Processes", callback_data="cb_top"),
-        ],
-        [
-            InlineKeyboardButton("📋 Clipboard Tools", callback_data="cb_clip_menu"),
-            InlineKeyboardButton("🗣️ Speak / TTS", callback_data="cb_tts_info"),
-        ],
-        [
-            InlineKeyboardButton("⏰ Alarm & Siren", callback_data="cb_alarm_menu"),
-        ],
-        [
-            InlineKeyboardButton("📁 File Explorer", callback_data="cb_fs_menu"),
-            InlineKeyboardButton("🧹 Clean Storage", callback_data="cb_clean"),
-        ],
-        [
-            InlineKeyboardButton("✏️ Rename PC", callback_data="cb_rename_current"),
-            InlineKeyboardButton("🔄 Refresh", callback_data="cb_menu"),
-        ],
-        [
-            InlineKeyboardButton("🌐 Network Ping", callback_data="cb_net_ping"),
-            InlineKeyboardButton("🔙 Switch PC", callback_data="fleet_picker"),
+            InlineKeyboardButton("📍 Track Location", callback_data="cb_track"),
+            InlineKeyboardButton("🔙 Back to Menu", callback_data="cb_menu"),
         ],
     ])
 
@@ -1382,10 +1658,64 @@ def pc_label(context: ContextTypes.DEFAULT_TYPE) -> str:
 # ═══════════════════════════════════════════════════════════════════════
 
 async def handle_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle /start and /menu — show PC picker."""
+    """Handle /start and /menu — show PC picker or claim deep-link invite."""
     user = update.effective_user
     if not user:
         return
+
+    # 1. Check for single-use invite token (/start inv_xxxx)
+    if context.args and len(context.args) > 0:
+        token = context.args[0].strip()
+        if token.startswith("inv_"):
+            success, msg, mgr_rec = manager_auth.claim_invite(
+                token=token,
+                user_id=user.id,
+                username=user.username or "",
+                display_name=user.full_name or user.first_name or "",
+            )
+            if success:
+                role = mgr_rec.get("role", "manager")
+                pcs = mgr_rec.get("allowed_pcs", ["*"])
+                pc_str = "All PCs (*)" if "*" in pcs else ", ".join(pcs)
+                manager_auth.record_audit(user.id, user.username or str(user.id), "INVITE_CLAIMED", pc_str, f"Role: {role}")
+                welcome = (
+                    f"🎉 <b>WELCOME TO PC REMOTE SENTINEL!</b>\n"
+                    f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                    f"🛡️ <b>Access Granted:</b> <code>{role.upper()}</code>\n"
+                    f"🖥️ <b>Scoped Devices:</b> <code>{html.escape(pc_str)}</code>\n\n"
+                    f"You have been successfully onboarded as a fleet manager.\n"
+                    f"Select an authorized device below to begin controlling:"
+                )
+                await update.message.reply_text(welcome, parse_mode="HTML")
+                await show_pc_picker(update, context)
+                return
+            else:
+                await update.message.reply_text(f"❌ <b>Invite Error:</b> {html.escape(msg)}", parse_mode="HTML")
+                return
+
+    # 2. Check for pending username pre-authorization
+    if not is_authorized(user.id) and user.username:
+        claimed = manager_auth.claim_pending_username(
+            user_id=user.id,
+            username=user.username,
+            display_name=user.full_name or user.first_name or "",
+        )
+        if claimed:
+            role = claimed.get("role", "manager")
+            pcs = claimed.get("allowed_pcs", ["*"])
+            pc_str = "All PCs (*)" if "*" in pcs else ", ".join(pcs)
+            manager_auth.record_audit(user.id, user.username, "USERNAME_CLAIMED", pc_str, f"Role: {role}")
+            welcome = (
+                f"🎉 <b>WELCOME TO PC REMOTE SENTINEL!</b>\n"
+                f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                f"🛡️ <b>Access Granted:</b> <code>{role.upper()}</code>\n"
+                f"🖥️ <b>Scoped Devices:</b> <code>{html.escape(pc_str)}</code>\n\n"
+                f"Your Telegram account (@{html.escape(user.username)}) was pre-authorized by the fleet owner.\n"
+                f"Select an authorized device below to begin controlling:"
+            )
+            await update.message.reply_text(welcome, parse_mode="HTML")
+            await show_pc_picker(update, context)
+            return
 
     if not config.AUTHORIZED_USER_IDS:
         await update.message.reply_text(
@@ -1414,10 +1744,10 @@ async def handle_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     # If a PC is already selected, show its command center
-    pc = get_selected_pc(context)
+    pc = get_selected_pc(context, user.id)
     if pc:
         label = pc.get("label", pc.get("name", "Host PC"))
-        agent = get_agent(context)
+        agent = get_agent(context, user.id)
         try:
             # If target PC is local host and agent is offline, revive it silently
             if agent and agent.is_local:
@@ -1431,7 +1761,7 @@ async def handle_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"<b>Uptime:</b> <code>{stats['uptime']}</code>\n\n"
                 f"<i>Tap below or send commands to control this PC:</i>"
             )
-            await update.message.reply_text(text, reply_markup=get_main_keyboard(), parse_mode="HTML")
+            await update.message.reply_text(text, reply_markup=get_main_keyboard(user.id), parse_mode="HTML")
         except Exception:
             # Auto-revive local host agent if down
             if pc.get("is_host") or pc.get("ip") in ("127.0.0.1", "localhost"):
@@ -1441,6 +1771,309 @@ async def handle_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     await show_pc_picker(update, context)
+
+
+# ═══════════════════════════════════════════════════════════════════════
+#   DELEGATED MANAGERS & ACCESS CONTROL HANDLERS
+# ═══════════════════════════════════════════════════════════════════════
+
+def get_managers_overview_keyboard() -> InlineKeyboardMarkup:
+    """Build manager list with management action buttons."""
+    buttons = []
+    managers = manager_auth.list_managers()
+    for mgr in managers:
+        uid = mgr.get("user_id")
+        name = mgr.get("display_name") or mgr.get("username") or str(uid)
+        role = mgr.get("role", "manager")
+        btn_text = f"👤 {name} ({role.upper()})"
+        buttons.append([
+            InlineKeyboardButton(btn_text, callback_data=f"cb_mgr_view_{uid}"),
+            InlineKeyboardButton("🗑️ Revoke", callback_data=f"cb_mgr_del_{uid}"),
+        ])
+    buttons.append([
+        InlineKeyboardButton("➕ Create Invite Link", callback_data="cb_mgr_invite_quick"),
+        InlineKeyboardButton("📜 Audit Log", callback_data="cb_mgr_audit"),
+    ])
+    buttons.append([
+        InlineKeyboardButton("🔙 Back to Fleet", callback_data="fleet_picker"),
+    ])
+    return InlineKeyboardMarkup(buttons)
+
+
+def get_manager_detail_keyboard(mgr_uid: int) -> InlineKeyboardMarkup:
+    """Build granular permissions toggle keyboard for a specific manager."""
+    mgr = manager_auth.get_manager(mgr_uid)
+    if not mgr:
+        return InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back to Managers", callback_data="cb_mgr_list")]])
+
+    perms = mgr.get("permissions", {})
+    labels = {
+        "can_power": "⚡ Power",
+        "can_screen": "📸 Screen",
+        "can_input": "🖱️ Input",
+        "can_media": "🎵 Media",
+        "can_webcam": "📷 Webcam",
+        "can_files": "📁 Files",
+        "can_terminal": "💻 Terminal",
+        "can_track": "📍 Track",
+        "can_lockdown": "🚨 Lockdown",
+    }
+    buttons = []
+    row = []
+    for p_key, p_label in labels.items():
+        enabled = perms.get(p_key, False)
+        status_emoji = "✅" if enabled else "❌"
+        row.append(InlineKeyboardButton(f"{status_emoji} {p_label}", callback_data=f"cb_mgr_tog_{mgr_uid}_{p_key}"))
+        if len(row) == 2:
+            buttons.append(row)
+            row = []
+    if row:
+        buttons.append(row)
+
+    buttons.append([
+        InlineKeyboardButton("🗑️ Revoke Access", callback_data=f"cb_mgr_del_{mgr_uid}"),
+        InlineKeyboardButton("🔙 Back to Managers", callback_data="cb_mgr_list"),
+    ])
+    return InlineKeyboardMarkup(buttons)
+
+
+async def handle_managers(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /managers — manage delegated fleet managers."""
+    if not await check_access(update, context):
+        return
+    if not await check_owner_only(update, context, "Manager Administration (/managers)"):
+        return
+
+    managers = manager_auth.list_managers()
+    invites = manager_auth.list_pending_invites()
+    pending_u = manager_auth.data.get("pending_by_username", {})
+
+    lines = [
+        "👥 <b>FLEET DELEGATION & MANAGER ACCESS CONTROL</b>",
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+        f"👑 <b>Super Admin (Owner):</b> <code>{len(config.AUTHORIZED_USER_IDS)}</code>",
+        f"👤 <b>Active Managers:</b> <code>{len(managers)}</code>",
+        f"🎟️ <b>Active Invites:</b> <code>{len(invites)}</code>",
+        f"⏳ <b>Pending Usernames:</b> <code>{len(pending_u)}</code>\n",
+    ]
+
+    if managers:
+        lines.append("<b>Registered Managers:</b>")
+        for m in managers:
+            uid = m.get("user_id")
+            uname = f"@{m.get('username')}" if m.get("username") else f"ID: {uid}"
+            role = m.get("role", "manager").upper()
+            pcs = m.get("allowed_pcs", ["*"])
+            pc_str = "All PCs" if "*" in pcs else ", ".join(pcs)
+            lines.append(f"• <b>{html.escape(m.get('display_name', ''))}</b> ({html.escape(uname)}) — <code>{role}</code>\n  └ Devices: <code>{html.escape(pc_str)}</code>")
+        lines.append("")
+
+    if invites:
+        lines.append("<b>Pending Invite Links:</b>")
+        for inv in invites:
+            tok = inv.get("token")
+            role = inv.get("role", "manager").upper()
+            lines.append(f"• Token: <code>{tok}</code> ({role})")
+        lines.append("")
+
+    if pending_u:
+        lines.append("<b>Pre-authorized Usernames:</b>")
+        for uname, udata in pending_u.items():
+            lines.append(f"• @{html.escape(uname)} ({udata.get('role', 'manager').upper()})")
+        lines.append("")
+
+    lines.append("<i>Commands:</i>\n• <code>/invite [role] [pcs]</code> — Generate deep-link\n• <code>/addmanager @user [role] [pcs]</code> — Pre-authorize user\n• <code>/removemanager &lt;id|@user&gt;</code> — Revoke & wipe manager\n• <code>/audit</code> — View security logs")
+
+    text = "\n".join(lines)
+    kb = get_managers_overview_keyboard()
+
+    if update.callback_query:
+        await safe_telegram_call(update.callback_query.edit_message_text, text, reply_markup=kb, parse_mode="HTML")
+    else:
+        await update.effective_message.reply_text(text, reply_markup=kb, parse_mode="HTML")
+
+
+async def handle_invite(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /invite [role] [pc1,pc2] — Generate single-use onboarding deep-link."""
+    if not await check_access(update, context):
+        return
+    if not await check_owner_only(update, context, "Invite Creation (/invite)"):
+        return
+
+    role = "manager"
+    allowed_pcs = ["*"]
+    if context.args:
+        arg_role = context.args[0].lower()
+        if arg_role in DEFAULT_ROLE_PERMISSIONS:
+            role = arg_role
+        if len(context.args) > 1:
+            allowed_pcs = [p.strip() for p in context.args[1].split(",") if p.strip()]
+
+    user = update.effective_user
+    token = manager_auth.create_invite(
+        role=role,
+        allowed_pcs=allowed_pcs,
+        expires_hours=72,
+        created_by=user.id if user else 0,
+    )
+
+    bot_info = await context.bot.get_me()
+    invite_url = f"https://t.me/{bot_info.username}?start={token}"
+    pc_str = "All PCs (*)" if "*" in allowed_pcs else ", ".join(allowed_pcs)
+
+    manager_auth.record_audit(user.id if user else 0, user.username if user else "", "INVITE_CREATED", pc_str, f"Role: {role}, Token: {token}")
+
+    text = (
+        f"🎟️ <b>SINGLE-USE MANAGER INVITE CREATED</b>\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"🛡️ <b>Role:</b> <code>{role.upper()}</code>\n"
+        f"🖥️ <b>Allowed PCs:</b> <code>{html.escape(pc_str)}</code>\n"
+        f"⏳ <b>Validity:</b> 72 hours (Single use)\n\n"
+        f"🔗 <b>Onboarding Link:</b>\n"
+        f"<code>{invite_url}</code>\n\n"
+        f"👉 <i>Forward this link to your manager. As soon as they open the link in Telegram and tap Start, they will automatically gain scoped access to the bot on their phone.</i>"
+    )
+    await update.effective_message.reply_text(text, parse_mode="HTML")
+
+
+async def handle_add_manager(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /addmanager <@username> [role] [pc1,pc2] — Pre-authorize manager by Telegram username."""
+    if not await check_access(update, context):
+        return
+    if not await check_owner_only(update, context, "Add Manager (/addmanager)"):
+        return
+
+    if not context.args:
+        usage = (
+            "⚠️ <b>Usage:</b>\n"
+            "<code>/addmanager @username [role] [pc1,pc2]</code>\n\n"
+            "<b>Roles:</b> <code>admin</code>, <code>manager</code>, <code>operator</code>, <code>viewer</code>\n"
+            "<b>Example:</b> <code>/addmanager @JohnDoe operator Laptop-Office</code>"
+        )
+        await update.effective_message.reply_text(usage, parse_mode="HTML")
+        return
+
+    username = context.args[0].lstrip("@").strip()
+    role = "manager"
+    allowed_pcs = ["*"]
+    if len(context.args) > 1:
+        r = context.args[1].lower()
+        if r in DEFAULT_ROLE_PERMISSIONS:
+            role = r
+    if len(context.args) > 2:
+        allowed_pcs = [p.strip() for p in context.args[2].split(",") if p.strip()]
+
+    user = update.effective_user
+    manager_auth.add_pending_by_username(
+        username=username,
+        role=role,
+        allowed_pcs=allowed_pcs,
+        added_by=user.id if user else 0,
+    )
+    pc_str = "All PCs (*)" if "*" in allowed_pcs else ", ".join(allowed_pcs)
+    manager_auth.record_audit(user.id if user else 0, user.username if user else "", "PREAUTH_ADDED", pc_str, f"User: @{username}, Role: {role}")
+
+    bot_info = await context.bot.get_me()
+    text = (
+        f"✅ <b>PRE-AUTHORIZATION CONFIGURED</b>\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"👤 <b>Username:</b> <code>@{html.escape(username)}</code>\n"
+        f"🛡️ <b>Role:</b> <code>{role.upper()}</code>\n"
+        f"🖥️ <b>Allowed PCs:</b> <code>{html.escape(pc_str)}</code>\n\n"
+        f"✨ When <b>@{html.escape(username)}</b> opens <b>@{bot_info.username}</b> and taps <b>/start</b>, "
+        f"Sentinel will immediately recognize their account, grant them access, and show their scoped PCs."
+    )
+    await update.effective_message.reply_text(text, parse_mode="HTML")
+
+
+async def handle_remove_manager(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /removemanager <user_id or @username> — Revoke manager and scrub bot artifacts from their phone."""
+    if not await check_access(update, context):
+        return
+    if not await check_owner_only(update, context, "Remove Manager (/removemanager)"):
+        return
+
+    if not context.args:
+        await update.effective_message.reply_text("⚠️ <b>Usage:</b> <code>/removemanager &lt;user_id or @username&gt;</code>", parse_mode="HTML")
+        return
+
+    target = context.args[0].strip()
+    bot = context.bot
+
+    # If numeric user_id
+    if target.isdigit():
+        target_uid = int(target)
+        if target_uid in config.AUTHORIZED_USER_IDS:
+            await update.effective_message.reply_text("⛔ Cannot remove Primary Fleet Owner.", parse_mode="HTML")
+            return
+        removed = await execute_remove_manager(target_uid, bot)
+        if removed:
+            await update.effective_message.reply_text(
+                f"🗑️ <b>MANAGER ACCESS REVOKED</b>\n\n"
+                f"User ID <code>{target_uid}</code> has been completely removed.\n"
+                f"• Access permissions wiped.\n"
+                f"• Telegram Chat Menu Button deleted from their device.\n"
+                f"• Command suggestions erased from their app.\n"
+                f"• Any future messages from them will be immediately rejected.",
+                parse_mode="HTML"
+            )
+        else:
+            await update.effective_message.reply_text(f"⚠️ Manager with User ID <code>{target_uid}</code> was not found.", parse_mode="HTML")
+        return
+
+    # If @username
+    uname = target.lstrip("@").lower()
+    found_uid = None
+    for uid_str, m_data in manager_auth.data.get("managers", {}).items():
+        if m_data.get("username", "").lower() == uname:
+            found_uid = int(uid_str)
+            break
+
+    if found_uid:
+        await execute_remove_manager(found_uid, bot)
+        await update.effective_message.reply_text(
+            f"🗑️ <b>MANAGER @{html.escape(uname)} REVOKED</b>\n\n"
+            f"Manager removed and Telegram bot commands/menu wiped from their phone.",
+            parse_mode="HTML"
+        )
+    else:
+        pending_removed = manager_auth.remove_by_username(uname)
+        if pending_removed:
+            await update.effective_message.reply_text(f"🗑️ Removed pending pre-authorization for <b>@{html.escape(uname)}</b>.", parse_mode="HTML")
+        else:
+            await update.effective_message.reply_text(f"⚠️ No active or pending manager found for <b>@{html.escape(uname)}</b>.", parse_mode="HTML")
+
+
+async def handle_audit(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /audit — view security audit trail."""
+    if not await check_access(update, context):
+        return
+    if not await check_owner_only(update, context, "Audit Log Access (/audit)"):
+        return
+
+    logs = manager_auth.get_audit_log(15)
+    if not logs:
+        text = "📜 <b>SECURITY AUDIT LOG</b>\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n<i>No security events recorded yet.</i>"
+    else:
+        items = []
+        for entry in reversed(logs):
+            ts = entry.get("timestamp", "")[:19].replace("T", " ")
+            u = entry.get("username") or str(entry.get("user_id"))
+            act = entry.get("action", "")
+            target = entry.get("target_pc") or "Fleet"
+            det = entry.get("details", "")
+            det_str = f" ({html.escape(det[:50])})" if det else ""
+            items.append(f"• <code>[{ts}]</code> <b>{html.escape(act)}</b> by <b>{html.escape(u)}</b> on <code>{html.escape(target)}</code>{det_str}")
+        text = "📜 <b>SECURITY AUDIT LOG (Latest 15 Events)</b>\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n" + "\n".join(items)
+
+    kb = InlineKeyboardMarkup([
+        [InlineKeyboardButton("🔄 Refresh Log", callback_data="cb_mgr_audit")],
+        [InlineKeyboardButton("👥 Back to Managers", callback_data="cb_mgr_list")],
+    ])
+    if update.callback_query:
+        await safe_telegram_call(update.callback_query.edit_message_text, text, reply_markup=kb, parse_mode="HTML")
+    else:
+        await update.effective_message.reply_text(text, reply_markup=kb, parse_mode="HTML")
 
 
 async def handle_pcs(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1528,6 +2161,8 @@ async def handle_setpin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not user or not is_authorized(user.id):
         await notify_unauthorized_access(update, context)
         return
+    if not await check_owner_only(update, context, "PIN Management (/setpin)"):
+        return
 
     # If PIN currently active and user is not authenticated, require login first
     if config.BOT_PIN and not is_authenticated(user.id):
@@ -1581,6 +2216,8 @@ async def handle_removepin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not user or not is_authorized(user.id):
         await notify_unauthorized_access(update, context)
         return
+    if not await check_owner_only(update, context, "PIN Removal (/removepin)"):
+        return
 
     if not config.BOT_PIN:
         await update.effective_message.reply_text("ℹ️ No PIN is currently set.", parse_mode="HTML")
@@ -1610,6 +2247,8 @@ async def handle_removepin(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def handle_remove_pc(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Remove a PC from the fleet registry: /removepc <pc_name>"""
     if not await check_access(update, context):
+        return
+    if not await check_owner_only(update, context, "Remove PC (/removepc)"):
         return
     fleet = load_fleet()
     pcs = fleet.get("pcs", [])
@@ -1655,6 +2294,8 @@ async def handle_remove_pc(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def handle_rename(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /rename <new_name> or /rename to open rename picker."""
     if not await check_access(update, context):
+        return
+    if not await check_owner_only(update, context, "Rename PC (/rename)"):
         return
 
     if not context.args:
@@ -1755,6 +2396,8 @@ async def handle_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def handle_screenshot(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await check_access(update, context):
         return
+    if not await check_permission(update, context, "can_screen", "Screenshot (/shot)"):
+        return
     agent = await require_pc(update, context)
     if not agent:
         return
@@ -1792,6 +2435,8 @@ async def handle_screenshot(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def handle_webcam(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await check_access(update, context):
+        return
+    if not await check_permission(update, context, "can_webcam", "Webcam Snapshot (/webcam)"):
         return
     agent = await require_pc(update, context)
     if not agent:
@@ -1831,6 +2476,8 @@ async def handle_webcam(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def execute_screen_recording(update: Update, context: ContextTypes.DEFAULT_TYPE, duration: int = 10):
     if not await check_access(update, context):
         return
+    if not await check_permission(update, context, "can_screen", "Screen Video Recording"):
+        return
     agent = await require_pc(update, context)
     if not agent:
         return
@@ -1859,6 +2506,8 @@ async def execute_screen_recording(update: Update, context: ContextTypes.DEFAULT
 async def handle_record_screen(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await check_access(update, context):
         return
+    if not await check_permission(update, context, "can_screen", "Screen Video Recording"):
+        return
     if context.args and context.args[0].isdigit():
         await execute_screen_recording(update, context, duration=int(context.args[0]))
     else:
@@ -1871,6 +2520,8 @@ async def handle_record_screen(update: Update, context: ContextTypes.DEFAULT_TYP
 
 async def execute_webcam_recording(update: Update, context: ContextTypes.DEFAULT_TYPE, duration: int = 10):
     if not await check_access(update, context):
+        return
+    if not await check_permission(update, context, "can_webcam", "Webcam Video Recording"):
         return
     agent = await require_pc(update, context)
     if not agent:
@@ -1900,6 +2551,8 @@ async def execute_webcam_recording(update: Update, context: ContextTypes.DEFAULT
 async def handle_record_webcam(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await check_access(update, context):
         return
+    if not await check_permission(update, context, "can_webcam", "Webcam Video Recording"):
+        return
     duration = 10
     if context.args and context.args[0].isdigit():
         duration = int(context.args[0])
@@ -1913,6 +2566,8 @@ active_radar_tasks: dict[int, asyncio.Task] = {}
 
 async def handle_cast(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await check_access(update, context):
+        return
+    if not await check_permission(update, context, "can_screen", "Live Screen Cast (/cast)"):
         return
     agent = await require_pc(update, context)
     if not agent:
@@ -2304,6 +2959,8 @@ async def handle_type(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Type text directly into the focused PC application window."""
     if not await check_access(update, context):
         return
+    if not await check_permission(update, context, "can_input", "Remote Typing (/type)"):
+        return
     agent = await require_pc(update, context)
     if not agent:
         return
@@ -2335,6 +2992,8 @@ async def handle_key(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Simulate keypress or keyboard shortcut on PC."""
     if not await check_access(update, context):
         return
+    if not await check_permission(update, context, "can_input", "Key Simulation (/key)"):
+        return
     agent = await require_pc(update, context)
     if not agent:
         return
@@ -2365,6 +3024,8 @@ async def handle_key(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def handle_mouse(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Mouse control menu, quick clicks, and Ghost Trackpad launcher."""
     if not await check_access(update, context):
+        return
+    if not await check_permission(update, context, "can_input", "Remote Mouse & Touchpad (/mouse)"):
         return
     agent = await require_pc(update, context)
     if not agent:
@@ -2431,6 +3092,8 @@ async def handle_mouse(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def handle_say(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await check_access(update, context):
+        return
+    if not await check_permission(update, context, "can_media", "Text-to-Speech (/say)"):
         return
     agent = await require_pc(update, context)
     if not agent:
@@ -2519,6 +3182,8 @@ async def handle_open(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def handle_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await check_access(update, context):
         return
+    if not await check_permission(update, context, "can_terminal", "Shell Execution (/cmd)"):
+        return
     agent = await require_pc(update, context)
     if not agent:
         return
@@ -2527,6 +3192,8 @@ async def handle_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     command = " ".join(context.args)
     label = pc_label(context)
+    user = update.effective_user
+    manager_auth.record_audit(user.id if user else 0, user.username if user else "", "EXEC_CMD", label, command[:100])
     chat_id = update.effective_chat.id
 
     await safe_send_chat_action(context.bot, chat_id, ChatAction.TYPING)
@@ -2557,12 +3224,16 @@ async def handle_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def handle_get_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await check_access(update, context):
         return
+    if not await check_permission(update, context, "can_files", "File Access (/get)"):
+        return
     agent = await require_pc(update, context)
     if not agent:
         return
 
     label = pc_label(context)
     chat_id = update.effective_chat.id
+    user = update.effective_user
+    manager_auth.record_audit(user.id if user else 0, user.username if user else "", "FILE_ACCESS", label, (context.args[0] if context.args else "browse")[:100])
 
     # If no path specified: open interactive remote File Explorer!
     if not context.args:
@@ -2712,6 +3383,8 @@ async def handle_clean(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def handle_alarm(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await check_access(update, context):
         return
+    if not await check_permission(update, context, "can_media", "Alarm Siren (/alarm)"):
+        return
     agent = await require_pc(update, context)
     if not agent:
         return
@@ -2860,6 +3533,8 @@ async def handle_monitor(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def handle_lock(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await check_access(update, context):
         return
+    if not await check_permission(update, context, "can_power", "Workstation Lock (/lock)"):
+        return
     agent = await require_pc(update, context)
     if not agent:
         return
@@ -2880,6 +3555,8 @@ async def handle_lock(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def handle_sleep(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await check_access(update, context):
         return
+    if not await check_permission(update, context, "can_power", "Put PC to Sleep (/sleep)"):
+        return
     agent = await require_pc(update, context)
     if not agent:
         return
@@ -2895,6 +3572,317 @@ async def handle_sleep(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(f"❌ <b>Sleep failed on {html.escape(label)}:</b> {html.escape(err)}", parse_mode="HTML")
     except Exception as e:
         await update.message.reply_text(f"❌ Sleep error on {html.escape(label)}: {e}")
+
+
+# ── Tracking & Geolocation Dossier ─────────────────────────────────────
+
+async def handle_track(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await check_access(update, context):
+        return
+    if not await check_permission(update, context, "can_track", "Laptop Geolocation & Wi-Fi Tracking"):
+        return
+    agent = await require_pc(update, context)
+    if not agent:
+        return
+    chat_id = update.effective_chat.id
+    label = pc_label(context)
+    user = update.effective_user
+    manager_auth.record_audit(user.id if user else 0, user.username if user else "", "TRACK_LAPTOP", label)
+    await safe_send_chat_action(context.bot, chat_id, ChatAction.FIND_LOCATION)
+
+    loading_msg = None
+    if not update.callback_query:
+        loading_msg = await safe_reply(update, f"📍 <i>Acquiring real-time tracking dossier from {html.escape(label)}...</i>", parse_mode="HTML")
+    else:
+        try:
+            await update.callback_query.edit_message_text(f"📍 <i>Acquiring real-time tracking dossier from {html.escape(label)}...</i>", parse_mode="HTML")
+        except Exception:
+            pass
+
+    try:
+        data = await agent.get_tracking()
+        geo = data.get("geo", {})
+        battery = data.get("battery", {})
+        wifi = data.get("wifi", {})
+        session = data.get("session_state", "Normal")
+        vpn = data.get("vpn", {})
+        hw_gw = data.get("hardware_gateway", {})
+
+        lat = float(geo.get("lat", 0.0) or 0.0)
+        lon = float(geo.get("lon", 0.0) or 0.0)
+
+        city = geo.get("city") or "Unknown City"
+        region = geo.get("region") or "Unknown Region"
+        country = geo.get("country") or "Unknown Country"
+        isp = geo.get("isp") or "Unknown ISP"
+        pub_ip = geo.get("ip") or "Unknown"
+
+        vpn_active = vpn.get("active", False)
+        tunnels = vpn.get("tunnels", [])
+        if vpn_active:
+            vpn_str = f"• <b>VPN Status:</b> ⚠️ <b>ACTIVE TUNNEL</b> (<code>{', '.join(tunnels)}</code>)\n  └ <i>Public IP reflects VPN exit node; physical router anchor below:</i>\n"
+        else:
+            vpn_str = "• <b>VPN Status:</b> 🟢 Direct Connection (No VPN tunnel active)\n"
+
+        hw_gw_mac = hw_gw.get("gateway_mac") or "N/A"
+        hw_gw_ip = hw_gw.get("gateway_ip") or "N/A"
+        hw_gw_iface = hw_gw.get("physical_interface") or "Default Gateway"
+        hw_str = f"• <b>Router Hardware Anchor:</b> MAC <code>{hw_gw_mac}</code> (GW IP: <code>{hw_gw_ip}</code> via <code>{hw_gw_iface}</code>)\n"
+
+        wifi_connected = wifi.get("connected", False)
+        wifi_ssid = wifi.get("ssid") or ("Connected" if wifi_connected else "Ethernet / Cellular")
+        wifi_bssid = wifi.get("bssid") or "N/A"
+        wifi_sig = wifi.get("signal") or "N/A"
+        wifi_chan = wifi.get("channel") or "N/A"
+
+        visible = wifi.get("visible_networks", [])
+        visible_str = ""
+        if visible:
+            v_items = [f"• <code>{v.get('ssid', 'Hidden')}</code> ({v.get('bssid', '')}) [{v.get('signal', '')}]" for v in visible[:3]]
+            visible_str = "\n📶 <b>Nearby Visible Wi-Fi APs:</b>\n" + "\n".join(v_items) + "\n"
+
+        map_links = ""
+        if lat != 0.0 or lon != 0.0:
+            map_links = f"• <b>Map Links:</b> <a href=\"{geo.get('google_maps', '')}\">Google Maps</a> | <a href=\"{geo.get('osm_maps', '')}\">OpenStreetMap</a>\n"
+
+        phys_bssid_loc = geo.get("physical_bssid_location")
+        phys_loc_str = ""
+        pin_lat = lat
+        pin_lon = lon
+        if phys_bssid_loc and isinstance(phys_bssid_loc, dict):
+            p_lat = float(phys_bssid_loc.get("lat", 0.0) or 0.0)
+            p_lon = float(phys_bssid_loc.get("lon", 0.0) or 0.0)
+            if p_lat != 0.0 or p_lon != 0.0:
+                pin_lat = p_lat
+                pin_lon = p_lon
+                source = phys_bssid_loc.get("source", "Wi-Fi BSSID Triangulation")
+                phys_loc_str = (
+                    f"\n🎯 <b>HARDWARE BSSID POSITION (Anti-VPN Anchor):</b>\n"
+                    f"• <b>Physical Pin:</b> <code>{p_lat:.5f}, {p_lon:.5f}</code> (<i>{source}</i>)\n"
+                    f"• <b>Hardware Map:</b> <a href=\"https://www.google.com/maps?q={p_lat},{p_lon}\">Google Maps</a>\n"
+                )
+
+        text = (
+            f"📍 <b>LAPTOP TRACKING DOSSIER — {html.escape(label)}</b>\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"💻 <b>Device:</b> <code>{html.escape(data.get('hostname', ''))}</code> (User: <code>{html.escape(data.get('user', ''))}</code>)\n"
+            f"🔋 <b>Battery:</b> <code>{html.escape(battery.get('status_str', 'N/A'))}</code>\n"
+            f"🪟 <b>Session:</b> <code>{html.escape(session)}</code>\n"
+            f"⏱️ <b>Uptime:</b> <code>{data.get('uptime', 'N/A')}</code>\n\n"
+            f"🌐 <b>NETWORK & ROUTER ANCHORS:</b>\n"
+            f"{vpn_str}"
+            f"{hw_str}"
+            f"• <b>Active Wi-Fi:</b> <code>{html.escape(wifi_ssid)}</code> (BSSID: <code>{html.escape(wifi_bssid)}</code>)\n"
+            f"• <b>Signal / Channel:</b> <code>{html.escape(wifi_sig)}</code> (Ch: <code>{html.escape(wifi_chan)}</code>)\n"
+            f"• <b>Public IP:</b> <code>{html.escape(pub_ip)}</code> (<i>{html.escape(isp)}</i>)\n\n"
+            f"🗺️ <b>GEOLOCATION:</b>\n"
+            f"• <b>Location:</b> <b>{html.escape(city)}, {html.escape(region)}, {html.escape(country)}</b>\n"
+            f"• <b>Coordinates:</b> <code>{lat:.4f}, {lon:.4f}</code>\n"
+            f"{map_links}"
+            f"{phys_loc_str}"
+            f"{visible_str}"
+        )
+
+        buttons = [
+            [
+                InlineKeyboardButton("🔄 Refresh Location", callback_data="cb_track"),
+                InlineKeyboardButton("📸 Instant Photo", callback_data="cb_webcam_shot"),
+            ],
+            [
+                InlineKeyboardButton("🚨 Emergency Lockdown", callback_data="cb_lockdown_menu"),
+                InlineKeyboardButton("🔙 Back to Menu", callback_data="cb_menu"),
+            ],
+        ]
+        track_kb = InlineKeyboardMarkup(buttons)
+
+        if update.callback_query:
+            await safe_telegram_call(update.callback_query.edit_message_text, text, reply_markup=track_kb, parse_mode="HTML")
+        elif loading_msg:
+            await safe_edit_text(loading_msg, text, reply_markup=track_kb, parse_mode="HTML")
+        else:
+            await safe_reply(update, text, reply_markup=track_kb, parse_mode="HTML")
+
+        # Native Telegram interactive location pin (physical BSSID pin prioritised over VPN IP)
+        if pin_lat != 0.0 or pin_lon != 0.0:
+            try:
+                await context.bot.send_location(chat_id=chat_id, latitude=pin_lat, longitude=pin_lon)
+            except Exception as le:
+                logger.debug(f"Could not send native Telegram map pin: {le}")
+
+    except Exception as e:
+        err_text = f"❌ Failed to track <b>{html.escape(label)}</b>: <code>{html.escape(str(e)[:250])}</code>"
+        if update.callback_query:
+            await safe_telegram_call(update.callback_query.edit_message_text, err_text, reply_markup=get_main_keyboard(), parse_mode="HTML")
+        elif loading_msg:
+            await safe_edit_text(loading_msg, err_text, reply_markup=get_main_keyboard(), parse_mode="HTML")
+        else:
+            await safe_reply(update, err_text, parse_mode="HTML")
+
+
+# ── Laptop Emergency Lockdown ──────────────────────────────────────────
+
+async def handle_lockdown(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await check_access(update, context):
+        return
+    if not await check_permission(update, context, "can_lockdown", "Emergency Anti-Theft Lockdown"):
+        return
+    agent = await require_pc(update, context)
+    if not agent:
+        return
+    label = pc_label(context)
+    user = update.effective_user
+    manager_auth.record_audit(user.id if user else 0, user.username if user else "", "LOCKDOWN_VIEW", label)
+    try:
+        st = await agent.lockdown_status()
+        is_active = st.get("active", False)
+        status_banner = "🚨 <b>LOCKDOWN ENGAGED & GUARD ACTIVE</b> 🚨" if is_active else "🛡️ <b>STANDBY / NORMAL OPERATION</b>"
+        text = (
+            f"🚨 <b>EMERGENCY LOCKDOWN CONTROL — {html.escape(label)}</b>\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"Current State: {status_banner}\n\n"
+            f"• <b>Loud Lockdown:</b> Instantly locks workstation, blacks out screen, sounds loud siren on PC speakers, and arms background guard to automatically re-lock and take webcam photo if unlocked.\n\n"
+            f"• <b>Silent Lockdown:</b> Stealth anti-theft lockdown (no siren). Workstation is locked, screen blacked out, and guard auto-relocks on any unlock attempts while snapping intruder photos.\n\n"
+            f"• <b>Disarm:</b> Unlocks guard mode, silences siren, and restores normal PC use."
+        )
+        kb = get_lockdown_keyboard(is_active=is_active)
+        if update.callback_query:
+            await safe_telegram_call(update.callback_query.edit_message_text, text, reply_markup=kb, parse_mode="HTML")
+        else:
+            await safe_reply(update, text, reply_markup=kb, parse_mode="HTML")
+    except Exception as e:
+        await update.effective_message.reply_text(f"❌ Lockdown status error on {html.escape(label)}: {e}")
+
+
+async def handle_unlockdown(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await check_access(update, context):
+        return
+    if not await check_permission(update, context, "can_lockdown", "Disarm Lockdown"):
+        return
+    agent = await require_pc(update, context)
+    if not agent:
+        return
+    label = pc_label(context)
+    user = update.effective_user
+    manager_auth.record_audit(user.id if user else 0, user.username if user else "", "LOCKDOWN_DISARM", label)
+    try:
+        await agent.lockdown_disable()
+        await update.effective_message.reply_text(
+            f"🛡️ <b>Lockdown Disarmed on {html.escape(label)}!</b> ✅\n"
+            f"• PC returned to normal operation.\n"
+            f"• Alarm siren silenced and monitors restored.",
+            reply_markup=get_main_keyboard(),
+            parse_mode="HTML"
+        )
+    except Exception as e:
+        await update.effective_message.reply_text(f"❌ Failed to disarm lockdown on {html.escape(label)}: {e}")
+
+
+# ── Over-The-Air (OTA) Remote Agent Update ─────────────────────────────
+
+async def handle_update_agent(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await check_access(update, context):
+        return
+    if not await check_owner_only(update, context, "OTA Agent Update (/update)"):
+        return
+    agent = await require_pc(update, context)
+    if not agent:
+        return
+    label = pc_label(context)
+    user = update.effective_user
+    manager_auth.record_audit(user.id if user else 0, user.username if user else "", "OTA_UPDATE_START", label)
+    import base64
+
+    status_msg = None
+    if not update.callback_query:
+        status_msg = await safe_reply(update, f"📦 <i>Packaging latest core agent files for {html.escape(label)}...</i>", parse_mode="HTML")
+    else:
+        try:
+            await update.callback_query.edit_message_text(f"📦 <i>Packaging latest core agent files for {html.escape(label)}...</i>", parse_mode="HTML")
+        except Exception:
+            pass
+
+    try:
+        zip_bytes, packaged_files = create_agent_update_bundle()
+        if not packaged_files:
+            err = "❌ No update files found in project directory."
+            if status_msg:
+                await safe_edit_text(status_msg, err)
+            else:
+                await update.effective_message.reply_text(err)
+            return
+
+        b64_zip = base64.b64encode(zip_bytes).decode("ascii")
+        res = await agent.push_agent_update(zip_b64=b64_zip)
+
+        if res.get("ok"):
+            text = (
+                f"🔄 <b>OTA UPDATE DELIVERED TO {html.escape(label)}!</b> ✅\n"
+                f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                f"📦 <b>Files Updated ({len(packaged_files)}):</b> <code>{', '.join(packaged_files)}</code>\n"
+                f"📊 <b>Package Size:</b> <code>{len(zip_bytes) / 1024:.1f} KB</code>\n"
+                f"⚡ <b>Status:</b> Verified with zero syntax errors. Agent process restarting...\n\n"
+                f"📡 <i>You will receive a notification as soon as {html.escape(label)} reconnects!</i>"
+            )
+        else:
+            err_msg = res.get("error", "Update rejected")
+            text = f"❌ <b>OTA update rejected by {html.escape(label)}:</b>\n<code>{html.escape(err_msg)}</code>"
+
+        if update.callback_query:
+            await safe_telegram_call(update.callback_query.edit_message_text, text, reply_markup=get_main_keyboard(), parse_mode="HTML")
+        elif status_msg:
+            await safe_edit_text(status_msg, text, reply_markup=get_main_keyboard(), parse_mode="HTML")
+        else:
+            await safe_reply(update, text, reply_markup=get_main_keyboard(), parse_mode="HTML")
+    except Exception as e:
+        err = f"❌ Failed to push update to <b>{html.escape(label)}</b>: <code>{html.escape(str(e)[:250])}</code>"
+        if update.callback_query:
+            await safe_telegram_call(update.callback_query.edit_message_text, err, reply_markup=get_main_keyboard(), parse_mode="HTML")
+        elif status_msg:
+            await safe_edit_text(status_msg, err, reply_markup=get_main_keyboard(), parse_mode="HTML")
+        else:
+            await safe_reply(update, err, parse_mode="HTML")
+
+
+async def handle_update_all_fleet(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await check_access(update, context):
+        return
+    if not await check_owner_only(update, context, "Fleet-Wide OTA Update (/update_all)"):
+        return
+    user = update.effective_user
+    manager_auth.record_audit(user.id if user else 0, user.username if user else "", "OTA_UPDATE_ALL_FLEET", "ALL_PCS")
+    import base64
+    fleet = load_fleet()
+    pcs = fleet.get("pcs", [])
+    if not pcs:
+        await update.effective_message.reply_text("⚠️ No PCs registered in fleet.")
+        return
+
+    status_msg = await safe_reply(update, "🚀 <b>FLEET OTA BROADCAST UPDATE</b>\nPackaging files...", parse_mode="HTML")
+    zip_bytes, packaged_files = create_agent_update_bundle()
+    b64_zip = base64.b64encode(zip_bytes).decode("ascii")
+
+    results = []
+    for pc in pcs:
+        name = pc.get("name")
+        label = pc.get("label", name)
+        agent = AgentClient(pc, fleet.get("secret", ""))
+        try:
+            res = await agent.push_agent_update(zip_b64=b64_zip)
+            if res.get("ok"):
+                results.append(f"• <b>{html.escape(label)}</b>: ✅ Updated & Restarting")
+            else:
+                results.append(f"• <b>{html.escape(label)}</b>: ❌ {html.escape(res.get('error', 'Failed'))}")
+        except Exception as e:
+            results.append(f"• <b>{html.escape(label)}</b>: 🔴 Offline / Failed")
+
+    summary = (
+        f"🚀 <b>FLEET OTA BROADCAST COMPLETE</b>\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"📦 <b>Updated Files:</b> <code>{', '.join(packaged_files)}</code>\n\n"
+        + "\n".join(results) + "\n\n"
+        f"📡 <i>Online agents are restarting and will reconnect shortly.</i>"
+    )
+    await safe_edit_text(status_msg, summary, parse_mode="HTML")
 
 
 # ── Incoming Files, Voice, Text ────────────────────────────────────────
@@ -2913,6 +3901,34 @@ async def handle_incoming_file(update: Update, context: ContextTypes.DEFAULT_TYP
     file_obj = await context.bot.get_file(doc.file_id)
     file_bytes = await file_obj.download_as_bytearray()
     filename = doc.file_name or "file.bin"
+
+    caption = (update.message.caption or "").lower().strip()
+    # Check if user sent a file as an OTA update
+    if "/update" in caption or caption == "update":
+        label = pc_label(context)
+        import base64
+        await update.message.reply_text(f"📦 <i>Processing OTA update file '{html.escape(filename)}' for {html.escape(label)}...</i>", parse_mode="HTML")
+        if filename.endswith(".zip"):
+            b64_zip = base64.b64encode(bytes(file_bytes)).decode("ascii")
+            res = await agent.push_agent_update(zip_b64=b64_zip)
+        elif filename.endswith(".py"):
+            b64_py = base64.b64encode(bytes(file_bytes)).decode("ascii")
+            res = await agent.push_agent_update(files_dict={filename: b64_py})
+        else:
+            await update.message.reply_text("❌ Update file must be a .py script or a .zip archive.")
+            return
+
+        if res.get("ok"):
+            await update.message.reply_text(
+                f"✅ <b>OTA Update Applied on {html.escape(label)}!</b>\n"
+                f"• <b>Payload:</b> <code>{html.escape(filename)}</code>\n"
+                f"• <b>Status:</b> Files verified and agent process is restarting.\n\n"
+                f"📡 <i>You will receive a notification when {html.escape(label)} comes back online.</i>",
+                parse_mode="HTML"
+            )
+        else:
+            await update.message.reply_text(f"❌ <b>Update rejected by {html.escape(label)}:</b>\n<code>{html.escape(res.get('error', 'Unknown error'))}</code>", parse_mode="HTML")
+        return
 
     try:
         result = await agent.upload_file(filename, bytes(file_bytes))
@@ -3248,6 +4264,99 @@ async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.answer("🔒 Locked. Send /login <PIN>", show_alert=True)
             return
 
+    # ── Manager Delegation Callbacks ──────────────────────────────
+    if data == "cb_mgr_list":
+        if not manager_auth.is_owner(query.from_user.id):
+            await query.answer("⛔ Restricted to Primary Fleet Owner", show_alert=True)
+            return
+        await handle_managers(update, context)
+        return
+
+    if data == "cb_mgr_audit":
+        if not manager_auth.is_owner(query.from_user.id):
+            await query.answer("⛔ Restricted to Primary Fleet Owner", show_alert=True)
+            return
+        await handle_audit(update, context)
+        return
+
+    if data == "cb_mgr_invite_quick":
+        if not manager_auth.is_owner(query.from_user.id):
+            await query.answer("⛔ Restricted to Primary Fleet Owner", show_alert=True)
+            return
+        token = manager_auth.create_invite(role="manager", allowed_pcs=["*"], created_by=query.from_user.id)
+        bot_info = await context.bot.get_me()
+        inv_url = f"https://t.me/{bot_info.username}?start={token}"
+        msg = (
+            f"🎟️ <b>SINGLE-USE MANAGER INVITE CREATED</b>\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"🔗 <b>Link:</b> <code>{inv_url}</code>\n\n"
+            f"Forward this link to the manager you want to onboard."
+        )
+        await query.message.reply_text(msg, parse_mode="HTML")
+        return
+
+    if data.startswith("cb_mgr_view_"):
+        if not manager_auth.is_owner(query.from_user.id):
+            await query.answer("⛔ Restricted to Primary Fleet Owner", show_alert=True)
+            return
+        mgr_uid = int(data.split("_")[-1])
+        mgr = manager_auth.get_manager(mgr_uid)
+        if not mgr:
+            await query.answer("Manager not found", show_alert=True)
+            return
+        name = mgr.get("display_name") or mgr.get("username") or str(mgr_uid)
+        role = mgr.get("role", "manager").upper()
+        pcs = mgr.get("allowed_pcs", ["*"])
+        pc_str = "All PCs (*)" if "*" in pcs else ", ".join(pcs)
+        added_at = mgr.get("added_at", "Unknown")[:10]
+        text = (
+            f"👤 <b>MANAGER PROFILE: {html.escape(name)}</b>\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"🆔 <b>Telegram ID:</b> <code>{mgr_uid}</code>\n"
+            f"🛡️ <b>Role:</b> <code>{role}</code>\n"
+            f"🖥️ <b>Allowed Devices:</b> <code>{html.escape(pc_str)}</code>\n"
+            f"📅 <b>Added:</b> <code>{added_at}</code>\n\n"
+            f"<i>Tap below to toggle granular capabilities:</i>"
+        )
+        kb = get_manager_detail_keyboard(mgr_uid)
+        await safe_telegram_call(query.edit_message_text, text, reply_markup=kb, parse_mode="HTML")
+        return
+
+    if data.startswith("cb_mgr_tog_"):
+        if not manager_auth.is_owner(query.from_user.id):
+            await query.answer("⛔ Restricted to Primary Fleet Owner", show_alert=True)
+            return
+        parts = data.split("_")
+        mgr_uid = int(parts[3])
+        perm_key = "_".join(parts[4:])
+        new_val = manager_auth.toggle_permission(mgr_uid, perm_key)
+        await query.answer(f"{perm_key}: {'Enabled' if new_val else 'Disabled'}")
+        kb = get_manager_detail_keyboard(mgr_uid)
+        await safe_telegram_call(query.edit_message_reply_markup, reply_markup=kb)
+        return
+
+    if data.startswith("cb_mgr_del_"):
+        if not manager_auth.is_owner(query.from_user.id):
+            await query.answer("⛔ Restricted to Primary Fleet Owner", show_alert=True)
+            return
+        mgr_uid = int(data.split("_")[-1])
+        kb = InlineKeyboardMarkup([
+            [InlineKeyboardButton("⚠️ Yes, Revoke and Wipe", callback_data=f"cb_mgr_delyes_{mgr_uid}")],
+            [InlineKeyboardButton("❌ Cancel", callback_data="cb_mgr_list")],
+        ])
+        await safe_telegram_call(query.edit_message_text, f"⚠️ <b>Are you sure you want to revoke Manager ID {mgr_uid}?</b>\n\nThis will revoke their access, delete the bot menu button, and wipe commands on their device.", reply_markup=kb, parse_mode="HTML")
+        return
+
+    if data.startswith("cb_mgr_delyes_"):
+        if not manager_auth.is_owner(query.from_user.id):
+            await query.answer("⛔ Restricted to Primary Fleet Owner", show_alert=True)
+            return
+        mgr_uid = int(data.split("_")[-1])
+        await execute_remove_manager(mgr_uid, context.bot)
+        await query.answer("Manager revoked successfully!", show_alert=True)
+        await handle_managers(update, context)
+        return
+
     # ── Fleet Navigation ──────────────────────────────────────────
     if data == "fleet_picker":
         context.user_data.pop("selected_pc", None)
@@ -3259,10 +4368,16 @@ async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if data == "fleet_rename_menu":
+        if not manager_auth.is_owner(query.from_user.id):
+            await query.answer("⛔ Restricted to Primary Fleet Owner", show_alert=True)
+            return
         await show_rename_menu(update, context)
         return
 
     if data.startswith("cb_rename_pick_"):
+        if not manager_auth.is_owner(query.from_user.id):
+            await query.answer("⛔ Restricted to Primary Fleet Owner", show_alert=True)
+            return
         idx = int(data.split("_")[-1])
         fleet = load_fleet()
         if idx < len(fleet["pcs"]):
@@ -3282,6 +4397,9 @@ async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if data == "cb_rename_current":
+        if not manager_auth.is_owner(query.from_user.id):
+            await query.answer("⛔ Restricted to Primary Fleet Owner", show_alert=True)
+            return
         pc = get_selected_pc(context)
         if pc:
             context.user_data["awaiting_pc_rename"] = pc["name"]
@@ -3301,6 +4419,9 @@ async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if data == "fleet_overview":
+        if not manager_auth.is_owner(query.from_user.id):
+            await query.answer("⛔ Restricted to Primary Fleet Owner", show_alert=True)
+            return
         fleet = load_fleet()
         health = await check_fleet_health(fleet)
         lines = ["📊 <b>FLEET OVERVIEW</b>\n" + "━" * 28]
@@ -3325,6 +4446,9 @@ async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         fleet = load_fleet()
         if idx < len(fleet["pcs"]):
             pc = fleet["pcs"][idx]
+            if not manager_auth.can_manage_pc(query.from_user.id, pc["name"]):
+                await query.answer("⛔ Access to this device is restricted for your account.", show_alert=True)
+                return
             context.user_data["selected_pc"] = pc
             label = pc.get("label", pc["name"])
 
@@ -3336,7 +4460,7 @@ async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     [InlineKeyboardButton("🔄 Retry", callback_data=data)],
                     [InlineKeyboardButton("🔙 Back to PC List", callback_data="fleet_picker")],
                 ]
-                if not pc.get("is_host"):
+                if not pc.get("is_host") and manager_auth.is_owner(query.from_user.id):
                     offline_buttons.insert(1, [InlineKeyboardButton("🗑️ Remove PC from Fleet", callback_data=f"cb_del_pc_{pc['name']}")])
 
                 await query.edit_message_text(
@@ -3366,10 +4490,13 @@ async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     f"🛡️ <b>CONTROLLING: {html.escape(label)}</b>\n\n"
                     f"<i>Connected. Tap below to control:</i>"
                 )
-            await query.edit_message_text(text, reply_markup=get_main_keyboard(), parse_mode="HTML")
+            await query.edit_message_text(text, reply_markup=get_main_keyboard(query.from_user.id), parse_mode="HTML")
         return
 
     if data.startswith("cb_del_pc_"):
+        if not manager_auth.is_owner(query.from_user.id):
+            await query.answer("⛔ Restricted to Primary Fleet Owner", show_alert=True)
+            return
         target_name = data.replace("cb_del_pc_", "")
         fleet = load_fleet()
         fleet["pcs"] = [p for p in fleet.get("pcs", []) if p["name"].lower() != target_name.lower()]
@@ -3383,35 +4510,136 @@ async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # ── PC Commands (require selected PC) ─────────────────────────
 
     if data == "cb_menu":
-        pc = get_selected_pc(context)
+        pc = get_selected_pc(context, query.from_user.id)
         if pc:
             label = pc.get("label", pc["name"])
             await query.edit_message_text(
                 f"🛡️ <b>CONTROLLING: {html.escape(label)}</b>",
-                reply_markup=get_main_keyboard(), parse_mode="HTML"
+                reply_markup=get_main_keyboard(query.from_user.id), parse_mode="HTML"
             )
         else:
             await show_pc_picker(update, context)
     elif data == "cb_status":
         await handle_status(update, context)
+    elif data == "cb_track":
+        await handle_track(update, context)
+    elif data == "cb_lockdown_menu":
+        await handle_lockdown(update, context)
+    elif data == "cb_lockdown_loud":
+        if not manager_auth.has_permission(query.from_user.id, "can_lockdown"):
+            await query.answer("⛔ Permission denied: can_lockdown required", show_alert=True)
+            return
+        agent = get_agent(context)
+        if not agent:
+            await query.answer("No PC selected.", show_alert=True)
+            return
+        label = pc_label(context)
+        try:
+            chat_id = query.message.chat_id if query.message else None
+            res = await agent.lockdown_enable(silent=False, alarm=True, chat_id=chat_id)
+            await query.message.reply_text(
+                f"🚨 <b>EMERGENCY LOCKDOWN ENGAGED ON {html.escape(label)}!</b>\n"
+                f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                f"🔒 Workstation Locked\n"
+                f"🔊 Deterrent Siren Sounding\n"
+                f"🖥️ Monitors Off (Blackout)\n"
+                f"🛡️ Guard Worker Active (Auto-relocks & snaps intruder on unlock attempt)",
+                reply_markup=get_lockdown_keyboard(is_active=True),
+                parse_mode="HTML"
+            )
+        except Exception as e:
+            await query.message.reply_text(f"❌ Lockdown activation error: {e}")
+    elif data == "cb_lockdown_silent":
+        if not manager_auth.has_permission(query.from_user.id, "can_lockdown"):
+            await query.answer("⛔ Permission denied: can_lockdown required", show_alert=True)
+            return
+        agent = get_agent(context)
+        if not agent:
+            await query.answer("No PC selected.", show_alert=True)
+            return
+        label = pc_label(context)
+        try:
+            chat_id = query.message.chat_id if query.message else None
+            res = await agent.lockdown_enable(silent=True, alarm=False, chat_id=chat_id)
+            await query.message.reply_text(
+                f"🤫 <b>SILENT LOCKDOWN ENGAGED ON {html.escape(label)}!</b>\n"
+                f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                f"🔒 Workstation Locked\n"
+                f"🔇 Silent Mode (No Siren)\n"
+                f"🖥️ Monitors Off\n"
+                f"🛡️ Guard Worker Active (Auto-relocks & snaps intruder on unlock attempt)",
+                reply_markup=get_lockdown_keyboard(is_active=True),
+                parse_mode="HTML"
+            )
+        except Exception as e:
+            await query.message.reply_text(f"❌ Lockdown activation error: {e}")
+    elif data == "cb_lockdown_disarm":
+        if not manager_auth.has_permission(query.from_user.id, "can_lockdown"):
+            await query.answer("⛔ Permission denied: can_lockdown required", show_alert=True)
+            return
+        agent = get_agent(context)
+        if not agent:
+            await query.answer("No PC selected.", show_alert=True)
+            return
+        label = pc_label(context)
+        try:
+            await agent.lockdown_disable()
+            await query.message.reply_text(
+                f"🛡️ <b>Lockdown Disarmed on {html.escape(label)}!</b> ✅\n"
+                f"• PC returned to normal operation.\n"
+                f"• Siren silenced and monitors restored.",
+                reply_markup=get_main_keyboard(),
+                parse_mode="HTML"
+            )
+        except Exception as e:
+            await query.message.reply_text(f"❌ Failed to disarm lockdown: {e}")
+    elif data == "cb_update_agent":
+        if not manager_auth.is_owner(query.from_user.id):
+            await query.answer("⛔ Restricted to Primary Fleet Owner", show_alert=True)
+            return
+        await handle_update_agent(update, context)
     elif data == "cb_shot":
+        if not manager_auth.has_permission(query.from_user.id, "can_screen"):
+            await query.answer("⛔ Permission denied: can_screen required", show_alert=True)
+            return
         await handle_screenshot(update, context)
     elif data in ("cb_webcam", "cb_webcam_menu"):
+        if not manager_auth.has_permission(query.from_user.id, "can_webcam"):
+            await query.answer("⛔ Permission denied: can_webcam required", show_alert=True)
+            return
         label = pc_label(context)
         await query.edit_message_text(f"📷 <b>WEBCAM — {html.escape(label)}</b>", reply_markup=get_webcam_keyboard(), parse_mode="HTML")
     elif data == "cb_webcam_shot":
+        if not manager_auth.has_permission(query.from_user.id, "can_webcam"):
+            await query.answer("⛔ Permission denied: can_webcam required", show_alert=True)
+            return
         await handle_webcam(update, context)
     elif data == "cb_rec_webcam_10":
+        if not manager_auth.has_permission(query.from_user.id, "can_webcam"):
+            await query.answer("⛔ Permission denied: can_webcam required", show_alert=True)
+            return
         await execute_webcam_recording(update, context, duration=10)
     elif data == "cb_rec_webcam_30":
+        if not manager_auth.has_permission(query.from_user.id, "can_webcam"):
+            await query.answer("⛔ Permission denied: can_webcam required", show_alert=True)
+            return
         await execute_webcam_recording(update, context, duration=30)
     elif data == "cb_screen_menu":
+        if not manager_auth.has_permission(query.from_user.id, "can_screen"):
+            await query.answer("⛔ Permission denied: can_screen required", show_alert=True)
+            return
         label = pc_label(context)
         await query.edit_message_text(f"🎥 <b>SCREEN RECORDING — {html.escape(label)}</b>", reply_markup=get_screen_keyboard(), parse_mode="HTML")
     elif data.startswith("cb_rec_screen_"):
+        if not manager_auth.has_permission(query.from_user.id, "can_screen"):
+            await query.answer("⛔ Permission denied: can_screen required", show_alert=True)
+            return
         sec = int(data.split("_")[-1])
         await execute_screen_recording(update, context, duration=sec)
     elif data == "cb_cast_menu":
+        if not manager_auth.has_permission(query.from_user.id, "can_screen"):
+            await query.answer("⛔ Permission denied: can_screen required", show_alert=True)
+            return
         agent = get_agent(context)
         if not agent:
             await show_pc_picker(update, context)
@@ -4374,6 +5602,11 @@ def main():
     app.add_handler(CommandHandler(["net", "ping", "network"], handle_net))
     app.add_handler(CommandHandler("pcs", handle_pcs))
     app.add_handler(CommandHandler("reload", handle_reload))
+    app.add_handler(CommandHandler(["managers", "delegation"], handle_managers))
+    app.add_handler(CommandHandler(["invite", "inv"], handle_invite))
+    app.add_handler(CommandHandler(["addmanager", "addmgr"], handle_add_manager))
+    app.add_handler(CommandHandler(["removemanager", "delmanager", "revokemanager"], handle_remove_manager))
+    app.add_handler(CommandHandler(["audit", "auditlog"], handle_audit))
     app.add_handler(CommandHandler("status", handle_status))
     app.add_handler(CommandHandler(["shot", "screenshot"], handle_screenshot))
     app.add_handler(CommandHandler("webcam", handle_webcam))
@@ -4403,6 +5636,11 @@ def main():
     app.add_handler(CommandHandler(["cancelalarm"], handle_cancelalarm))
     app.add_handler(CommandHandler(["lock", "lockpc"], handle_lock))
     app.add_handler(CommandHandler(["sleep", "sleeppc"], handle_sleep))
+    app.add_handler(CommandHandler(["track", "locate", "gps"], handle_track))
+    app.add_handler(CommandHandler(["lockdown", "panic"], handle_lockdown))
+    app.add_handler(CommandHandler(["unlockdown", "disarm"], handle_unlockdown))
+    app.add_handler(CommandHandler(["update", "updatepc", "ota"], handle_update_agent))
+    app.add_handler(CommandHandler(["updateall", "update_all"], handle_update_all_fleet))
     app.add_handler(CommandHandler("monitor", handle_monitor))
     app.add_handler(CommandHandler(["mouse", "touchpad", "trackpad"], handle_mouse))
     app.add_handler(CommandHandler(["type", "typing", "sendtext"], handle_type))
@@ -4423,14 +5661,25 @@ def main():
 
         def on_fleet_alert(alert_data: dict):
             pc_name = alert_data.get("pc_name", "Unknown PC")
-            label = alert_data.get("label", "Alarm")
+            alert_type = alert_data.get("type", "")
             time_str = alert_data.get("time", "")
-            alert_text = (
-                f"🚨 <b>ALARM on {html.escape(pc_name)}!</b> 🚨\n\n"
-                f"• <b>Label:</b> <code>{html.escape(label)}</code>\n"
-                f"• <b>Time:</b> <code>{time_str}</code>\n\n"
-                f"🔊 <i>Siren is ringing on PC speakers!</i>"
-            )
+
+            if alert_type == "lockdown_breach":
+                alert_text = (
+                    f"🚨🚨 <b>CRITICAL SECURITY ALERT: LOCKDOWN BREACH!</b> 🚨🚨\n\n"
+                    f"🖥️ <b>PC:</b> <code>{html.escape(pc_name)}</code>\n"
+                    f"⏱️ <b>Time:</b> <code>{time_str}</code>\n\n"
+                    f"⚠️ <i>Workstation was unlocked while under LOCKDOWN!</i>\n"
+                    f"🛡️ <b>Sentinel Action:</b> Workstation was IMMEDIATELY re-locked and intruder photo captured!"
+                )
+            else:
+                label = alert_data.get("label", "Alarm")
+                alert_text = (
+                    f"🚨 <b>ALARM on {html.escape(pc_name)}!</b> 🚨\n\n"
+                    f"• <b>Label:</b> <code>{html.escape(label)}</code>\n"
+                    f"• <b>Time:</b> <code>{time_str}</code>\n\n"
+                    f"🔊 <i>Siren is ringing on PC speakers!</i>"
+                )
             for uid in config.AUTHORIZED_USER_IDS:
                 try:
                     asyncio.create_task(application.bot.send_message(chat_id=uid, text=alert_text, parse_mode="HTML"))
@@ -4483,6 +5732,11 @@ def main():
             BotCommand("start", "Fleet Command Center"),
             BotCommand("pcs", "Switch PC / View fleet"),
             BotCommand("reload", "Reload fleet.json"),
+            BotCommand("managers", "Delegated Managers & Access Control"),
+            BotCommand("invite", "Generate Manager Onboarding Deep-Link"),
+            BotCommand("addmanager", "Pre-authorize Manager by Telegram @username"),
+            BotCommand("removemanager", "Revoke Manager & Wipe from Phone"),
+            BotCommand("audit", "Security Audit Log Trail"),
             BotCommand("login", "Authenticate with PIN"),
             BotCommand("logout", "Lock session"),
             BotCommand("setpin", "Configure/change security PIN"),
@@ -4500,6 +5754,11 @@ def main():
             BotCommand("switch", "Focus App: /switch [name]"),
             BotCommand("lock", "Lock Windows workstation"),
             BotCommand("sleep", "Put PC to sleep"),
+            BotCommand("track", "Laptop Geolocation & Wi-Fi Tracking"),
+            BotCommand("lockdown", "Emergency Laptop Anti-Theft Lockdown"),
+            BotCommand("unlockdown", "Disarm Emergency Lockdown"),
+            BotCommand("update", "Push OTA Agent Update to PC"),
+            BotCommand("update_all", "Push OTA Update to All Fleet PCs"),
             BotCommand("webcam", "Webcam Snapshot"),
             BotCommand("record_screen", "Record Desktop (10s-120s)"),
             BotCommand("record_webcam", "Record Webcam"),

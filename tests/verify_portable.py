@@ -3,7 +3,11 @@ import sys
 import py_compile
 import json
 
-installer_dir = sys.argv[1] if len(sys.argv) > 1 else r"C:\Users\Mazonia\Desktop\PC-Sentinel-SSD-Installer"
+default_dir = r"C:\Users\Mazonia\Desktop\PC-Sentinel-SSD-Installer"
+if not os.path.exists(default_dir):
+    default_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+installer_dir = sys.argv[1] if len(sys.argv) > 1 else default_dir
 print(f"=== TESTING PORTABLE INSTALLER AT: {installer_dir} ===\n")
 
 # 1. Check all required files exist

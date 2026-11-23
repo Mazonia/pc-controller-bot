@@ -29,8 +29,9 @@ import time
 import socket
 import asyncio
 import threading
+import subprocess
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 
 import httpx
@@ -84,6 +85,170 @@ from fleet_relay import FleetAgentRelay, get_network_info
 
 hardware_lock = threading.Lock()
 relay: Optional[FleetAgentRelay] = None
+
+# ── Lockdown & Security Guard State ────────────────────────────────────
+LOCKDOWN_ACTIVE: bool = False
+LOCKDOWN_CONFIG: dict = {"silent": False, "alarm": True, "start_time": None}
+_lockdown_thread: Optional[threading.Thread] = None
+_lockdown_stop_event = threading.Event()
+
+
+def _lockdown_guard_worker(chat_id: Optional[int] = None):
+    """Monitors desktop state during lockdown. If screen is unlocked, immediately re-locks and snaps intruder."""
+    logger.warning(f"🚨 Lockdown Guard Worker activated on {PC_NAME}")
+    while LOCKDOWN_ACTIVE and not _lockdown_stop_event.is_set():
+        try:
+            session = SystemController.get_session_state().lower()
+            if "unlocked" in session or "interactive desktop" in session:
+                logger.warning(f"🚨 LOCKDOWN BREACH DETECTED on {PC_NAME}! Immediate re-lock initiated.")
+                SystemController.lock_workstation()
+                SystemController.turn_off_monitors()
+
+                ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+                path = RECORDINGS_DIR / f"intruder_{ts}.jpg"
+                with hardware_lock:
+                    ok, _ = SystemController.take_webcam_photo(path)
+
+                if chat_id and ok and path.exists():
+                    caption = (
+                        f"🚨 <b>SECURITY BREACH DETECTED ON {PC_NAME}!</b>\n"
+                        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                        f"⚠️ <i>Workstation was unlocked while under LOCKDOWN!</i>\n"
+                        f"🔒 <b>Action Taken:</b> Workstation immediately re-locked.\n"
+                        f"⏱️ <b>Time:</b> <code>{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</code>"
+                    )
+                    send_photo_to_telegram(chat_id, path, caption)
+                elif chat_id and TELEGRAM_BOT_TOKEN:
+                    try:
+                        text_url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+                        httpx.post(
+                            text_url,
+                            json={
+                                "chat_id": chat_id,
+                                "text": f"🚨 <b>SECURITY BREACH ON {PC_NAME}!</b>\nWorkstation was unlocked while under LOCKDOWN! Re-locked immediately.",
+                                "parse_mode": "HTML"
+                            },
+                            timeout=5.0
+                        )
+                    except Exception:
+                        pass
+
+                if relay:
+                    relay.send_alert({
+                        "type": "lockdown_breach",
+                        "pc_name": PC_NAME,
+                        "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    })
+        except Exception as ge:
+            logger.debug(f"Lockdown guard loop exception: {ge}")
+
+        _lockdown_stop_event.wait(1.5)
+
+
+def apply_agent_update(zip_b64: Optional[str] = None, files_dict: Optional[dict] = None) -> dict:
+    """
+    Safely apply OTA code update received over Telegram/MQTT/HTTP:
+    1. Create automatic backup of current codebase in backup_updates/
+    2. Extract/write files to temporary staging folder
+    3. Validate Python syntax on all .py files using py_compile (prevents bricking)
+    4. Overwrite production files
+    5. Schedule clean process restart
+    """
+    import io
+    import zipfile
+    import base64
+    import shutil
+    import py_compile
+
+    ts = int(time.time())
+    backup_dir = BASE_DIR / "backup_updates" / f"backup_{ts}"
+    staging_dir = BASE_DIR / "_update_staging"
+
+    try:
+        staging_dir.mkdir(parents=True, exist_ok=True)
+        staged_files = []
+
+        if zip_b64:
+            raw_zip = base64.b64decode(zip_b64)
+            with zipfile.ZipFile(io.BytesIO(raw_zip)) as zf:
+                for member in zf.namelist():
+                    safe_name = Path(member).name
+                    if not safe_name:
+                        continue
+                    target_path = staging_dir / safe_name
+                    with zf.open(member) as src, open(target_path, "wb") as dst:
+                        shutil.copyfileobj(src, dst)
+                    staged_files.append(safe_name)
+        elif files_dict:
+            for fname, fcontent_b64 in files_dict.items():
+                safe_name = Path(fname).name
+                raw_bytes = base64.b64decode(fcontent_b64)
+                target_path = staging_dir / safe_name
+                with open(target_path, "wb") as f:
+                    f.write(raw_bytes)
+                staged_files.append(safe_name)
+        else:
+            return {"ok": False, "error": "No update package data provided."}
+
+        if not staged_files:
+            return {"ok": False, "error": "Update package was empty."}
+
+        # 3. Python syntax verification on all .py files in staging
+        for staged_name in staged_files:
+            if staged_name.endswith(".py"):
+                py_file = staging_dir / staged_name
+                try:
+                    py_compile.compile(str(py_file), doraise=True)
+                except py_compile.PyCompileError as pe:
+                    shutil.rmtree(staging_dir, ignore_errors=True)
+                    logger.error(f"OTA update rejected due to syntax error in {staged_name}: {pe}")
+                    return {"ok": False, "error": f"Syntax error in {staged_name}: {pe}"}
+
+        # 4. Backup existing files before overwriting
+        backup_dir.mkdir(parents=True, exist_ok=True)
+        for staged_name in staged_files:
+            existing_file = BASE_DIR / staged_name
+            if existing_file.exists():
+                shutil.copy2(existing_file, backup_dir / staged_name)
+
+        # 5. Overwrite production files
+        for staged_name in staged_files:
+            src_path = staging_dir / staged_name
+            dst_path = BASE_DIR / staged_name
+            shutil.copy2(src_path, dst_path)
+
+        shutil.rmtree(staging_dir, ignore_errors=True)
+        logger.info(f"OTA update applied successfully: {len(staged_files)} files: {staged_files}")
+
+        # 6. Schedule restart
+        def _delayed_restart():
+            time.sleep(1.2)
+            if sys.platform == "win32":
+                try:
+                    subprocess.Popen(
+                        ["cmd.exe", "/c", "timeout /t 2 /nobreak >nul & wscript.exe start_agent_hidden.vbs"],
+                        cwd=str(BASE_DIR),
+                        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0) | getattr(subprocess, "DETACHED_PROCESS", 0)
+                    )
+                except Exception as re:
+                    logger.debug(f"Subprocess launcher notice: {re}")
+            logger.info("Restarting agent process to load updated code...")
+            os._exit(0)
+
+        threading.Thread(target=_delayed_restart, daemon=True).start()
+
+        return {
+            "ok": True,
+            "success": True,
+            "msg": f"OTA update applied successfully ({len(staged_files)} files). Agent restarting...",
+            "updated_files": staged_files,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
+    except Exception as e:
+        shutil.rmtree(staging_dir, ignore_errors=True)
+        logger.error(f"Error applying OTA agent update: {e}")
+        return {"ok": False, "error": f"Failed to apply update: {e}"}
+
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -202,6 +367,7 @@ def handle_relay_command(data: dict) -> dict:
     Handle commands received via MQTT Cloud Relay.
     Works over mobile hotspots, cellular modems, or local network.
     """
+    global LOCKDOWN_ACTIVE, LOCKDOWN_CONFIG, _lockdown_thread
     cmd = data.get("cmd", "")
     params = data.get("params", {})
     chat_id = params.get("chat_id")
@@ -612,6 +778,81 @@ def handle_relay_command(data: dict) -> dict:
         except Exception as e:
             return {"ok": False, "error": f"File upload error: {e}"}
 
+    # 15. TRACKING & GEOLOCATION
+    elif cmd == "tracking":
+        info = SystemController.get_tracking_info()
+        info["pc_name"] = PC_NAME
+        return {"ok": True, "tracking": info}
+
+    # 16. EMERGENCY LOCKDOWN
+    elif cmd in ("lockdown_enable", "lockdown"):
+        silent = bool(params.get("silent", False))
+        alarm = bool(params.get("alarm", not silent))
+        chat_id = params.get("chat_id")
+
+        LOCKDOWN_ACTIVE = True
+        LOCKDOWN_CONFIG = {
+            "silent": silent,
+            "alarm": alarm,
+            "start_time": datetime.now(timezone.utc).isoformat(),
+            "chat_id": chat_id,
+        }
+        _lockdown_stop_event.clear()
+
+        # Capture evidence before locking
+        cam_ok = False
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        photo_path = RECORDINGS_DIR / f"lockdown_face_{ts}.jpg"
+        with hardware_lock:
+            cam_ok, _ = SystemController.take_webcam_photo(photo_path)
+
+        if chat_id and cam_ok and photo_path.exists():
+            caption = (
+                f"🚨 <b>EMERGENCY LOCKDOWN ENGAGED ON {PC_NAME}</b>\n"
+                f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                f"• <b>Status:</b> Workstation Locked & Guard Active\n"
+                f"• <b>Alarm Siren:</b> {'🔊 Sounding' if alarm else '🤫 Silent Mode'}\n"
+                f"• <b>Display:</b> Blackout / Monitors Off\n"
+                f"• <b>Intruder Trap:</b> Auto-relock active"
+            )
+            send_photo_to_telegram(chat_id, photo_path, caption)
+
+        if alarm:
+            SystemController.play_alert_siren("EMERGENCY LOCKDOWN")
+
+        SystemController.lock_workstation()
+        SystemController.turn_off_monitors()
+
+        if not _lockdown_thread or not _lockdown_thread.is_alive():
+            _lockdown_thread = threading.Thread(target=_lockdown_guard_worker, args=(chat_id,), daemon=True)
+            _lockdown_thread.start()
+
+        return {
+            "ok": True,
+            "active": True,
+            "silent": silent,
+            "alarm": alarm,
+            "pc_name": PC_NAME,
+            "photo_captured": cam_ok,
+        }
+
+    elif cmd in ("lockdown_disable", "unlockdown", "disarm"):
+        LOCKDOWN_ACTIVE = False
+        _lockdown_stop_event.set()
+        SystemController.stop_alarm()
+        SystemController.turn_on_monitors()
+        return {"ok": True, "active": False, "msg": "Lockdown deactivated. PC returned to normal state."}
+
+    elif cmd == "lockdown_status":
+        return {"ok": True, "active": LOCKDOWN_ACTIVE, "config": LOCKDOWN_CONFIG, "pc_name": PC_NAME}
+
+    # 17. OVER-THE-AIR (OTA) AGENT UPDATE
+    elif cmd in ("agent_update", "update_agent", "ota_update"):
+        zip_b64 = params.get("zip_b64")
+        files_dict = params.get("files")
+        res = apply_agent_update(zip_b64=zip_b64, files_dict=files_dict)
+        return res
+
     return {"ok": False, "error": f"Unknown command: '{cmd}'"}
 
 
@@ -887,6 +1128,71 @@ async def api_get_file(path: str):
 
 
 # ── Local LAN Power & Hardware Routes ────────────────────────────────
+
+@app.get("/tracking")
+async def api_tracking():
+    info = await asyncio.to_thread(SystemController.get_tracking_info)
+    info["pc_name"] = PC_NAME
+    return {"ok": True, "tracking": info}
+
+
+@app.post("/lockdown/enable")
+async def api_lockdown_enable(request: Request):
+    data = {}
+    try:
+        data = await request.json()
+    except Exception:
+        pass
+    silent = bool(data.get("silent", False))
+    alarm = bool(data.get("alarm", not silent))
+    chat_id = data.get("chat_id")
+
+    global LOCKDOWN_ACTIVE, LOCKDOWN_CONFIG, _lockdown_thread
+    LOCKDOWN_ACTIVE = True
+    LOCKDOWN_CONFIG = {
+        "silent": silent,
+        "alarm": alarm,
+        "start_time": datetime.now(timezone.utc).isoformat(),
+        "chat_id": chat_id,
+    }
+    _lockdown_stop_event.clear()
+
+    if alarm:
+        SystemController.play_alert_siren("EMERGENCY LOCKDOWN")
+
+    await asyncio.to_thread(SystemController.lock_workstation)
+    await asyncio.to_thread(SystemController.turn_off_monitors)
+
+    if not _lockdown_thread or not _lockdown_thread.is_alive():
+        _lockdown_thread = threading.Thread(target=_lockdown_guard_worker, args=(chat_id,), daemon=True)
+        _lockdown_thread.start()
+
+    return {"ok": True, "active": True, "silent": silent, "alarm": alarm, "pc_name": PC_NAME}
+
+
+@app.post("/lockdown/disable")
+async def api_lockdown_disable():
+    global LOCKDOWN_ACTIVE
+    LOCKDOWN_ACTIVE = False
+    _lockdown_stop_event.set()
+    SystemController.stop_alarm()
+    await asyncio.to_thread(SystemController.turn_on_monitors)
+    return {"ok": True, "active": False, "msg": "Lockdown deactivated. PC returned to normal."}
+
+
+@app.get("/lockdown/status")
+async def api_lockdown_status():
+    return {"ok": True, "active": LOCKDOWN_ACTIVE, "config": LOCKDOWN_CONFIG, "pc_name": PC_NAME}
+
+
+@app.post("/agent/update")
+async def api_agent_update(request: Request):
+    data = await request.json()
+    zip_b64 = data.get("zip_b64")
+    files_dict = data.get("files")
+    res = await asyncio.to_thread(apply_agent_update, zip_b64=zip_b64, files_dict=files_dict)
+    return res
+
 
 @app.post("/power/lock")
 async def api_power_lock():

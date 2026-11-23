@@ -22,6 +22,10 @@
   - [📋 Process Manager & Terminal](#process-manager-terminal)
   - [🔊 Audio, TTS & Speaker Controls](#audio-tts-speaker-controls)
   - [📁 Remote File Explorer & Clipboard](#remote-file-explorer-clipboard)
+  - [👥 Delegated Managers & Role-Based Access Control (RBAC)](#delegated-managers-rbac)
+  - [📍 Anti-VPN & Hardware-Anchored Laptop Tracking](#anti-vpn-hardware-tracking)
+  - [🚨 Emergency Laptop Anti-Theft Lockdown](#emergency-laptop-lockdown)
+  - [🔄 Over-The-Air (OTA) Remote Agent Updates](#ota-remote-updates)
   - [🛡️ Anti-Timeout & Network Resilience Shield](#anti-timeout-network-resilience-shield)
   - [🔒 Enterprise Security Architecture](#enterprise-security-architecture)
 - [🚀 Quick Start Guide](#quick-start-guide)
@@ -194,6 +198,52 @@ Traditional remote desktop tools require port forwarding, static public IPs, com
 - **Clipboard Sync (`/clip <text>`, `/getclip`)**: Read or push text directly to and from the Windows clipboard.
 - **Storage Cleaner (`/clean`)**: Audit and clean up cached recordings and downloads with explicit confirmation.
 
+### 👥 Delegated Managers & Role-Based Access Control (RBAC) <a id="delegated-managers-rbac"></a>
+- **Multi-User Fleet Delegation (`/managers`, `/invite`, `/addmanager`, `/removemanager`)**: Delegate operational access of specific PCs or the entire fleet to team members, family, or assistant managers without exposing administrative controls or private credentials.
+- **Built-in Role Hierarchy & Permissions Matrix**:
+  - **👑 Primary Owner**: Super Administrator with full, immutable authority over all PCs, manager provisioning, OTA code updates, PIN management, and audit logs.
+  - **🛡️ Admin**: Unrestricted management across authorized machines (power, screen streaming, terminal execution, webcam capture, file browsing, and lockdown).
+  - **⚙️ Manager**: Day-to-day administrative control including power management, live screen viewing, webcam capture, audio synthesis, and file access (terminal execution restricted).
+  - **🎮 Operator**: Interactive daily remote control (mouse trackpad, direct typing, hotkeys, screen capture, media control, and file download).
+  - **👁️ Viewer**: Read-only diagnostic access (live `/status`, system diagnostics, and file inspection; all destructive, power, and input capabilities disabled).
+- **Granular Capability Toggling**: Fine-tune individual permissions per manager at any time from an interactive Telegram inline menu:
+  `can_power`, `can_screen`, `can_input`, `can_media`, `can_webcam`, `can_files`, `can_terminal`, `can_track`, `can_lockdown`.
+- **PC-Specific Scoping (`allowed_pcs`)**: Restrict a manager to only designated computers (e.g., delegate `Work-Laptop` to an employee while keeping `Trading-Rig` completely invisible). Scoped managers only see their assigned PCs in `/pcs` and cannot interact with others.
+- **Dynamic Keyboard Filtering**: The Telegram reply keyboard and inline action buttons dynamically regenerate based on the authenticated user's active permissions. Buttons for unauthorized actions are completely hidden.
+- **Zero-Friction Onboarding**:
+  - **Single-Use Invite Deep Links (`/invite [role] [pc]`)**: Generates an encrypted, single-use Telegram link (`https://t.me/<bot>?start=inv_<token>`). When the invitee opens the link, the bot immediately enrolls them with their pre-assigned role and PC scope.
+  - **Username Pre-Authorization (`/addmanager @username [role]`)**: Pre-authorize team members before they have even messaged the bot. The moment they send `/start`, their Telegram account is recognized, authenticated, and provisioned.
+- **Clean Device Removal & Complete UI Wiping (`/removemanager`)**:
+  - When a manager is revoked, the bot deletes their registered Telegram Menu Button (`delete_chat_menu_button`) and clears all autocompleted commands from their Telegram client (`set_my_commands([], scope=BotCommandScopeChat)`).
+  - Any subsequent interaction is immediately blocked and logged.
+- **Tamper-Resistant Security Audit Trail (`/audit`)**: Every sensitive manager action, invite claim, role elevation, command execution, and permission change is recorded in an append-only rolling audit log with timestamps, Telegram IDs, and target PCs.
+
+### 📍 Anti-VPN & Hardware-Anchored Laptop Tracking <a id="anti-vpn-hardware-tracking"></a>
+- **Anti-VPN Geolocation Defense (`/track`)**: Traditional IP-based geolocation is easily spoofed when a laptop connects through commercial VPNs (NordVPN, ExpressVPN, Surfshark) or encrypted tunnels (WireGuard, OpenVPN, Tailscale, Cloudflare WARP, ZeroTier). Sentinel bypasses VPN masking through multi-layered hardware anchoring.
+- **Physical Default Router Gateway MAC Resolution**: Probes the low-level Windows network routing table (`route print`) and hardware ARP cache (`arp -a`) to extract the unforgeable physical BSSID/MAC address of the local Wi-Fi router or access point.
+- **Active Radio Frequency Wi-Fi BSSID Triangulation**: Scans nearby 802.11 Wi-Fi broadcast beacons (`netsh wlan show networks mode=bssid`) to calculate real-world physical coordinates even when the laptop's public internet traffic is tunneling thousands of miles away through a VPN server.
+- **Active VPN Tunnel Detection**: Automatically identifies active virtual network adapters (Wintun, TAP-Windows, WireGuard, OpenVPN, Tailscale) and flags whether the remote device is operating behind an active VPN tunnel.
+- **Interactive Telegram Map Pin**: Dispatches an interactive geographic map location pin directly into your Telegram chat prioritized to physical Wi-Fi/hardware coordinates, alongside an executive network dossier detailing public IP, physical router MAC anchor, local subnet interface, and active VPN status.
+
+### 🚨 Emergency Laptop Anti-Theft Lockdown <a id="emergency-laptop-lockdown"></a>
+- **Dual-Mode Anti-Theft Protection (`/lockdown`, `/unlockdown`)**:
+  - **🔊 Loud Deterrent Siren (`/lockdown loud`)**: Immediately locks the Windows workstation, blacks out and minimizes all active windows, sets master system volume to 100%, and blares an unrelenting high-decibel emergency siren through the laptop speakers to startle thieves and attract attention.
+  - **🥷 Silent Stealth Tracking (`/lockdown silent`)**: Silently locks the desktop and monitors unauthorized physical activity in complete stealth without tipping off an intruder.
+- **Autonomous Intruder Guard Loop (`_lockdown_guard_worker`)**:
+  - Runs a high-frequency background watchdog thread that actively monitors Windows session lock states.
+  - If an intruder attempts to bypass the lock screen or enters an incorrect password, Sentinel instantly re-engages the Windows workstation lock within milliseconds.
+  - Automatically activates the laptop webcam, captures a candid snapshot of the intruder's face, and dispatches a critical priority Telegram alert with the intruder's photo and exact hardware geolocation.
+- **Owner-Exclusive Override**: Only authorized Primary Owners can engage or disengage emergency lockdown mode.
+
+### 🔄 Over-The-Air (OTA) Remote Agent Updates <a id="ota-remote-updates"></a>
+- **Zero-Touch Remote Updates (`/update`, `/update_all`)**: Update remote target PCs and field laptops directly over the Telegram bot without physically visiting the machine, plugging in a USB drive, or reinstalling software.
+- **Encrypted OTA Payload Packaging**: The Commander Bot dynamically bundles updated agent core modules (`agent.py`, `system_controller.py`, `fleet_relay.py`, `screen_caster.py`, `manager_auth.py`) into a compressed zip archive and transmits it over AES-256-GCM encrypted relay channels.
+- **Staging Syntax Validation & Rollback Protection**:
+  - Target agents extract incoming update payloads into an isolated staging directory (`update_staging/`).
+  - Prior to application, every file undergoes bytecode compilation verification (`py_compile`). If any syntax error, incomplete transmission, or corrupted block is detected, the update aborts immediately with zero disruption to the running agent.
+  - Preserves timestamped backups in `backup_updates/` to allow automated rollback if an update fails.
+- **Silent In-Place Agent Restart**: Atomically swaps updated modules and spawns a refreshed, detached background process while gracefully terminating the legacy instance, ensuring continuous 24/7 uptime.
+
 ### 🛡️ Anti-Timeout & Network Resilience Shield <a id="anti-timeout-network-resilience-shield"></a>
 - **Engineered for High Latency & Unstable Connections**: Built specifically to survive bad internet, weak mobile hotspots, packet drop, 3G/4G/5G tethering, and cellular CGNAT environments where commands frequently time out.
 - **Intelligent Telegram API Retries (`safe_telegram_call`)**: Automatically intercepts transient timeouts, connection resets, and Telegram flood limits (`RetryAfter`) with exponential backoff retry cycles and extended 60-second read/write timeouts.
@@ -204,11 +254,15 @@ Traditional remote desktop tools require port forwarding, static public IPs, com
 - **Immediate Typing Feedback**: Emits immediate `ChatAction.TYPING` and `ChatAction.UPLOAD_PHOTO` signals so you always know a command is being processed, even over high-latency connections.
 
 ### 🔒 Enterprise Security Architecture <a id="enterprise-security-architecture"></a>
-- **User Whitelist Enforcement**: Only numeric Telegram user IDs configured in `AUTHORIZED_USER_IDS` can communicate with the bot.
-- **Intruder Alerts**: Unrecognized users are blocked immediately, and an alert with their Telegram ID and username is dispatched to the owner.
+- **User Whitelist & RBAC Delegation**: Strict Telegram User ID verification for the Primary Owner (`AUTHORIZED_USER_IDS`) paired with granular Role-Based Access Control (`managers.json`). Non-owners only access explicit capabilities (`can_power`, `can_screen`, `can_input`, `can_media`, `can_webcam`, `can_files`, `can_terminal`, `can_track`, `can_lockdown`) on permitted PCs.
+- **Intruder Alerts & Defenses**: Unrecognized users are blocked immediately, and an alert with their Telegram ID and username is dispatched to the owner.
+- **Single-Use Cryptographic Invite Tokens**: Manager invitations use 32-byte cryptographically secure random tokens (`secrets.token_hex(32)`) with constant-time HMAC comparison (`hmac.compare_digest`) and expiration limits.
+- **Instant Revocation & UI Wiping**: Removing a manager immediately deletes their chat menu button (`delete_chat_menu_button`), resets command autocompletions (`set_my_commands([])`), and revokes all operational tokens.
+- **Anti-Theft Lockdown & Intruder Snapping**: Autonomous watchdog thread guards the Windows workstation lock state, instantly relocks upon tampering, sounds deterrence sirens, and transmits intruder webcam snapshots.
 - **Process Isolation & Trading Bot Protection**: Built-in safeguards strictly prevent accidental termination of user trading bots, other running Python applications, or critical Windows OS system services (`csrss.exe`, `lsass.exe`, `smss.exe`, etc.). Blanket termination of Python by process name is strictly blocked.
 - **Strict Directory & Path Traversal Isolation**: File deletion (`/clean`) and file explorer operations strictly validate paths within whitelisted directories, preventing any access or modification to sensitive system directories or files used by other processes.
 - **AES-256-GCM End-to-End Encryption**: All MQTT relay messages and command payloads are encrypted with your shared `FLEET_SECRET`.
+- **Staging OTA Integrity Verification**: Over-the-air code updates are pre-verified via AST bytecode compilation (`py_compile`) inside an isolated staging directory (`update_staging/`) before deployment, backed by automated rollback backups in `backup_updates/`.
 - **Optional PIN Lock**: Require `/login <PIN>` with automatic session timeout and rate limiting.
 
 ---
@@ -384,6 +438,16 @@ Deploy effortlessly to external PCs with zero internet dependency using your ext
 | `/cancelalarm` | Cancel pending scheduled alarm countdown |
 | `/monitor [on\|off]` | Turn PC monitors on/off or wake screens |
 | `/clean` | Audit and clean cached recordings/downloads |
+| `/track` | Anti-VPN geolocation tracking (Wi-Fi BSSID triangulation, physical router MAC anchor, GPS map pin) |
+| `/lockdown [loud\|silent]` | Trigger emergency anti-theft lockdown (locks workstation, monitors breach, siren, snaps intruder webcam) |
+| `/unlockdown` | Deactivate emergency anti-theft lockdown mode |
+| `/update` | Push Over-The-Air (OTA) code update to active target PC |
+| `/update_all` | Push Over-The-Air (OTA) code update to all online fleet PCs |
+| `/managers` | Open Manager Delegation Dashboard & Role Permissions |
+| `/invite [role] [pc]` | Generate single-use invitation link for a new manager |
+| `/addmanager <id\|@user> [role]` | Pre-authorize a manager by Telegram ID or username |
+| `/removemanager <id\|@user>` | Revoke manager, wipe bot UI from their phone, and block access |
+| `/audit` | View manager action history and security audit trail |
 | `/net`, `/ping`, `/network` | Run network connectivity diagnostics (Telegram API latency ms, Cloud Relay broker, PC reachability) |
 | `/open <url>` | Open website or app on PC |
 | `/cmd <command>` | Execute terminal command with token masking |

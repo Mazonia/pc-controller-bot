@@ -146,7 +146,11 @@ def safe_grab_screen():
                         pass
             except Exception:
                 pass
-        raise e
+        try:
+            from PIL import Image
+            return Image.new("RGB", (1280, 720), (15, 23, 42))
+        except Exception:
+            raise e
 
 
 # Modern Dark Glass HTML5 Web Player with Cross-Network Auto-Reconnect & Virtual Desktop Controls

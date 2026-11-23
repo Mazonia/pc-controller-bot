@@ -9,6 +9,7 @@ import gc
 import time
 import math
 import re
+import socket
 import threading
 import ctypes
 try:
@@ -501,6 +502,363 @@ class SystemController:
         except Exception as e:
             logger.error(f"Monitor on error: {e}")
             return False
+
+    # ── Laptop Tracking & Geolocation ───────────────────────────────────
+
+    @staticmethod
+    def get_battery_status() -> Dict[str, Any]:
+        """Fetch laptop battery level, charging state, and remaining life."""
+        try:
+            battery = psutil.sensors_battery()
+            if not battery:
+                return {
+                    "has_battery": False,
+                    "percent": 100,
+                    "power_plugged": True,
+                    "secsleft": -1,
+                    "status_str": "AC Desktop Power (No Battery)",
+                }
+            pct = round(battery.percent, 1)
+            plugged = bool(battery.power_plugged) if battery.power_plugged is not None else False
+            secs = battery.secsleft
+
+            if plugged:
+                status_str = f"🔌 {pct:.0f}% [Charging / AC Power]" if pct < 100 else "🔌 100% [Fully Charged]"
+            else:
+                if secs is not None and secs > 0 and secs != getattr(psutil, "POWER_TIME_UNLIMITED", -2) and secs != getattr(psutil, "POWER_TIME_UNKNOWN", -1):
+                    hrs = int(secs) // 3600
+                    mins = (int(secs) % 3600) // 60
+                    time_left = f"{hrs}h {mins}m remaining"
+                else:
+                    time_left = "Calculating..."
+                status_str = f"🔋 {pct:.0f}% [On Battery — {time_left}]"
+
+            return {
+                "has_battery": True,
+                "percent": pct,
+                "power_plugged": plugged,
+                "secsleft": secs if secs is not None else -1,
+                "status_str": status_str,
+            }
+        except Exception as e:
+            logger.debug(f"Error reading battery status: {e}")
+            return {
+                "has_battery": False,
+                "percent": 100,
+                "power_plugged": True,
+                "secsleft": -1,
+                "status_str": "N/A",
+            }
+
+    @staticmethod
+    def get_wifi_details() -> Dict[str, Any]:
+        """Fetch current Wi-Fi connection parameters and nearby visible networks."""
+        result: Dict[str, Any] = {
+            "connected": False,
+            "ssid": "",
+            "bssid": "",
+            "signal": "",
+            "radio_type": "",
+            "channel": "",
+            "visible_networks": [],
+        }
+
+        if IS_WINDOWS:
+            try:
+                out = subprocess.run(
+                    ["netsh", "wlan", "show", "interfaces"],
+                    capture_output=True,
+                    text=True,
+                    timeout=2.0,
+                ).stdout
+                for line in out.splitlines():
+                    line = line.strip()
+                    if ":" in line:
+                        k, v = [x.strip() for x in line.split(":", 1)]
+                        k_lower = k.lower()
+                        if k_lower == "state" and "connected" in v.lower():
+                            result["connected"] = True
+                        elif k_lower == "ssid":
+                            result["ssid"] = v
+                        elif k_lower in ("ap bssid", "bssid"):
+                            result["bssid"] = v
+                        elif k_lower == "signal":
+                            result["signal"] = v
+                        elif k_lower == "radio type":
+                            result["radio_type"] = v
+                        elif k_lower == "channel":
+                            result["channel"] = v
+            except Exception as e:
+                logger.debug(f"Error querying netsh wlan interfaces: {e}")
+
+            try:
+                out_net = subprocess.run(
+                    ["netsh", "wlan", "show", "networks", "mode=bssid"],
+                    capture_output=True,
+                    text=True,
+                    timeout=3.0,
+                ).stdout
+                current_ssid = ""
+                current_net: Optional[Dict[str, str]] = None
+                for line in out_net.splitlines():
+                    line = line.strip()
+                    if line.startswith("SSID") and ":" in line:
+                        current_ssid = line.split(":", 1)[1].strip()
+                    elif line.startswith("BSSID") and ":" in line:
+                        bssid_val = line.split(":", 1)[1].strip()
+                        current_net = {
+                            "ssid": current_ssid or "<Hidden>",
+                            "bssid": bssid_val,
+                            "signal": "",
+                            "channel": "",
+                        }
+                        result["visible_networks"].append(current_net)
+                    elif current_net and line.startswith("Signal") and ":" in line:
+                        current_net["signal"] = line.split(":", 1)[1].strip()
+                    elif current_net and line.startswith("Channel") and ":" in line:
+                        current_net["channel"] = line.split(":", 1)[1].strip()
+                result["visible_networks"] = result["visible_networks"][:5]
+            except Exception as e:
+                logger.debug(f"Error querying visible networks: {e}")
+
+        elif IS_MAC:
+            try:
+                airport_path = "/System/Library/PrivateFrameworks/Apple80211.framework/Resources/airport"
+                if Path(airport_path).exists():
+                    out = subprocess.run([airport_path, "-I"], capture_output=True, text=True, timeout=2.0).stdout
+                    for line in out.splitlines():
+                        line = line.strip()
+                        if ":" in line:
+                            k, v = [x.strip() for x in line.split(":", 1)]
+                            if k == "SSID":
+                                result["ssid"] = v
+                                result["connected"] = True
+                            elif k == "BSSID":
+                                result["bssid"] = v
+                            elif k == "agrCtlRSSI":
+                                result["signal"] = f"{v} dBm"
+                            elif k == "channel":
+                                result["channel"] = v
+            except Exception as e:
+                logger.debug(f"macOS Wi-Fi query error: {e}")
+
+        return result
+
+    @staticmethod
+    def get_geolocation() -> Dict[str, Any]:
+        """Resolve public IP and geographic coordinates via reliable geolocation APIs."""
+        import httpx
+        endpoints = [
+            ("http://ip-api.com/json/?fields=status,message,country,countryCode,regionName,city,zip,lat,lon,isp,org,query", "ip_api"),
+            ("https://ipwhois.app/json/", "ipwhois"),
+        ]
+
+        for url, service in endpoints:
+            try:
+                resp = httpx.get(url, timeout=3.5)
+                if resp.status_code == 200:
+                    data = resp.json()
+                    if service == "ip_api" and data.get("status") == "success":
+                        lat = float(data.get("lat", 0.0))
+                        lon = float(data.get("lon", 0.0))
+                        return {
+                            "ok": True,
+                            "ip": data.get("query", ""),
+                            "city": data.get("city", "Unknown"),
+                            "region": data.get("regionName", "Unknown"),
+                            "country": data.get("country", "Unknown"),
+                            "country_code": data.get("countryCode", ""),
+                            "lat": lat,
+                            "lon": lon,
+                            "isp": data.get("isp", data.get("org", "Unknown")),
+                            "google_maps": f"https://www.google.com/maps?q={lat},{lon}",
+                            "osm_maps": f"https://www.openstreetmap.org/?mlat={lat}&mlon={lon}#map=16/{lat}/{lon}",
+                        }
+                    elif service == "ipwhois" and data.get("success", False):
+                        lat = float(data.get("latitude", 0.0))
+                        lon = float(data.get("longitude", 0.0))
+                        return {
+                            "ok": True,
+                            "ip": data.get("ip", ""),
+                            "city": data.get("city", "Unknown"),
+                            "region": data.get("region", "Unknown"),
+                            "country": data.get("country", "Unknown"),
+                            "country_code": data.get("country_code", ""),
+                            "lat": lat,
+                            "lon": lon,
+                            "isp": data.get("isp", data.get("org", "Unknown")),
+                            "google_maps": f"https://www.google.com/maps?q={lat},{lon}",
+                            "osm_maps": f"https://www.openstreetmap.org/?mlat={lat}&mlon={lon}#map=16/{lat}/{lon}",
+                        }
+            except Exception as e:
+                logger.debug(f"Geolocation lookup failed via {url}: {e}")
+                continue
+
+        return {
+            "ok": False,
+            "error": "Could not determine public IP geolocation (offline or timed out)",
+            "lat": 0.0,
+            "lon": 0.0,
+        }
+
+    @staticmethod
+    def detect_vpn_interfaces() -> Dict[str, Any]:
+        """Detect if an active VPN or tunnel adapter is routing network traffic."""
+        vpn_adapters = []
+        keywords = [
+            "vpn", "wireguard", "wintun", "tap-windows", "nordvpn", "expressvpn",
+            "openvpn", "tailscale", "zerotier", "warp", "cloudflare", "cisco",
+            "anyconnect", "fortinet", "surfshark", "proton", "mullvad", "ppp"
+        ]
+        try:
+            for iface_name, addrs in psutil.net_if_addrs().items():
+                name_lower = iface_name.lower()
+                for kw in keywords:
+                    if kw in name_lower:
+                        has_ipv4 = any(a.family == socket.AF_INET for a in addrs)
+                        if has_ipv4:
+                            vpn_adapters.append(iface_name)
+                        break
+        except Exception as e:
+            logger.debug(f"Error checking VPN adapters: {e}")
+
+        is_active = len(vpn_adapters) > 0
+        return {
+            "is_vpn_active": is_active,
+            "active": is_active,
+            "adapters": vpn_adapters,
+            "tunnels": vpn_adapters,
+        }
+
+    @staticmethod
+    def get_hardware_gateway() -> Dict[str, str]:
+        """Extract physical router gateway IP and hardware MAC address."""
+        result = {"gateway_ip": "", "gateway_mac": "", "interface_ip": "", "physical_interface": ""}
+        if IS_WINDOWS:
+            try:
+                out = subprocess.run(["route", "print", "0.0.0.0"], capture_output=True, text=True, timeout=2.0).stdout
+                matches = re.findall(r'0\.0\.0\.0\s+0\.0\.0\.0\s+([0-9.]+)\s+([0-9.]+)', out)
+                if matches:
+                    gw_ip, iface_ip = matches[0]
+                    result["gateway_ip"] = gw_ip
+                    result["interface_ip"] = iface_ip
+                    result["physical_interface"] = iface_ip
+
+                    # Resolve gateway MAC from ARP table
+                    arp_out = subprocess.run(["arp", "-a", gw_ip], capture_output=True, text=True, timeout=2.0).stdout
+                    mac_match = re.search(r'([0-9a-fA-F]{2}(?:-[0-9a-fA-F]{2}){5})', arp_out)
+                    if mac_match:
+                        result["gateway_mac"] = mac_match.group(1).replace("-", ":").upper()
+            except Exception as e:
+                logger.debug(f"Error querying physical gateway: {e}")
+        elif IS_MAC:
+            try:
+                out = subprocess.run(["route", "-n", "get", "default"], capture_output=True, text=True, timeout=2.0).stdout
+                m = re.search(r'gateway:\s*([0-9.]+)', out)
+                if m:
+                    gw_ip = m.group(1)
+                    result["gateway_ip"] = gw_ip
+                    arp_out = subprocess.run(["arp", "-n", gw_ip], capture_output=True, text=True, timeout=2.0).stdout
+                    mac_match = re.search(r'([0-9a-fA-F]{1,2}(?::[0-9a-fA-F]{1,2}){5})', arp_out)
+                    if mac_match:
+                        result["gateway_mac"] = mac_match.group(1).upper()
+            except Exception as e:
+                logger.debug(f"macOS gateway query error: {e}")
+
+        return result
+
+    @staticmethod
+    def query_wifi_bssid_location(bssid: str) -> Optional[Dict[str, Any]]:
+        """Query open Wi-Fi BSSID database to resolve physical coordinates bypassing any VPN."""
+        if not bssid or bssid.count(":") != 5:
+            return None
+        import httpx
+        try:
+            url = f"https://api.mylnikov.org/geolocation/wifi?bssid={bssid}"
+            resp = httpx.get(url, timeout=2.5)
+            if resp.status_code == 200:
+                data = resp.json()
+                if data.get("result") == 200 and data.get("data"):
+                    d = data["data"]
+                    lat = float(d.get("lat", 0.0))
+                    lon = float(d.get("lon", 0.0))
+                    if lat != 0.0 or lon != 0.0:
+                        return {
+                            "lat": lat,
+                            "lon": lon,
+                            "range_m": d.get("range", 100),
+                            "source": "Wi-Fi Router BSSID Physical Positioning",
+                            "google_maps": f"https://www.google.com/maps?q={lat},{lon}",
+                            "osm_maps": f"https://www.openstreetmap.org/?mlat={lat}&mlon={lon}#map=16/{lat}/{lon}",
+                        }
+        except Exception as e:
+            logger.debug(f"BSSID physical geolocation lookup notice: {e}")
+        return None
+
+    @staticmethod
+    def get_tracking_info() -> Dict[str, Any]:
+        """
+        Synthesize complete tracking intelligence dossier for remote laptops and PCs,
+        equipped with Anti-VPN detection and physical Wi-Fi hardware anchoring.
+        """
+        try:
+            battery = SystemController.get_battery_status()
+            wifi = SystemController.get_wifi_details()
+            geo = SystemController.get_geolocation()
+            session = SystemController.get_session_state()
+            vpn = SystemController.detect_vpn_interfaces()
+            gw = SystemController.get_hardware_gateway()
+
+            # Attempt physical Wi-Fi BSSID geolocation (bypasses software VPN)
+            physical_geo = None
+            if wifi.get("bssid"):
+                physical_geo = SystemController.query_wifi_bssid_location(wifi["bssid"])
+
+            username = os.environ.get("USERNAME") or os.environ.get("USER") or "Unknown"
+            hostname = os.environ.get("COMPUTERNAME") or socket.gethostname()
+
+            uptime_str = "Unknown"
+            try:
+                boot_time = datetime.fromtimestamp(psutil.boot_time())
+                uptime_delta = datetime.now() - boot_time
+                hours, rem = divmod(int(uptime_delta.total_seconds()), 3600)
+                mins, _ = divmod(rem, 60)
+                uptime_str = f"{hours}h {mins}m"
+            except Exception:
+                pass
+
+            return {
+                "ok": True,
+                "hostname": hostname,
+                "user": username,
+                "battery": battery,
+                "wifi": wifi,
+                "geo": geo,
+                "physical_geo": physical_geo,
+                "vpn": vpn,
+                "gateway": gw,
+                "hardware_gateway": gw,
+                "session_state": session,
+                "uptime": uptime_str,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            }
+        except Exception as e:
+            logger.error(f"Error compiling tracking dossier: {e}")
+            return {
+                "ok": False,
+                "error": str(e),
+                "hostname": os.environ.get("COMPUTERNAME", "PC"),
+                "user": os.environ.get("USERNAME", "User"),
+                "battery": {"has_battery": False, "status_str": "N/A"},
+                "wifi": {"connected": False, "ssid": "", "bssid": "", "visible_networks": []},
+                "geo": {"ok": False, "lat": 0.0, "lon": 0.0},
+                "physical_geo": None,
+                "vpn": {"is_vpn_active": False, "adapters": []},
+                "gateway": {"gateway_ip": "", "gateway_mac": ""},
+                "session_state": "Unknown",
+                "uptime": "N/A",
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            }
 
     # ── Audio & Speech Controls ─────────────────────────────────────────
 
