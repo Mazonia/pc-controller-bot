@@ -5,6 +5,7 @@ Handles OS hardware metrics, webcam, screen capture/recording, power, and audio 
 
 import os
 import sys
+import gc
 import time
 import math
 import re
@@ -256,16 +257,26 @@ class SystemController:
 
             while time.time() < end_time:
                 t0 = time.time()
-                img = ImageGrab.grab()
-                frame = cv2.cvtColor(np.array(img), cv2.COLOR_RGB2BGR)
-                if scale != 1.0:
-                    frame = cv2.resize(frame, (width, height))
-                out.write(frame)
+                img = None
+                frame = None
+                try:
+                    img = ImageGrab.grab()
+                    frame = cv2.cvtColor(np.array(img), cv2.COLOR_RGB2BGR)
+                    if scale != 1.0:
+                        frame = cv2.resize(frame, (width, height))
+                    out.write(frame)
+                finally:
+                    if img is not None:
+                        del img
+                    if frame is not None:
+                        del frame
+
                 elapsed = time.time() - t0
                 if elapsed < frame_delay:
                     time.sleep(frame_delay - elapsed)
 
             out.release()
+            gc.collect()
             return True, f"Recorded {duration_sec}s screen video"
         except Exception as e:
             return False, f"Screen recording failed: {e}"
@@ -2153,10 +2164,39 @@ class SystemController:
         return "📄"
 
     @staticmethod
+    def get_memory_status() -> Dict[str, Any]:
+        """Fetch detailed RAM & Swap memory diagnostics with safe error handling."""
+        try:
+            vmem = psutil.virtual_memory()
+            smem = psutil.swap_memory()
+            rss_mb = 0.0
+            try:
+                rss_mb = round(psutil.Process().memory_info().rss / (1024 ** 2), 2)
+            except Exception:
+                pass
+            return {
+                "ok": True,
+                "ram_total_gb": round(vmem.total / (1024 ** 3), 2),
+                "ram_used_gb": round(vmem.used / (1024 ** 3), 2),
+                "ram_free_gb": round(vmem.available / (1024 ** 3), 2),
+                "ram_percent": vmem.percent,
+                "swap_total_gb": round(smem.total / (1024 ** 3), 2),
+                "swap_used_gb": round(smem.used / (1024 ** 3), 2),
+                "swap_percent": smem.percent,
+                "agent_memory_mb": rss_mb,
+            }
+        except Exception as e:
+            return {
+                "ok": False,
+                "error": str(e),
+                "ram_percent": 0.0,
+            }
+
+    @staticmethod
     def browse_directory(target_path: Optional[str] = None) -> Dict[str, Any]:
         """
         Browse and list directory contents on the PC for remote file navigation.
-        Returns normalized paths, drives, quick-access shortcuts, and sorted item list.
+        Includes alias expansion, access-denied containment, and safe memory capping.
         """
         home = Path.home()
         quick_access = {
@@ -2165,20 +2205,43 @@ class SystemController:
             "documents": str(home / "Documents"),
             "pictures": str(home / "Pictures"),
         }
+        if (home / "Music").exists():
+            quick_access["music"] = str(home / "Music")
+        if (home / "Videos").exists():
+            quick_access["videos"] = str(home / "Videos")
 
-        # Normalize target path
-        if not target_path or not target_path.strip():
+        # Normalize target path and expand common aliases
+        raw = (target_path or "").strip()
+        raw_lower = raw.lower()
+
+        if not raw or raw_lower in ("home", "~"):
             p = home / "Desktop" if (home / "Desktop").exists() else home
+        elif raw_lower in quick_access:
+            p = Path(quick_access[raw_lower])
+        elif raw.startswith("~"):
+            p = Path(raw).expanduser()
+        elif re.match(r"^[a-zA-Z]:$", raw):
+            p = Path(raw + "\\")
+        elif raw in ("/", "\\"):
+            p = Path("/" if IS_MAC else "C:\\")
         else:
-            t = target_path.strip()
-            if re.match(r"^[a-zA-Z]:$", t):
-                t += "\\"
-            p = Path(t)
+            p = Path(raw)
+            if not p.is_absolute():
+                # Try relative to home first, then fallback to relative candidate
+                cand = home / raw
+                if cand.exists():
+                    p = cand
 
         try:
             p = p.resolve()
         except Exception:
             pass
+
+        # If not found, check single drive letter without colon
+        if not p.exists() and len(raw) == 1 and raw.isalpha() and not IS_MAC:
+            cand_drv = Path(f"{raw.upper()}:\\")
+            if cand_drv.exists():
+                p = cand_drv
 
         if not p.exists():
             return {
@@ -2194,6 +2257,8 @@ class SystemController:
         # If user pointed directly to a file
         if p.is_file():
             sz = p.stat().st_size
+            parent = str(p.parent)
+            parent_parent = str(p.parent.parent) if p.parent != p.parent.parent else None
             return {
                 "ok": True,
                 "is_file": True,
@@ -2201,64 +2266,111 @@ class SystemController:
                 "filename": p.name,
                 "size": sz,
                 "size_fmt": SystemController.format_size(sz),
-                "current_path": str(p.parent),
-                "parent_path": str(p.parent.parent) if p.parent != p.parent.parent else None,
+                "current_path": parent,
+                "parent_path": parent_parent,
                 "drives": SystemController.get_system_drives(),
                 "quick_access": quick_access,
                 "items": [],
             }
 
-        # List directory items
-        items = []
+        # List directory items with safe memory & network payload bounds
+        dirs_list = []
+        files_list = []
+        MAX_ITEMS = 150  # Cap items to protect RAM and ensure MQTT packet stays well under 256KB
+        total_scanned = 0
+
         ignored_names = {
             "desktop.ini", "ntuser.dat", "$recycle.bin", "system volume information",
             "hiberfil.sys", "pagefile.sys", "swapfile.sys", "dumpstack.log", "dumpstack.log.tmp",
             ".ds_store", ".localized", ".trashes", ".fseventsd", ".spotlight-v100"
         }
+
         try:
             for entry in p.iterdir():
+                total_scanned += 1
                 try:
-                    if entry.name.lower() in ignored_names:
+                    ename_lower = entry.name.lower()
+                    if ename_lower in ignored_names or ename_lower.startswith("~$"):
                         continue
                     is_dir = entry.is_dir()
-                    sz = entry.stat().st_size if not is_dir else 0
-                    mtime = datetime.fromtimestamp(entry.stat().st_mtime).strftime("%Y-%m-%d %H:%M")
-                    items.append({
-                        "name": entry.name,
-                        "path": str(entry),
-                        "is_dir": is_dir,
-                        "size": sz,
-                        "size_fmt": SystemController.format_size(sz) if not is_dir else "<DIR>",
-                        "icon": SystemController.get_file_icon(entry.name, is_dir),
-                        "modified": mtime,
-                    })
+                    if is_dir:
+                        if len(dirs_list) < MAX_ITEMS:
+                            mtime = datetime.fromtimestamp(entry.stat().st_mtime).strftime("%Y-%m-%d %H:%M")
+                            dirs_list.append({
+                                "name": entry.name,
+                                "path": str(entry),
+                                "is_dir": True,
+                                "size": 0,
+                                "size_fmt": "<DIR>",
+                                "icon": "📁",
+                                "modified": mtime,
+                            })
+                    else:
+                        if len(files_list) < MAX_ITEMS:
+                            st = entry.stat()
+                            sz = st.st_size
+                            mtime = datetime.fromtimestamp(st.st_mtime).strftime("%Y-%m-%d %H:%M")
+                            files_list.append({
+                                "name": entry.name,
+                                "path": str(entry),
+                                "is_dir": False,
+                                "size": sz,
+                                "size_fmt": SystemController.format_size(sz),
+                                "icon": SystemController.get_file_icon(entry.name, False),
+                                "modified": mtime,
+                            })
                 except (PermissionError, OSError):
                     continue
+
         except PermissionError as e:
+            # Contain permission errors gracefully so user remains in UI with active Up button
+            parent = str(p.parent) if p != p.parent else None
             return {
-                "ok": False,
-                "error": f"Access Denied: {e}",
+                "ok": True,
+                "is_file": False,
                 "current_path": str(p),
-                "parent_path": str(p.parent) if p != p.parent else None,
+                "parent_path": parent,
                 "drives": SystemController.get_system_drives(),
                 "quick_access": quick_access,
-                "items": [],
+                "items": [
+                    {
+                        "name": "⛔ Access Denied (Protected System Folder)",
+                        "path": str(p),
+                        "is_dir": False,
+                        "size": 0,
+                        "size_fmt": "LOCKED",
+                        "icon": "🔒",
+                        "modified": datetime.now().strftime("%Y-%m-%d %H:%M"),
+                    }
+                ],
+                "total_dirs": 0,
+                "total_files": 1,
+                "warning": f"Permission denied: {e}",
             }
         except Exception as e:
+            parent = str(p.parent) if p != p.parent else None
             return {
                 "ok": False,
                 "error": str(e),
                 "current_path": str(p),
-                "parent_path": str(p.parent) if p != p.parent else None,
+                "parent_path": parent,
                 "drives": SystemController.get_system_drives(),
                 "quick_access": quick_access,
                 "items": [],
             }
 
         # Sort: directories first (alphabetical), then files (alphabetical)
-        items.sort(key=lambda x: (not x["is_dir"], x["name"].lower()))
+        dirs_list.sort(key=lambda x: x["name"].lower())
+        files_list.sort(key=lambda x: x["name"].lower())
+
+        # Combine with MAX_ITEMS ceiling
+        combined_items = dirs_list[:MAX_ITEMS]
+        remaining_slots = max(0, MAX_ITEMS - len(combined_items))
+        if remaining_slots > 0:
+            combined_items.extend(files_list[:remaining_slots])
 
         parent = str(p.parent) if p != p.parent else None
+        is_truncated = total_scanned > len(combined_items)
 
         return {
             "ok": True,
@@ -2267,9 +2379,12 @@ class SystemController:
             "parent_path": parent,
             "drives": SystemController.get_system_drives(),
             "quick_access": quick_access,
-            "items": items,
-            "total_dirs": sum(1 for x in items if x["is_dir"]),
-            "total_files": sum(1 for x in items if not x["is_dir"]),
+            "items": combined_items,
+            "total_dirs": len(dirs_list),
+            "total_files": len(files_list),
+            "total_scanned": total_scanned,
+            "truncated": is_truncated,
+            "note": f"Showing {len(combined_items)} of {total_scanned} items to conserve memory & bandwidth" if is_truncated else "",
         }
 
     @staticmethod

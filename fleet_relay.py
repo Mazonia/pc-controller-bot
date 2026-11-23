@@ -238,11 +238,18 @@ class FleetAgentRelay:
             self.send_response({"id": req_id, "ok": False, "error": str(e)})
 
     def send_response(self, response_data: dict):
-        """Send encrypted response back to the Central Bot."""
+        """Send encrypted response back to the Central Bot with packet size protection."""
         if not self.client or not self.is_connected:
             return
         try:
             payload = self.crypto.encrypt(response_data)
+            # Guard against public MQTT broker packet limits (256KB-1MB)
+            if len(payload) > 220 * 1024:
+                logger.warning(f"Relay response payload ({len(payload)} bytes) is near broker limit. Pruning list items...")
+                if "items" in response_data and isinstance(response_data["items"], list):
+                    response_data["items"] = response_data["items"][:50]
+                    response_data["truncated"] = True
+                    payload = self.crypto.encrypt(response_data)
             self.client.publish(self.topic_resp, payload, qos=1)
         except Exception as e:
             logger.error(f"Failed to send response: {e}")
@@ -277,14 +284,25 @@ class FleetAgentRelay:
         self.client.publish(self.topic_status, payload, qos=1, retain=True)
 
     def _heartbeat_worker(self):
-        """Periodic telemetry heartbeat every 20 seconds to keep connection alive."""
+        """Periodic telemetry heartbeat every 20 seconds with proactive auto-reconnect."""
+        discon_cycles = 0
         while self._running:
             time.sleep(20)
             if self.is_connected:
+                discon_cycles = 0
                 try:
                     self.publish_status("online")
                 except Exception:
                     pass
+            else:
+                discon_cycles += 1
+                if discon_cycles >= 2:
+                    try:
+                        logger.info("Fleet Relay connection inactive. Proactively triggering reconnect...")
+                        self.client.reconnect()
+                        discon_cycles = 0
+                    except Exception as rec_err:
+                        logger.debug(f"Proactive reconnect notice: {rec_err}")
 
 
 # ═══════════════════════════════════════════════════════════════════════

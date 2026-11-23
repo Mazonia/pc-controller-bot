@@ -498,11 +498,11 @@ class AgentClient:
 
     async def browse_directory(self, path: str = "") -> dict:
         if self.should_use_relay():
-            res = await commander_relay.send_command(self.name, "file_browse", {"path": path}, timeout=15.0)
+            res = await commander_relay.send_command(self.name, "file_browse", {"path": path}, timeout=25.0)
             if res.get("ok") or "error" in res:
                 return res
         try:
-            r = await self._get(f"/browse?path={urllib.parse.quote(path)}", timeout=15.0)
+            r = await self._get(f"/browse?path={urllib.parse.quote(path)}", timeout=25.0)
             r.raise_for_status()
             return r.json()
         except Exception as e:
@@ -1122,14 +1122,19 @@ def build_file_explorer_view(
         else:
             lines.append(f"{icon} <code>{html.escape(name)}</code> ({html.escape(it.get('size_fmt', ''))})")
 
-    content_preview = "\n".join(lines) if lines else "<i>(Empty directory)</i>"
+    if not data.get("ok", True) and data.get("error"):
+        content_preview = f"⚠️ <b>Notice:</b> <code>{html.escape(str(data.get('error')))}</code>"
+    else:
+        content_preview = "\n".join(lines) if lines else "<i>(Empty directory)</i>"
+
+    trunc_msg = f"\n⚡ <i>{html.escape(data.get('note', ''))}</i>" if data.get("truncated") and data.get("note") else ""
 
     text = (
         f"📁 <b>REMOTE FILE EXPLORER — {html.escape(label)}</b>\n"
         f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
         f"📍 <b>Path:</b> <code>{html.escape(current_path)}</code>\n\n"
         f"{content_preview}\n\n"
-        f"📊 <b>Contents:</b> {total_dirs} folders, {total_files} files | 📄 <b>Page:</b> {page + 1}/{total_pages}\n"
+        f"📊 <b>Contents:</b> {total_dirs} folders, {total_files} files | 📄 <b>Page:</b> {page + 1}/{total_pages}{trunc_msg}\n"
         f"💡 <i>Tap a folder to open it, or tap any file to download it!</i>"
     )
 
@@ -1197,8 +1202,15 @@ def build_quick_access_keyboard(context: ContextTypes.DEFAULT_TYPE, label: str =
     # Drives row
     drive_btns = []
     for d_idx, d in enumerate(drives[:4]):
-        clean_d = d.replace("\\", "")
-        drive_btns.append(InlineKeyboardButton(f"💻 Drive ({clean_d})", callback_data=f"cb_fs_drv_{d_idx}"))
+        if d == "/":
+            display_name = "Root (/)"
+        elif d.startswith("/Volumes/"):
+            display_name = d.replace("/Volumes/", "")
+        else:
+            display_name = d.replace("\\", "")
+        if len(display_name) > 12:
+            display_name = display_name[:10] + "…"
+        drive_btns.append(InlineKeyboardButton(f"💻 {display_name}", callback_data=f"cb_fs_drv_{d_idx}"))
     if drive_btns:
         buttons.append(drive_btns)
 
@@ -4076,7 +4088,7 @@ async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             text, kb = build_file_explorer_view(context, res, page=0, label=label)
             await query.edit_message_text(text, reply_markup=kb, parse_mode="HTML")
         except Exception as e:
-            await query.answer(f"❌ Failed to open File Explorer: {e}", show_alert=True)
+            await query.answer(f"❌ Failed to open File Explorer: {e}"[:180], show_alert=True)
 
     elif data.startswith("cb_fs_open_"):
         idx = int(data.split("_")[-1])
@@ -4099,12 +4111,12 @@ async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
             res = await agent.browse_directory(target_path)
             if not res.get("ok", True) and "error" in res:
-                await query.answer(f"❌ Cannot open folder: {res.get('error')}", show_alert=True)
+                await query.answer(f"❌ Cannot open folder: {res.get('error')}"[:180], show_alert=True)
                 return
             text, kb = build_file_explorer_view(context, res, page=0, label=label)
             await query.edit_message_text(text, reply_markup=kb, parse_mode="HTML")
         except Exception as e:
-            await query.answer(f"❌ Navigation error: {e}", show_alert=True)
+            await query.answer(f"❌ Navigation error: {e}"[:180], show_alert=True)
 
     elif data.startswith("cb_fs_get_"):
         idx = int(data.split("_")[-1])
@@ -4164,7 +4176,7 @@ async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             text, kb = build_file_explorer_view(context, res, page=0, label=label)
             await query.edit_message_text(text, reply_markup=kb, parse_mode="HTML")
         except Exception as e:
-            await query.answer(f"❌ Error moving up: {e}", show_alert=True)
+            await query.answer(f"❌ Error moving up: {e}"[:180], show_alert=True)
 
     elif data.startswith("cb_fs_p_"):
         target_page = int(data.replace("cb_fs_p_", ""))
@@ -4197,7 +4209,7 @@ async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.edit_message_text(text, reply_markup=kb, parse_mode="HTML")
             await query.answer("Directory refreshed 🔄", show_alert=False)
         except Exception as e:
-            await query.answer(f"❌ Refresh failed: {e}", show_alert=True)
+            await query.answer(f"❌ Refresh failed: {e}"[:180], show_alert=True)
 
     elif data == "cb_fs_qa":
         label = pc_label(context)
@@ -4223,7 +4235,7 @@ async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             text, kb = build_file_explorer_view(context, res, page=0, label=label)
             await query.edit_message_text(text, reply_markup=kb, parse_mode="HTML")
         except Exception as e:
-            await query.answer(f"❌ Location not found: {e}", show_alert=True)
+            await query.answer(f"❌ Location not found: {e}"[:180], show_alert=True)
 
     elif data.startswith("cb_fs_drv_"):
         idx = int(data.replace("cb_fs_drv_", ""))

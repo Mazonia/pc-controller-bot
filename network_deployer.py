@@ -137,9 +137,10 @@ def scan_network_arp():
 
     # Step 1: Ping sweep to populate ARP table (fast broadcast)
     # Send a single broadcast ping to populate the ARP cache
+    bcast_cmd = ["ping", "-n", "1", "-w", "500", f"{subnet}.255"] if sys.platform == "win32" else ["ping", "-c", "1", "-W", "1", f"{subnet}.255"]
     try:
         subprocess.run(
-            ["ping", "-n", "1", "-w", "500", f"{subnet}.255"],
+            bcast_cmd,
             capture_output=True, timeout=5,
             **WIN_FLAGS,
         )
@@ -148,9 +149,10 @@ def scan_network_arp():
 
     # Quick parallel ping sweep to populate ARP table further
     def quick_ping(ip):
+        ping_cmd = ["ping", "-n", "1", "-w", "300", ip] if sys.platform == "win32" else ["ping", "-c", "1", "-W", "1", ip]
         try:
             subprocess.run(
-                ["ping", "-n", "1", "-w", "300", ip],
+                ping_cmd,
                 capture_output=True, timeout=3,
                 **WIN_FLAGS,
             )
@@ -176,46 +178,45 @@ def scan_network_arp():
     except Exception:
         arp_output = ""
 
-    # Step 3: Also use PowerShell Get-NetNeighbor for more complete results
+    # Step 3: Also use PowerShell Get-NetNeighbor for more complete results on Windows
     ps_neighbors = ""
-    try:
-        result = subprocess.run(
-            ["powershell", "-NoProfile", "-Command",
-             "Get-NetNeighbor -AddressFamily IPv4 | Where-Object {$_.State -ne 'Unreachable'} | Select-Object IPAddress, LinkLayerAddress, State | Format-Table -AutoSize"],
-            capture_output=True, text=True, timeout=15,
-            **WIN_FLAGS,
-        )
-        ps_neighbors = result.stdout
-    except Exception:
-        pass
+    if sys.platform == "win32" and shutil.which("powershell"):
+        try:
+            result = subprocess.run(
+                ["powershell", "-NoProfile", "-Command",
+                 "Get-NetNeighbor -AddressFamily IPv4 | Where-Object {$_.State -ne 'Unreachable'} | Select-Object IPAddress, LinkLayerAddress, State | Format-Table -AutoSize"],
+                capture_output=True, text=True, timeout=15,
+                **WIN_FLAGS,
+            )
+            ps_neighbors = result.stdout
+        except Exception:
+            pass
 
     # Parse ARP table entries
     seen_ips = set()
     import re
 
-    # Parse standard arp -a output
+    # Universal parse for arp -a output (Windows, macOS, Linux)
     for line in arp_output.splitlines():
         line = line.strip()
-        # Match lines like: 192.168.1.5     aa-bb-cc-dd-ee-ff     dynamic
-        match = re.match(r'(\d+\.\d+\.\d+\.\d+)\s+([0-9a-fA-F-]+)\s+(\w+)', line)
+        match = re.search(r'(\d+\.\d+\.\d+\.\d+)', line)
         if match:
             ip = match.group(1)
-            mac = match.group(2)
-            entry_type = match.group(3).lower()
-            if ip == my_ip or ip.endswith(".255") or ip.endswith(".1"):
+            if ip == my_ip or ip.endswith(".255") or ip.endswith(".0"):
                 continue
-            if mac == "ff-ff-ff-ff-ff-ff":
+            if "ff-ff-ff-ff-ff-ff" in line.lower() or "ff:ff:ff:ff:ff:ff" in line.lower():
                 continue
             if ip.startswith(subnet):
                 seen_ips.add(ip)
 
     # Parse PowerShell Get-NetNeighbor output
-    for line in ps_neighbors.splitlines():
-        match = re.match(r'(\d+\.\d+\.\d+\.\d+)', line.strip())
-        if match:
-            ip = match.group(1)
-            if ip != my_ip and ip.startswith(subnet) and not ip.endswith(".255"):
-                seen_ips.add(ip)
+    if ps_neighbors:
+        for line in ps_neighbors.splitlines():
+            match = re.search(r'(\d+\.\d+\.\d+\.\d+)', line.strip())
+            if match:
+                ip = match.group(1)
+                if ip != my_ip and ip.startswith(subnet) and not ip.endswith(".255") and not ip.endswith(".0"):
+                    seen_ips.add(ip)
 
     # Step 4: Try to get hostname and check if Windows via NetBIOS
     def check_host(ip):
@@ -508,21 +509,28 @@ Start-Sleep -Seconds 3
 
     def serve_deploy_file(self):
         """Serve a specific file from the deploy directory."""
-        filename = self.path.replace("/files/", "")
+        from urllib.parse import urlparse
+        parsed = urlparse(self.path)
+        filename = parsed.path.replace("/files/", "")
         # Security: prevent path traversal
         if ".." in filename or "/" in filename or "\\" in filename:
             self.send_error(403)
             return
         filepath = os.path.join(self.deploy_dir, filename)
         if os.path.exists(filepath) and os.path.isfile(filepath):
-            file_size = os.path.getsize(filepath)
-            self.send_response(200)
-            self.send_header("Content-Type", "application/octet-stream")
-            self.send_header("Content-Length", str(file_size))
-            self.send_header("Content-Disposition", f'attachment; filename="{filename}"')
-            self.end_headers()
-            with open(filepath, "rb") as f:
-                shutil.copyfileobj(f, self.wfile)
+            try:
+                file_size = os.path.getsize(filepath)
+                self.send_response(200)
+                self.send_header("Content-Type", "application/octet-stream")
+                self.send_header("Content-Length", str(file_size))
+                self.send_header("Content-Disposition", f'attachment; filename="{filename}"')
+                self.end_headers()
+                with open(filepath, "rb") as f:
+                    shutil.copyfileobj(f, self.wfile)
+            except (BrokenPipeError, ConnectionResetError):
+                pass
+            except Exception as e:
+                print(f"  [!] Error serving {filename}: {e}")
         else:
             self.send_error(404, f"File not found: {filename}")
 

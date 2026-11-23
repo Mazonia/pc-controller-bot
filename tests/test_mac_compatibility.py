@@ -241,6 +241,39 @@ class TestMacCompatibility(unittest.TestCase):
             img = ScreenCaster.safe_grab_screen()
             self.assertIsNotNone(img)
 
+    def test_11_memory_status_diagnostics(self):
+        """Verify get_memory_status returns structured memory statistics without errors."""
+        from system_controller import SystemController
+
+        mem = SystemController.get_memory_status()
+        self.assertIsInstance(mem, dict)
+        self.assertTrue(mem.get("ok", False))
+        self.assertIn("ram_percent", mem)
+        self.assertIn("ram_total_gb", mem)
+        self.assertIn("agent_memory_mb", mem)
+
+    def test_12_directory_navigation_and_capping(self):
+        """Verify browse_directory handles aliases, home expansion, and caps max items safely."""
+        import system_controller
+        from system_controller import SystemController
+
+        # Test alias expansion
+        res_desktop = SystemController.browse_directory("desktop")
+        self.assertIsInstance(res_desktop, dict)
+        self.assertTrue(res_desktop.get("ok", False))
+        self.assertIn("current_path", res_desktop)
+
+        res_home = SystemController.browse_directory("home")
+        self.assertTrue(res_home.get("ok", False))
+
+        # Test safe capping and structure
+        res_root = SystemController.browse_directory("/" if not system_controller.IS_WINDOWS else "C:\\")
+        self.assertIsInstance(res_root, dict)
+        if res_root.get("ok"):
+            self.assertLessEqual(len(res_root.get("items", [])), 150)
+            self.assertIn("total_dirs", res_root)
+            self.assertIn("total_files", res_root)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

@@ -8,6 +8,7 @@ Handles real-time desktop screen casting via:
 
 import os
 import sys
+import gc
 import time
 import io
 import json
@@ -2191,14 +2192,26 @@ class ScreenCaster:
             return b""
 
     def _frame_capture_worker(self):
-        """Background worker continuously pulling frames into memory buffer with OpenCV acceleration."""
+        """Background worker pulling frames into memory buffer with throttled idle & OpenCV acceleration."""
         ensure_desktop_access()
         logger.info("Screen caster background frame capture started.")
-        
+        frame_counter = 0
+
         while self.is_web_streaming:
             t0 = time.time()
+
+            # When no viewers are connected, idle-throttle capture to reduce memory & CPU load
+            if self.active_viewers == 0:
+                time.sleep(0.5)
+                if (time.time() - self.last_viewer_activity > 600):
+                    logger.info("No active web viewers for 10 minutes. Stopping stream to conserve resources.")
+                    threading.Thread(target=self.stop_web_cast, daemon=True).start()
+                    break
+                continue
+
             try:
                 img = safe_grab_screen()
+                frame_data = None
                 if cv2 is not None and np is not None:
                     arr = np.asarray(img)
                     bgr = cv2.cvtColor(arr, cv2.COLOR_RGB2BGR)
@@ -2208,6 +2221,7 @@ class ScreenCaster:
                         bgr = cv2.resize(bgr, (self.target_width, new_h), interpolation=cv2.INTER_AREA)
                     _, enc = cv2.imencode(".jpg", bgr, [int(cv2.IMWRITE_JPEG_QUALITY), int(self.jpeg_quality)])
                     frame_data = enc.tobytes()
+                    del arr, bgr, enc
                 else:
                     if self.target_width and img.width > self.target_width:
                         ratio = self.target_width / float(img.width)
@@ -2217,18 +2231,21 @@ class ScreenCaster:
                     buf = io.BytesIO()
                     img.save(buf, format="JPEG", quality=self.jpeg_quality)
                     frame_data = buf.getvalue()
+                    buf.close()
 
-                with self.frame_lock:
-                    self.current_frame = frame_data
+                if img is not None:
+                    del img
+
+                if frame_data:
+                    with self.frame_lock:
+                        self.current_frame = frame_data
+
+                frame_counter += 1
+                if frame_counter % 300 == 0:
+                    gc.collect()
 
             except Exception as e:
                 logger.debug(f"Capture loop error: {e}")
-
-            # Check idle timeout (stop if no viewer for 10 minutes)
-            if self.active_viewers == 0 and (time.time() - self.last_viewer_activity > 600):
-                logger.info("No active web viewers for 10 minutes. Stopping stream to conserve resources.")
-                threading.Thread(target=self.stop_web_cast, daemon=True).start()
-                break
 
             target_delay = 1.0 / max(1, self.target_fps)
             elapsed = time.time() - t0
@@ -2377,6 +2394,9 @@ class ScreenCaster:
                 pass
             self.tunnel_process = None
         self.public_url = None
+        with self.frame_lock:
+            self.current_frame = None
+        gc.collect()
 
         logger.info("Screen caster web stream and tunnel terminated.")
         return True

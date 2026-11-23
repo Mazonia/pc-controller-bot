@@ -216,6 +216,11 @@ def handle_relay_command(data: dict) -> dict:
         stats["network"] = get_network_info()
         return {"ok": True, "stats": stats}
 
+    elif cmd in ("memory", "ram_status", "mem"):
+        mem_data = SystemController.get_memory_status()
+        mem_data["pc_name"] = PC_NAME
+        return {"ok": True, "memory": mem_data}
+
     # 2. SCREENSHOT
     elif cmd == "screenshot":
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -660,6 +665,12 @@ async def health():
         "network": net["type"],
         "timestamp": datetime.now().isoformat(),
     }
+
+
+@app.get("/memory")
+async def api_memory():
+    mem = await asyncio.to_thread(SystemController.get_memory_status)
+    return mem
 
 
 @app.get("/status")
