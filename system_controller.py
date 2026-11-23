@@ -109,7 +109,13 @@ class SystemController:
     def get_session_state() -> str:
         """Detect if OS is at interactive desktop, lock screen, or Session 0."""
         if IS_MAC:
-            return "macOS Desktop (Unlocked) 🟢"
+            try:
+                out = subprocess.run(["ioreg", "-n", "Root", "-d1"], capture_output=True, text=True, timeout=1.0).stdout
+                if re.search(r'["\']?(?:CGSSessionScreenIsLocked|kCGSessionScreenIsLocked)["\']?\s*=\s*(?:1|yes|true|<true>)', out, re.IGNORECASE):
+                    return "macOS Lock Screen 🔒"
+                return "macOS Desktop (Unlocked) 🟢"
+            except Exception:
+                return "macOS Desktop 🟢"
         try:
             hdesk = ctypes.windll.user32.OpenInputDesktop(0, False, 0x0100)
             if hdesk:
@@ -157,6 +163,8 @@ class SystemController:
         backend = cv2.CAP_AVFOUNDATION if IS_MAC else cv2.CAP_DSHOW
         cap = cv2.VideoCapture(camera_index, backend)
         if not cap.isOpened():
+            cap = cv2.VideoCapture(camera_index)
+        if not cap.isOpened():
             return False, "Could not access webcam device."
 
         try:
@@ -181,6 +189,8 @@ class SystemController:
         
         backend = cv2.CAP_AVFOUNDATION if IS_MAC else cv2.CAP_DSHOW
         cap = cv2.VideoCapture(camera_index, backend)
+        if not cap.isOpened():
+            cap = cv2.VideoCapture(camera_index)
         if not cap.isOpened():
             return False, "Could not open webcam."
 
@@ -208,6 +218,18 @@ class SystemController:
     @staticmethod
     def record_screen_video(output_path: Path, duration_sec: int = 10) -> Tuple[bool, str]:
         """Record desktop screen video for specified seconds (up to 120s)."""
+        if IS_MAC:
+            try:
+                res = subprocess.run(
+                    ["/usr/sbin/screencapture", "-V", str(duration_sec), str(output_path)],
+                    capture_output=True,
+                    timeout=duration_sec + 10
+                )
+                if res.returncode == 0 and output_path.exists() and output_path.stat().st_size > 0:
+                    return True, f"Recorded {duration_sec}s screen video"
+            except Exception as se:
+                logger.debug(f"macOS native video recording error: {se}, falling back to frame loop")
+
         if cv2 is None:
             return False, "OpenCV is not installed."
         
@@ -254,12 +276,33 @@ class SystemController:
     def lock_workstation() -> bool:
         """Lock PC/Mac instantly using OS native APIs."""
         if IS_MAC:
+            # 1. Try SACLockScreenImmediate via login framework
             try:
-                cgsession = "/System/Library/CoreServices/Menu Extras/User.menu/Contents/Resources/CGSession"
-                if os.path.exists(cgsession):
-                    subprocess.run([cgsession, "-suspend"], check=True)
-                else:
-                    subprocess.run(["pmset", "displaysleepnow"], check=True)
+                for lib_name in (
+                    "/System/Library/PrivateFrameworks/login.framework/Versions/Current/login",
+                    "/System/Library/PrivateFrameworks/login.framework/login",
+                    "login",
+                ):
+                    try:
+                        lf = ctypes.CDLL(lib_name)
+                        lf.SACLockScreenImmediate()
+                        logger.info("macOS workstation locked via SACLockScreenImmediate.")
+                        return True
+                    except Exception:
+                        continue
+            except Exception:
+                pass
+
+            # 2. Try keyboard shortcut Ctrl+Cmd+Q via AppleScript
+            try:
+                subprocess.run(["osascript", "-e", 'tell application "System Events" to key code 12 using {control down, command down}'], check=True, timeout=3.0)
+                return True
+            except Exception:
+                pass
+
+            # 3. Fallback to displaysleepnow
+            try:
+                subprocess.run(["pmset", "displaysleepnow"], check=True, timeout=3.0)
                 return True
             except Exception as e:
                 logger.error(f"macOS lock error: {e}")
@@ -329,6 +372,12 @@ class SystemController:
         """Shutdown PC or Mac now or with timer."""
         if IS_MAC:
             try:
+                if seconds > 0:
+                    def _delayed_shut():
+                        time.sleep(seconds)
+                        subprocess.run(["osascript", "-e", 'tell application "System Events" to shut down'])
+                    threading.Thread(target=_delayed_shut, daemon=True, name="MacDelayedShutdown").start()
+                    return True
                 subprocess.run(["osascript", "-e", 'tell application "System Events" to shut down'], check=True)
                 return True
             except Exception as e:
@@ -347,6 +396,12 @@ class SystemController:
         """Restart PC or Mac now or with timer."""
         if IS_MAC:
             try:
+                if seconds > 0:
+                    def _delayed_rst():
+                        time.sleep(seconds)
+                        subprocess.run(["osascript", "-e", 'tell application "System Events" to restart'])
+                    threading.Thread(target=_delayed_rst, daemon=True, name="MacDelayedRestart").start()
+                    return True
                 subprocess.run(["osascript", "-e", 'tell application "System Events" to restart'], check=True)
                 return True
             except Exception as e:
@@ -870,32 +925,71 @@ class SystemController:
 
     # ── Remote Mouse & Direct Keyboard Control ──────────────────────────
 
+    _mac_cg = None
+
+    @classmethod
+    def _get_mac_cg(cls):
+        """Safely load and cache macOS CoreGraphics / ApplicationServices library."""
+        if cls._mac_cg is not None:
+            return cls._mac_cg
+        for lib in [
+            "ApplicationServices",
+            "CoreGraphics",
+            "/System/Library/Frameworks/ApplicationServices.framework/ApplicationServices",
+            "/System/Library/Frameworks/CoreGraphics.framework/CoreGraphics",
+        ]:
+            try:
+                cls._mac_cg = ctypes.CDLL(lib)
+                return cls._mac_cg
+            except Exception:
+                continue
+        try:
+            import ctypes.util
+            path = ctypes.util.find_library("ApplicationServices") or ctypes.util.find_library("CoreGraphics")
+            if path:
+                cls._mac_cg = ctypes.CDLL(path)
+                return cls._mac_cg
+        except Exception:
+            pass
+        return None
+
     @staticmethod
     def get_cursor_pos() -> Dict[str, int]:
         """Get current screen resolution and cursor position."""
         if IS_MAC:
             try:
-                cg = ctypes.cdll.LoadLibrary("/System/Library/Frameworks/ApplicationServices.framework/Frameworks/CoreGraphics.framework/CoreGraphics")
+                cg = SystemController._get_mac_cg()
+                if not cg:
+                    return {"x": 0, "y": 0, "screen_w": 1920, "screen_h": 1080}
+
                 class CGPoint(ctypes.Structure):
                     _fields_ = [("x", ctypes.c_double), ("y", ctypes.c_double)]
                 class CGRect(ctypes.Structure):
                     _fields_ = [("origin", CGPoint), ("size", CGPoint)]
-                cg.CGEventGetLocation.restype = CGPoint
-                cg.CGEventGetLocation.argtypes = [ctypes.c_void_p]
-                cg.CGEventCreate.restype = ctypes.c_void_p
-                cg.CGEventCreate.argtypes = [ctypes.c_void_p]
-                event = cg.CGEventCreate(None)
-                loc = cg.CGEventGetLocation(event)
+
                 cg.CGMainDisplayID.restype = ctypes.c_uint32
                 cg.CGDisplayBounds.restype = CGRect
                 cg.CGDisplayBounds.argtypes = [ctypes.c_uint32]
                 bounds = cg.CGDisplayBounds(cg.CGMainDisplayID())
-                return {
-                    "x": int(loc.x),
-                    "y": int(loc.y),
-                    "screen_w": int(bounds.size.x),
-                    "screen_h": int(bounds.size.y)
-                }
+                screen_w = int(bounds.size.x) if bounds.size.x > 0 else 1920
+                screen_h = int(bounds.size.y) if bounds.size.y > 0 else 1080
+
+                cg.CGEventCreate.restype = ctypes.c_void_p
+                cg.CGEventCreate.argtypes = [ctypes.c_void_p]
+                cg.CGEventGetLocation.restype = CGPoint
+                cg.CGEventGetLocation.argtypes = [ctypes.c_void_p]
+
+                ev = cg.CGEventCreate(None)
+                if ev:
+                    loc = cg.CGEventGetLocation(ev)
+                    x, y = int(loc.x), int(loc.y)
+                    try:
+                        cg.CFRelease.argtypes = [ctypes.c_void_p]
+                        cg.CFRelease(ev)
+                    except Exception:
+                        pass
+                    return {"x": x, "y": y, "screen_w": screen_w, "screen_h": screen_h}
+                return {"x": 0, "y": 0, "screen_w": screen_w, "screen_h": screen_h}
             except Exception:
                 return {"x": 0, "y": 0, "screen_w": 1920, "screen_h": 1080}
 
@@ -920,19 +1014,10 @@ class SystemController:
     def mouse_move(dx: int, dy: int) -> bool:
         """Simulate relative hardware mouse movement."""
         if IS_MAC:
-            try:
-                cur = SystemController.get_cursor_pos()
-                new_x = max(0, min(cur["screen_w"] - 1, cur["x"] + dx))
-                new_y = max(0, min(cur["screen_h"] - 1, cur["y"] + dy))
-                cg = ctypes.cdll.LoadLibrary("/System/Library/Frameworks/ApplicationServices.framework/Frameworks/CoreGraphics.framework/CoreGraphics")
-                class CGPoint(ctypes.Structure):
-                    _fields_ = [("x", ctypes.c_double), ("y", ctypes.c_double)]
-                cg.CGWarpMouseCursorPosition.argtypes = [CGPoint]
-                cg.CGWarpMouseCursorPosition(CGPoint(new_x, new_y))
-                return True
-            except Exception as e:
-                logger.error(f"macOS mouse move error: {e}")
-                return False
+            cur = SystemController.get_cursor_pos()
+            new_x = cur["x"] + dx
+            new_y = cur["y"] + dy
+            return SystemController.mouse_move_abs(new_x, new_y, normalized=False)
 
         SystemController.ensure_desktop_access()
         try:
@@ -952,11 +1037,32 @@ class SystemController:
                 sw, sh = cur["screen_w"], cur["screen_h"]
                 px = float(max(0.0, min(1.0, float(x))) * (sw - 1)) if normalized else float(x)
                 py = float(max(0.0, min(1.0, float(y))) * (sh - 1)) if normalized else float(y)
-                cg = ctypes.cdll.LoadLibrary("/System/Library/Frameworks/ApplicationServices.framework/Frameworks/CoreGraphics.framework/CoreGraphics")
+                px = max(0.0, min(float(sw - 1), px))
+                py = max(0.0, min(float(sh - 1), py))
+
+                cg = SystemController._get_mac_cg()
+                if not cg:
+                    return False
+
                 class CGPoint(ctypes.Structure):
                     _fields_ = [("x", ctypes.c_double), ("y", ctypes.c_double)]
+
+                pt = CGPoint(px, py)
                 cg.CGWarpMouseCursorPosition.argtypes = [CGPoint]
-                cg.CGWarpMouseCursorPosition(CGPoint(px, py))
+                cg.CGWarpMouseCursorPosition(pt)
+
+                # Post mouse moved event so applications update hover and cursor position
+                cg.CGEventCreateMouseEvent.restype = ctypes.c_void_p
+                cg.CGEventCreateMouseEvent.argtypes = [ctypes.c_void_p, ctypes.c_uint32, CGPoint, ctypes.c_uint32]
+                cg.CGEventPost.argtypes = [ctypes.c_uint32, ctypes.c_void_p]
+                ev = cg.CGEventCreateMouseEvent(None, 5, pt, 0) # 5 = kCGEventMouseMoved
+                if ev:
+                    cg.CGEventPost(0, ev)
+                    try:
+                        cg.CFRelease.argtypes = [ctypes.c_void_p]
+                        cg.CFRelease(ev)
+                    except Exception:
+                        pass
                 return True
             except Exception as e:
                 logger.error(f"macOS mouse abs move error: {e}")
@@ -991,27 +1097,54 @@ class SystemController:
                 cur = SystemController.get_cursor_pos()
                 btn = button.lower().strip()
                 act = action.lower().strip()
-                cg = ctypes.cdll.LoadLibrary("/System/Library/Frameworks/ApplicationServices.framework/Frameworks/CoreGraphics.framework/CoreGraphics")
+                cg = SystemController._get_mac_cg()
+                if not cg:
+                    return False
+
                 class CGPoint(ctypes.Structure):
                     _fields_ = [("x", ctypes.c_double), ("y", ctypes.c_double)]
-                pt = CGPoint(cur["x"], cur["y"])
+
+                pt = CGPoint(float(cur["x"]), float(cur["y"]))
                 cg.CGEventCreateMouseEvent.restype = ctypes.c_void_p
                 cg.CGEventCreateMouseEvent.argtypes = [ctypes.c_void_p, ctypes.c_uint32, CGPoint, ctypes.c_uint32]
                 cg.CGEventPost.argtypes = [ctypes.c_uint32, ctypes.c_void_p]
-                kCGHIDEventTap = 0
-                evt_down, evt_up = (3, 4) if btn == "right" else (1, 2)
-                if act in ("down", "click", "double"):
-                    ev = cg.CGEventCreateMouseEvent(None, evt_down, pt, 0 if btn != "right" else 1)
-                    cg.CGEventPost(kCGHIDEventTap, ev)
-                if act in ("up", "click", "double"):
-                    ev = cg.CGEventCreateMouseEvent(None, evt_up, pt, 0 if btn != "right" else 1)
-                    cg.CGEventPost(kCGHIDEventTap, ev)
-                if act == "double":
+
+                # Map buttons: Left (1, 2, 0), Right (3, 4, 1), Middle (25, 26, 2)
+                if btn in ("right", "r"):
+                    evt_down, evt_up, mouse_btn = 3, 4, 1
+                elif btn in ("middle", "m"):
+                    evt_down, evt_up, mouse_btn = 25, 26, 2
+                else:
+                    evt_down, evt_up, mouse_btn = 1, 2, 0
+
+                is_double = (btn in ("double", "dblclick") or act == "double")
+
+                def _post_event(evt_type, click_count=1):
+                    ev = cg.CGEventCreateMouseEvent(None, evt_type, pt, mouse_btn)
+                    if ev:
+                        if click_count > 1:
+                            try:
+                                cg.CGEventSetIntegerValueField.argtypes = [ctypes.c_void_p, ctypes.c_uint32, ctypes.c_int64]
+                                cg.CGEventSetIntegerValueField(ev, 1, click_count) # 1 = kCGMouseEventClickState
+                            except Exception:
+                                pass
+                        cg.CGEventPost(0, ev)
+                        try:
+                            cg.CFRelease.argtypes = [ctypes.c_void_p]
+                            cg.CFRelease(ev)
+                        except Exception:
+                            pass
+
+                if act in ("down", "click") or is_double:
+                    _post_event(evt_down, click_count=1)
+                if act in ("up", "click") or is_double:
+                    _post_event(evt_up, click_count=1)
+
+                if is_double:
                     time.sleep(0.05)
-                    ev = cg.CGEventCreateMouseEvent(None, evt_down, pt, 0 if btn != "right" else 1)
-                    cg.CGEventPost(kCGHIDEventTap, ev)
-                    ev = cg.CGEventCreateMouseEvent(None, evt_up, pt, 0 if btn != "right" else 1)
-                    cg.CGEventPost(kCGHIDEventTap, ev)
+                    _post_event(evt_down, click_count=2)
+                    _post_event(evt_up, click_count=2)
+
                 return True
             except Exception as e:
                 logger.error(f"macOS mouse click error: {e}")
@@ -1062,16 +1195,30 @@ class SystemController:
 
     @staticmethod
     def mouse_scroll(delta: int) -> bool:
-        """Simulate mouse wheel scrolling (positive = up, negative = down)."""
+        """Simulate vertical mouse wheel scrolling (positive = up, negative = down)."""
         if IS_MAC:
             try:
-                cg = ctypes.cdll.LoadLibrary("/System/Library/Frameworks/ApplicationServices.framework/Frameworks/CoreGraphics.framework/CoreGraphics")
-                cg.CGEventCreateScrollWheelEvent.restype = ctypes.c_void_p
-                cg.CGEventCreateScrollWheelEvent.argtypes = [ctypes.c_void_p, ctypes.c_uint32, ctypes.c_uint32, ctypes.c_int32]
-                cg.CGEventPost.argtypes = [ctypes.c_uint32, ctypes.c_void_p]
+                cg = SystemController._get_mac_cg()
+                if not cg:
+                    return False
                 wheel_step = int(delta / 20) if abs(delta) >= 20 else (1 if delta > 0 else -1)
-                ev = cg.CGEventCreateScrollWheelEvent(None, 1, 1, wheel_step)
-                cg.CGEventPost(0, ev)
+                try:
+                    cg.CGEventCreateScrollWheelEvent2.restype = ctypes.c_void_p
+                    cg.CGEventCreateScrollWheelEvent2.argtypes = [ctypes.c_void_p, ctypes.c_uint32, ctypes.c_uint32, ctypes.c_int32, ctypes.c_int32, ctypes.c_int32]
+                    cg.CGEventPost.argtypes = [ctypes.c_uint32, ctypes.c_void_p]
+                    ev = cg.CGEventCreateScrollWheelEvent2(None, 1, 1, wheel_step, 0, 0)
+                    if ev:
+                        cg.CGEventPost(0, ev)
+                        try:
+                            cg.CFRelease.argtypes = [ctypes.c_void_p]
+                            cg.CFRelease(ev)
+                        except Exception:
+                            pass
+                        return True
+                except Exception:
+                    pass
+                key = 126 if delta > 0 else 125
+                subprocess.run(["osascript", "-e", f'tell application "System Events" to key code {key}'], timeout=2)
                 return True
             except Exception as e:
                 logger.error(f"macOS mouse scroll error: {e}")
@@ -1091,13 +1238,27 @@ class SystemController:
         """Simulate horizontal mouse wheel scrolling (positive = right, negative = left)."""
         if IS_MAC:
             try:
-                cg = ctypes.cdll.LoadLibrary("/System/Library/Frameworks/ApplicationServices.framework/Frameworks/CoreGraphics.framework/CoreGraphics")
-                cg.CGEventCreateScrollWheelEvent.restype = ctypes.c_void_p
-                cg.CGEventCreateScrollWheelEvent.argtypes = [ctypes.c_void_p, ctypes.c_uint32, ctypes.c_uint32, ctypes.c_int32, ctypes.c_int32]
-                cg.CGEventPost.argtypes = [ctypes.c_uint32, ctypes.c_void_p]
+                cg = SystemController._get_mac_cg()
+                if not cg:
+                    return False
                 wheel_step = int(delta / 20) if abs(delta) >= 20 else (1 if delta > 0 else -1)
-                ev = cg.CGEventCreateScrollWheelEvent(None, 1, 2, 0, wheel_step)
-                cg.CGEventPost(0, ev)
+                try:
+                    cg.CGEventCreateScrollWheelEvent2.restype = ctypes.c_void_p
+                    cg.CGEventCreateScrollWheelEvent2.argtypes = [ctypes.c_void_p, ctypes.c_uint32, ctypes.c_uint32, ctypes.c_int32, ctypes.c_int32, ctypes.c_int32]
+                    cg.CGEventPost.argtypes = [ctypes.c_uint32, ctypes.c_void_p]
+                    ev = cg.CGEventCreateScrollWheelEvent2(None, 1, 2, 0, wheel_step, 0)
+                    if ev:
+                        cg.CGEventPost(0, ev)
+                        try:
+                            cg.CFRelease.argtypes = [ctypes.c_void_p]
+                            cg.CFRelease(ev)
+                        except Exception:
+                            pass
+                        return True
+                except Exception:
+                    pass
+                key = 124 if delta > 0 else 123
+                subprocess.run(["osascript", "-e", f'tell application "System Events" to key code {key}'], timeout=2)
                 return True
             except Exception as e:
                 logger.error(f"macOS mouse scroll_h error: {e}")
@@ -1296,12 +1457,17 @@ class SystemController:
 
         if IS_MAC:
             try:
-                escaped = text.replace('\\', '\\\\').replace('"', '\\"')
-                script = f'tell application "System Events" to keystroke "{escaped}"'
-                res = subprocess.run(["osascript", "-e", script], capture_output=True, text=True, timeout=10)
-                if res.returncode == 0:
-                    return True, f"Typed {len(text)} characters into active window"
-                return False, f"macOS typing failed: {res.stderr.strip()}"
+                # Handle newlines properly so AppleScript does not fail syntax parsing
+                norm_text = text.replace("\r\n", "\n").replace("\r", "\n")
+                lines = norm_text.split("\n")
+                for i, line in enumerate(lines):
+                    if line:
+                        escaped = line.replace('\\', '\\\\').replace('"', '\\"')
+                        script = f'tell application "System Events" to keystroke "{escaped}"'
+                        subprocess.run(["osascript", "-e", script], capture_output=True, text=True, timeout=10)
+                    if i < len(lines) - 1:
+                        subprocess.run(["osascript", "-e", 'tell application "System Events" to key code 36'], capture_output=True, timeout=5)
+                return True, f"Typed {len(text)} characters into active window"
             except Exception as e:
                 logger.error(f"macOS type_text error: {e}")
                 return False, f"Typing error: {e}"
@@ -1387,6 +1553,7 @@ class SystemController:
         k = key.lower().strip()
 
         if IS_MAC:
+            k = key.lower().strip()
             mac_keycodes = {
                 "enter": 36, "return": 36,
                 "tab": 48,
@@ -1398,11 +1565,39 @@ class SystemController:
                 "f1": 122, "f2": 120, "f3": 99, "f4": 118, "f5": 96, "f6": 97,
                 "f7": 98, "f8": 100, "f9": 101, "f10": 109, "f11": 103, "f12": 111,
             }
+            # Special shortcuts translation for macOS
+            if k in ("win+d", "super+d"):
+                return SystemController.press_key("cmd+f3")
+            if k in ("win+e", "super+e"):
+                subprocess.Popen(["open", str(Path.home())])
+                return True, "Finder opened"
+            if k in ("alt+f4",):
+                return SystemController.press_key("cmd+w")
+            if k in ("ctrl", "control"):
+                script = 'tell application "System Events" to key code 59'
+                subprocess.run(["osascript", "-e", script], timeout=5)
+                return True, "Control key pressed"
+            if k in ("cmd", "command", "win", "super"):
+                script = 'tell application "System Events" to key code 55'
+                subprocess.run(["osascript", "-e", script], timeout=5)
+                return True, "Command key pressed"
+            if k in ("alt", "option", "opt"):
+                script = 'tell application "System Events" to key code 58'
+                subprocess.run(["osascript", "-e", script], timeout=5)
+                return True, "Option key pressed"
+            if k in ("shift",):
+                script = 'tell application "System Events" to key code 56'
+                subprocess.run(["osascript", "-e", script], timeout=5)
+                return True, "Shift key pressed"
+
             parts = [p.strip() for p in k.split("+")]
             mods = []
             for p in parts[:-1]:
                 if p in ("ctrl", "control"):
-                    mods.append("control down")
+                    if len(parts[-1]) == 1 and parts[-1].lower() in "cvxzasfwqrt":
+                        mods.append("command down")
+                    else:
+                        mods.append("control down")
                 elif p in ("alt", "option", "opt"):
                     mods.append("option down")
                 elif p in ("shift",):
@@ -1640,8 +1835,11 @@ class SystemController:
     # ── Task Manager & Utilities ────────────────────────────────────────
 
     @staticmethod
-    def list_top_processes(limit: int = 10) -> List[Dict[str, Any]]:
+    def list_top_processes(limit: int = 10, count: Optional[int] = None) -> List[Dict[str, Any]]:
         """List top processes sorted by memory and active CPU consumption."""
+        if count is not None:
+            limit = count
+        limit = max(1, min(100, int(limit)))
         procs = []
         for p in psutil.process_iter(['pid', 'name', 'memory_percent']):
             try:
@@ -1680,16 +1878,25 @@ class SystemController:
 
     PROTECTED_PROCESSES = {
         "csrss.exe", "smss.exe", "services.exe", "wininit.exe",
-        "lsass.exe", "winlogon.exe", "system", "registry"
+        "lsass.exe", "winlogon.exe", "system", "registry",
+        "launchd", "kernel_task", "windowserver", "loginwindow",
+        "diskarbitrationd", "coreauthd", "securityd", "syslogd"
     }
 
     @staticmethod
-    def kill_process(identifier: str) -> Tuple[bool, str]:
+    def kill_process(identifier: Union[str, int, None] = None, pid: Optional[Union[int, str]] = None, name: Optional[str] = None) -> Tuple[bool, str]:
         """
         Kill process by name or PID with strict safety checks to prevent
         interfering with other critical processes or trading bots.
         """
-        target = identifier.strip()
+        if identifier is None:
+            if pid is not None:
+                identifier = str(pid)
+            elif name is not None:
+                identifier = str(name)
+            else:
+                return False, "No process identifier provided."
+        target = str(identifier).strip()
         killed = 0
         my_pids = {os.getpid()}
         try:
@@ -1706,14 +1913,14 @@ class SystemController:
                 "Please specify the exact Process PID instead: '/kill <PID>'."
             )
 
-        # 2. Protect against terminating critical Windows system components
+        # 2. Protect against terminating critical Windows/macOS system components
         if target.lower() in SystemController.PROTECTED_PROCESSES:
-            return False, f"🛡️ Safety Shield: Cannot terminate critical Windows system process: '{target}'."
+            return False, f"🛡️ Safety Shield: Cannot terminate critical system process: '{target}'."
 
         if target.isdigit():
             pid = int(target)
-            if pid in (0, 4):
-                return False, f"🛡️ Safety Shield: Refusing to terminate Windows System core process (PID {pid})."
+            if pid in (0, 1, 4):
+                return False, f"🛡️ Safety Shield: Refusing to terminate System core process (PID {pid})."
             if pid in my_pids:
                 return False, f"🛡️ Safety Shield: Refusing to terminate Sentinel's own process (PID {pid})."
             try:
@@ -2005,7 +2212,8 @@ class SystemController:
         items = []
         ignored_names = {
             "desktop.ini", "ntuser.dat", "$recycle.bin", "system volume information",
-            "hiberfil.sys", "pagefile.sys", "swapfile.sys", "dumpstack.log", "dumpstack.log.tmp"
+            "hiberfil.sys", "pagefile.sys", "swapfile.sys", "dumpstack.log", "dumpstack.log.tmp",
+            ".ds_store", ".localized", ".trashes", ".fseventsd", ".spotlight-v100"
         }
         try:
             for entry in p.iterdir():

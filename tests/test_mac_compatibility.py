@@ -108,12 +108,20 @@ class TestMacCompatibility(unittest.TestCase):
                 ok, msg = SystemController.execute_gesture("task_view")
                 self.assertTrue(ok)
 
-                # Typing on macOS
-                ok, msg = SystemController.type_text("Hello Mac!")
+                # Multiline typing on macOS
+                ok, msg = SystemController.type_text("Hello Mac!\nSecond Line\nThird Line")
                 self.assertTrue(ok)
 
-                # Key combos on macOS
+                # Key combos on macOS (including Windows -> Mac translations)
                 ok, msg = SystemController.press_key("cmd+c")
+                self.assertTrue(ok)
+                ok, msg = SystemController.press_key("ctrl+c") # auto translated to cmd+c
+                self.assertTrue(ok)
+                ok, msg = SystemController.press_key("win+d") # translated to cmd+f3
+                self.assertTrue(ok)
+                ok, msg = SystemController.press_key("alt+f4") # translated to cmd+w
+                self.assertTrue(ok)
+                ok, msg = SystemController.press_key("cmd") # standalone modifier
                 self.assertTrue(ok)
 
                 # TTS on macOS
@@ -135,6 +143,103 @@ class TestMacCompatibility(unittest.TestCase):
         import socket
         name = socket.gethostname()
         self.assertTrue(len(name) > 0)
+
+    def test_07_process_management_signatures_and_protection(self):
+        """Verify list_top_processes accepts both limit and count, and protects macOS system daemons."""
+        import system_controller
+        from system_controller import SystemController
+
+        # Test both limit and count parameters
+        procs1 = SystemController.list_top_processes(limit=5)
+        self.assertIsInstance(procs1, list)
+
+        procs2 = SystemController.list_top_processes(count=5)
+        self.assertIsInstance(procs2, list)
+
+        with patch.object(system_controller, "IS_MAC", True), \
+             patch.object(system_controller, "IS_WINDOWS", False):
+            # Verify PID 0, 1, 4 protection
+            ok0, msg0 = SystemController.kill_process(pid=0)
+            self.assertFalse(ok0)
+            self.assertTrue("refusing" in msg0.lower() or "safety shield" in msg0.lower())
+
+            ok1, msg1 = SystemController.kill_process(pid=1)
+            self.assertFalse(ok1)
+            self.assertTrue("refusing" in msg1.lower() or "safety shield" in msg1.lower())
+
+            # Verify macOS protected daemon name protection
+            ok_w, msg_w = SystemController.kill_process(name="WindowServer")
+            self.assertFalse(ok_w)
+            self.assertTrue("protected" in msg_w.lower() or "safety shield" in msg_w.lower())
+
+    def test_08_macos_session_state_detection(self):
+        """Test macOS screen lock detection via ioreg."""
+        import system_controller
+        from system_controller import SystemController
+
+        with patch.object(system_controller, "IS_MAC", True), \
+             patch.object(system_controller, "IS_WINDOWS", False):
+
+            # Test locked state
+            with patch("subprocess.run") as mock_run:
+                mock_run.return_value = MagicMock(
+                    returncode=0,
+                    stdout='"CGSSessionScreenIsLocked" = Yes\n',
+                    stderr=""
+                )
+                state = SystemController.get_session_state()
+                self.assertIn("Lock Screen", state)
+
+            # Test unlocked state
+            with patch("subprocess.run") as mock_run:
+                mock_run.return_value = MagicMock(
+                    returncode=0,
+                    stdout='other ioreg output without lock flag\n',
+                    stderr=""
+                )
+                state = SystemController.get_session_state()
+                self.assertIn("Unlocked", state)
+
+    def test_09_alarm_and_timer_methods(self):
+        """Verify set_alarm, cancel_alarm, and get_alarm_status work cleanly."""
+        from system_controller import SystemController
+
+        res = SystemController.set_alarm(seconds=9999, label="Unit Test")
+        self.assertIsInstance(res, dict)
+        self.assertIn("target_time", res)
+        self.assertEqual(res.get("label"), "Unit Test")
+
+        status = SystemController.get_alarm_status()
+        self.assertIsInstance(status, dict)
+        self.assertEqual(status.get("status"), "scheduled")
+
+        cancelled = SystemController.cancel_alarm()
+        self.assertTrue(cancelled)
+
+    def test_10_safe_grab_screen_fallback(self):
+        """Verify safe_grab_screen falls back gracefully when all_screens=True is unsupported."""
+        import screen_caster
+        from screen_caster import ScreenCaster, safe_grab_screen
+        from PIL import Image
+
+        dummy_img = Image.new("RGB", (100, 100), color="blue")
+
+        # Case A: all_screens=True works
+        with patch("PIL.ImageGrab.grab", return_value=dummy_img):
+            img1 = safe_grab_screen()
+            self.assertIsNotNone(img1)
+            img2 = ScreenCaster.safe_grab_screen()
+            self.assertIsNotNone(img2)
+
+        # Case B: all_screens=True raises TypeError, fallback grab() succeeds
+        def grab_side_effect(**kwargs):
+            if kwargs.get("all_screens"):
+                raise TypeError("unexpected keyword argument 'all_screens'")
+            return dummy_img
+
+        with patch("PIL.ImageGrab.grab", side_effect=grab_side_effect):
+            img = ScreenCaster.safe_grab_screen()
+            self.assertIsNotNone(img)
 
 
 if __name__ == "__main__":

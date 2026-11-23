@@ -117,6 +117,37 @@ def get_active_window_title() -> str:
     return "Desktop"
 
 
+def safe_grab_screen():
+    """Safely capture desktop frame across Windows, macOS, and Linux with fallbacks."""
+    try:
+        return ImageGrab.grab(all_screens=True)
+    except TypeError:
+        return ImageGrab.grab()
+    except Exception as e:
+        if sys.platform == "darwin":
+            try:
+                import tempfile
+                from PIL import Image
+                with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tf:
+                    tname = tf.name
+                res = subprocess.run(["/usr/sbin/screencapture", "-x", tname], capture_output=True, timeout=2.0)
+                if res.returncode == 0 and os.path.exists(tname) and os.path.getsize(tname) > 0:
+                    im = Image.open(tname).copy()
+                    try:
+                        os.unlink(tname)
+                    except Exception:
+                        pass
+                    return im
+                if os.path.exists(tname):
+                    try:
+                        os.unlink(tname)
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+        raise e
+
+
 # Modern Dark Glass HTML5 Web Player with Cross-Network Auto-Reconnect & Virtual Desktop Controls
 HTML_PLAYER_TEMPLATE = """<!DOCTYPE html>
 <html lang="en">
@@ -2099,6 +2130,9 @@ class StreamHTTPHandler(BaseHTTPRequestHandler):
 class ScreenCaster:
     """Manages real-time desktop casting and streaming."""
 
+    # Static reference to safe_grab_screen for convenience
+    safe_grab_screen = staticmethod(safe_grab_screen)
+
     def __init__(self):
         self.is_web_streaming = False
         self.httpd: Optional[ThreadingHTTPServer] = None
@@ -2130,10 +2164,10 @@ class ScreenCaster:
         self.last_viewer_activity = time.time()
 
     def capture_single_frame(self, quality: int = 70, max_w: int = 1280) -> bytes:
-        """Capture one instantaneous frame of Windows desktop using OpenCV acceleration if available."""
+        """Capture one instantaneous frame of Windows/macOS desktop using OpenCV acceleration if available."""
         ensure_desktop_access()
         try:
-            img = ImageGrab.grab(all_screens=True)
+            img = safe_grab_screen()
             if cv2 is not None and np is not None:
                 arr = np.asarray(img)
                 bgr = cv2.cvtColor(arr, cv2.COLOR_RGB2BGR)
@@ -2164,7 +2198,7 @@ class ScreenCaster:
         while self.is_web_streaming:
             t0 = time.time()
             try:
-                img = ImageGrab.grab(all_screens=True)
+                img = safe_grab_screen()
                 if cv2 is not None and np is not None:
                     arr = np.asarray(img)
                     bgr = cv2.cvtColor(arr, cv2.COLOR_RGB2BGR)

@@ -1,8 +1,8 @@
 # PC-Remote-Sentinel — Native macOS Agent Requirements
-# Optimized for macOS (Apple Silicon M1/M2/M3/M4 & Intel x86_64)
+# Compatible with macOS Monterey, Ventura, Sonoma, Sequoia (M1/M2/M3/M4 Apple Silicon & Intel)
 
 fastapi>=0.104.0
-uvicorn[standard]>=0.24.0
+uvicorn>=0.23.0
 paho-mqtt>=2.0.0
 cryptography>=41.0.0
 httpx>=0.25.0

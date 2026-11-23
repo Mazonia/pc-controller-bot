@@ -441,7 +441,7 @@ def handle_relay_command(data: dict) -> dict:
 
     # 8. PROCESSES & TERMINAL
     elif cmd == "processes":
-        procs = SystemController.list_top_processes(count=int(params.get("limit", 25)))
+        procs = SystemController.list_top_processes(limit=int(params.get("limit", params.get("count", 25))))
         return {"ok": True, "processes": procs}
 
     elif cmd == "kill_process":
@@ -484,15 +484,28 @@ def handle_relay_command(data: dict) -> dict:
         return {"ok": ok, "msg": "Clipboard updated." if ok else "Failed to set clipboard."}
 
     # 11. ALARM
-    elif cmd == "alarm_start":
-        duration = int(params.get("duration", 30))
+    elif cmd in ("alarm_start", "alarm_trigger"):
         label = params.get("label", "Manual Telegram Alarm")
-        ok, msg = SystemController.set_alarm(time_input=f"{duration}s", label=label)
-        return {"ok": ok, "msg": msg}
+        SystemController.play_alert_siren(label)
+        return {"ok": True, "msg": f"Alarm siren triggered ({label})."}
 
-    elif cmd == "alarm_stop":
+    elif cmd == "alarm_set":
+        seconds = int(params.get("seconds", params.get("duration", 30)))
+        label = params.get("label", "Scheduled Alarm")
+        res = SystemController.set_alarm(seconds, label)
+        return {"ok": True, "alarm": res}
+
+    elif cmd == "alarm_status":
+        st = SystemController.get_alarm_status()
+        return {"ok": True, "status": st}
+
+    elif cmd in ("alarm_stop", "alarm_silence"):
         ok = SystemController.stop_alarm()
         return {"ok": ok, "msg": "Alarm silenced." if ok else "No active alarm."}
+
+    elif cmd == "alarm_cancel":
+        ok = SystemController.cancel_alarm()
+        return {"ok": ok, "msg": "Alarm cancelled." if ok else "No active alarm."}
 
     # 12. TTS
     elif cmd == "tts":
