@@ -141,9 +141,9 @@ if [ ! -f "$ENV_FILE" ]; then
         SRC_ENV="$REPO_ROOT/.env"
     fi
 
-    BOT_TOKEN="8219154654:AAG9s9fpcTMJqB76Cq8iMrCD4nDobg6kaS8"
-    AUTH_IDS="6513180621"
-    FLEET_SEC="sentinel-fleet-secret-2026"
+    BOT_TOKEN="your_telegram_bot_token_here"
+    AUTH_IDS="your_telegram_user_id_here"
+    FLEET_SEC="your_fleet_secret_here"
     HOST_NAME="$(scutil --get ComputerName 2>/dev/null || hostname -s || echo "MacBook")"
 
     if [ -n "$SRC_ENV" ]; then

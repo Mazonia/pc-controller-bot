@@ -319,9 +319,9 @@ if not exist "%CONFIG_SRC%" (
             )
         )
     ) else (
-        echo FLEET_SECRET=sentinel-fleet-secret-2026
-        echo TELEGRAM_BOT_TOKEN=8219154654:AAG9s9fpcTMJqB76Cq8iMrCD4nDobg6kaS8
-        echo AUTHORIZED_USER_IDS=6513180621
+        echo FLEET_SECRET=your_fleet_secret_here
+        echo TELEGRAM_BOT_TOKEN=your_telegram_bot_token_here
+        echo AUTHORIZED_USER_IDS=your_telegram_user_id_here
         echo MQTT_BROKER=broker.emqx.io
         echo MQTT_PORT=8883
         echo MQTT_USE_TLS=true

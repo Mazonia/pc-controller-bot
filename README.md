@@ -273,7 +273,7 @@ Traditional remote desktop tools require port forwarding, static public IPs, com
 ### Step 1: Set Up Your Telegram Bot <a id="step-1-set-up-your-telegram-bot"></a>
 1. Open Telegram and message **[@BotFather](https://t.me/BotFather)**.
 2. Send `/newbot`, choose a name and username, and copy your **Bot Token**.
-3. Message **[@userinfobot](https://t.me/userinfobot)** in Telegram to find your numeric **User ID** (e.g. `6513180621`).
+3. Message **[@userinfobot](https://t.me/userinfobot)** in Telegram to find your numeric **User ID** (e.g. `123456789`).
 
 ### Step 2: Configure Master Settings <a id="step-2-configure-master-settings"></a>
 1. Clone the repository:
@@ -288,7 +288,7 @@ Traditional remote desktop tools require port forwarding, static public IPs, com
    Fill in your values:
    ```env
    TELEGRAM_BOT_TOKEN=123456789:ABCdefGHIjklMNOpqrsTUVwxyz
-   AUTHORIZED_USER_IDS=6513180621
+   AUTHORIZED_USER_IDS=123456789
    ```
 3. Copy the deploy template for your USB pendrive:
    ```bash
