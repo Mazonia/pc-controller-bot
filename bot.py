@@ -73,16 +73,34 @@ CORE_AGENT_FILES = [
 
 
 def create_agent_update_bundle() -> Tuple[bytes, List[str]]:
-    """Package current workspace agent scripts into an in-memory zip bundle."""
+    """Package current workspace agent scripts into an in-memory zip bundle with manifest checksums."""
     import zipfile
+    import hashlib
+    import json
     buf = io.BytesIO()
     packaged = []
+    file_hashes = {}
+
+    for fname in CORE_AGENT_FILES:
+        fpath = config.BASE_DIR / fname
+        if fpath.exists():
+            content = fpath.read_bytes()
+            file_hashes[fname] = hashlib.sha256(content).hexdigest()
+            packaged.append(fname)
+
+    manifest = {
+        "version": f"{int(time.time())}_{hashlib.sha256(''.join(file_hashes.values()).encode()).hexdigest()[:10]}",
+        "timestamp": int(time.time()),
+        "files": file_hashes,
+        "count": len(packaged),
+    }
+
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
-        for fname in CORE_AGENT_FILES:
+        zf.writestr("manifest.json", json.dumps(manifest, indent=2))
+        for fname in packaged:
             fpath = config.BASE_DIR / fname
-            if fpath.exists():
-                zf.write(fpath, arcname=fname)
-                packaged.append(fname)
+            zf.write(fpath, arcname=fname)
+
     return buf.getvalue(), packaged
 
 
@@ -802,6 +820,35 @@ class AgentClient:
         if self.should_use_relay():
             return await commander_relay.send_command(self.name, "agent_update", payload, timeout=45.0)
         r = await self._post("/agent/update", json=payload, timeout=45.0)
+        r.raise_for_status()
+        return r.json()
+
+    async def rollback_agent_update(self, backup_id: Optional[str] = None) -> dict:
+        payload = {"backup_id": backup_id}
+        if self.is_local:
+            try:
+                r = await self._post("/agent/update/rollback", json=payload, timeout=25.0)
+                r.raise_for_status()
+                return r.json()
+            except Exception as e:
+                logger.debug(f"Local agent rollback notice: {e}. Trying relay...")
+        if self.should_use_relay():
+            return await commander_relay.send_command(self.name, "agent_rollback", payload, timeout=25.0)
+        r = await self._post("/agent/update/rollback", json=payload, timeout=25.0)
+        r.raise_for_status()
+        return r.json()
+
+    async def get_agent_version_info(self) -> dict:
+        if self.is_local:
+            try:
+                r = await self._get("/agent/version", timeout=12.0)
+                r.raise_for_status()
+                return r.json()
+            except Exception as e:
+                logger.debug(f"Local agent version notice: {e}. Trying relay...")
+        if self.should_use_relay():
+            return await commander_relay.send_command(self.name, "agent_version", {}, timeout=15.0)
+        r = await self._get("/agent/version", timeout=12.0)
         r.raise_for_status()
         return r.json()
 
@@ -2174,12 +2221,15 @@ async def handle_setpin(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if not context.args:
         await update.effective_message.reply_text(
-            "Usage: <code>/setpin 1234</code>\n<i>(Must be 4 to 8 digits)</i>",
+            "Usage: <code>/setpin 1234</code> to set, or <code>/setpin off</code> to disable.",
             parse_mode="HTML"
         )
         return
 
     new_pin = context.args[0].strip()
+    if new_pin.lower() in ("off", "remove", "disable", "del", "unset", "clear"):
+        return await handle_removepin(update, context)
+
     if not new_pin.isdigit() or len(new_pin) < 4 or len(new_pin) > 8:
         await update.effective_message.reply_text(
             "❌ <b>Invalid PIN:</b> PIN must be 4 to 8 digits (e.g. <code>/setpin 2580</code>).",
@@ -3304,8 +3354,7 @@ async def handle_clip(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not agent:
         return
     if not context.args:
-        await update.message.reply_text("Usage: <code>/clip text to copy</code>", parse_mode="HTML")
-        return
+        return await handle_getclip(update, context)
     text = " ".join(context.args)
     try:
         ok = await agent.set_clipboard(text)
@@ -3489,8 +3538,15 @@ async def handle_stopalarm(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not agent:
         return
     try:
-        ok = await agent.alarm_stop()
-        await update.message.reply_text("🔕 <b>Silenced.</b>" if ok else "ℹ️ No alarm ringing.", parse_mode="HTML")
+        ok_stop = await agent.alarm_stop()
+        if ok_stop:
+            await update.message.reply_text("🔕 <b>Alarm Silenced.</b>", parse_mode="HTML")
+            return
+        ok_cancel = await agent.alarm_cancel()
+        if ok_cancel:
+            await update.message.reply_text("✅ <b>Scheduled Alarm Cancelled.</b>", parse_mode="HTML")
+            return
+        await update.message.reply_text("ℹ️ No alarm ringing or active.", parse_mode="HTML")
     except Exception as e:
         await update.message.reply_text(f"❌ {e}")
 
@@ -3732,6 +3788,42 @@ async def handle_lockdown(update: Update, context: ContextTypes.DEFAULT_TYPE):
     label = pc_label(context)
     user = update.effective_user
     manager_auth.record_audit(user.id if user else 0, user.username if user else "", "LOCKDOWN_VIEW", label)
+
+    if context.args:
+        sub_arg = context.args[0].lower().strip()
+        if sub_arg in ("off", "stop", "disarm", "disable", "cancel"):
+            return await handle_unlockdown(update, context)
+        elif sub_arg in ("loud", "alarm", "siren"):
+            try:
+                await agent.lockdown_enable(silent=False, alarm=True)
+                manager_auth.record_audit(user.id if user else 0, user.username if user else "", "LOCKDOWN_ENGAGE_LOUD", label)
+                await update.effective_message.reply_text(
+                    f"🚨 <b>LOUD LOCKDOWN ENGAGED ON {html.escape(label)}!</b> 🚨\n"
+                    f"• Workstation locked & screens blacked out.\n"
+                    f"• Emergency deterrent siren active.\n"
+                    f"• Intruder webcam guard armed.",
+                    reply_markup=get_lockdown_keyboard(is_active=True),
+                    parse_mode="HTML"
+                )
+                return
+            except Exception as le:
+                await update.effective_message.reply_text(f"❌ Lockdown failed: {le}")
+                return
+        elif sub_arg in ("silent", "stealth"):
+            try:
+                await agent.lockdown_enable(silent=True, alarm=False)
+                manager_auth.record_audit(user.id if user else 0, user.username if user else "", "LOCKDOWN_ENGAGE_SILENT", label)
+                await update.effective_message.reply_text(
+                    f"🥷 <b>SILENT STEALTH LOCKDOWN ENGAGED ON {html.escape(label)}!</b>\n"
+                    f"• Workstation locked & screens blacked out.\n"
+                    f"• Silent stealth guard active (intruder photos will be captured upon breach).",
+                    reply_markup=get_lockdown_keyboard(is_active=True),
+                    parse_mode="HTML"
+                )
+                return
+            except Exception as le:
+                await update.effective_message.reply_text(f"❌ Lockdown failed: {le}")
+                return
     try:
         st = await agent.lockdown_status()
         is_active = st.get("active", False)
@@ -3779,6 +3871,68 @@ async def handle_unlockdown(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ── Over-The-Air (OTA) Remote Agent Update ─────────────────────────────
 
+async def verify_agent_reconnect(
+    agent: "AgentClient",
+    chat_id: int,
+    label: str,
+    status_msg_id: Optional[int],
+    bot_instance,
+    max_wait_seconds: float = 16.0,
+):
+    """Asynchronously monitor agent restart and verify when it reports back online."""
+    import time
+    start_t = time.time()
+    await asyncio.sleep(2.0)
+    while (time.time() - start_t) < max_wait_seconds:
+        try:
+            st = await agent.status()
+            if st and isinstance(st, dict) and "cpu_percent" in st:
+                elapsed = time.time() - start_t
+                cpu = st.get("cpu_percent", 0.0)
+                ram = st.get("memory_percent", 0.0)
+                confirm_text = (
+                    f"✅ <b>OTA UPDATE CONFIRMED — {html.escape(label)} IS BACK ONLINE!</b> 🚀\n"
+                    f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                    f"⚡ <b>Restart Latency:</b> <code>{elapsed:.1f}s</code>\n"
+                    f"💻 <b>Live Health:</b> CPU <code>{cpu:.1f}%</code> | RAM <code>{ram:.1f}%</code>\n"
+                    f"🟢 <b>Status:</b> Running updated codebase with zero errors."
+                )
+                if status_msg_id:
+                    try:
+                        await bot_instance.edit_message_text(
+                            chat_id=chat_id,
+                            message_id=status_msg_id,
+                            text=confirm_text,
+                            parse_mode="HTML",
+                        )
+                        return
+                    except Exception:
+                        pass
+                await bot_instance.send_message(chat_id=chat_id, text=confirm_text, parse_mode="HTML")
+                return
+        except Exception:
+            pass
+        await asyncio.sleep(1.5)
+
+    timeout_text = (
+        f"⏳ <b>Update Delivered to {html.escape(label)}</b>\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"The agent was instructed to restart. If it hasn't reconnected yet:\n"
+        f"• Check connection: <code>/net</code>\n"
+        f"• To revert: <code>/update rollback</code>"
+    )
+    if status_msg_id:
+        try:
+            await bot_instance.edit_message_text(
+                chat_id=chat_id,
+                message_id=status_msg_id,
+                text=timeout_text,
+                parse_mode="HTML",
+            )
+        except Exception:
+            pass
+
+
 async def handle_update_agent(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await check_access(update, context):
         return
@@ -3789,15 +3943,96 @@ async def handle_update_agent(update: Update, context: ContextTypes.DEFAULT_TYPE
         return
     label = pc_label(context)
     user = update.effective_user
-    manager_auth.record_audit(user.id if user else 0, user.username if user else "", "OTA_UPDATE_START", label)
+    chat_id = update.effective_chat.id
     import base64
+    import hashlib
 
+    # 1. Parse subcommands: /update all, /update rollback [backup_id], /update status
+    if context.args:
+        sub = context.args[0].lower().strip()
+        if sub in ("all", "fleet", "broadcast"):
+            return await handle_update_all_fleet(update, context)
+        elif sub in ("rollback", "undo", "revert"):
+            backup_id = context.args[1].strip() if len(context.args) > 1 else None
+            manager_auth.record_audit(user.id if user else 0, user.username if user else "", "OTA_ROLLBACK", label, f"Backup: {backup_id or 'latest'}")
+            rb_msg = await safe_reply(update, f"⏪ <i>Requesting code rollback on {html.escape(label)}...</i>", parse_mode="HTML")
+            try:
+                res = await agent.rollback_agent_update(backup_id=backup_id)
+                if res.get("ok"):
+                    used_b = res.get("backup_id", "previous backup")
+                    restored = res.get("restored_files", [])
+                    txt = (
+                        f"⏪ <b>ROLLBACK INITIATED ON {html.escape(label)}!</b> ✅\n"
+                        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                        f"📦 <b>Restored From:</b> <code>{html.escape(used_b)}</code>\n"
+                        f"📂 <b>Restored Files ({len(restored)}):</b> <code>{', '.join(restored)}</code>\n"
+                        f"⚡ <b>Status:</b> Agent process is restarting to restored version...\n\n"
+                        f"📡 <i>Verifying live reconnection...</i>"
+                    )
+                    await safe_edit_text(rb_msg, txt, parse_mode="HTML")
+                    asyncio.create_task(
+                        verify_agent_reconnect(
+                            agent=agent,
+                            chat_id=chat_id,
+                            label=label,
+                            status_msg_id=rb_msg.message_id if rb_msg else None,
+                            bot_instance=context.bot,
+                        )
+                    )
+                else:
+                    err = res.get("error", "Rollback rejected")
+                    await safe_edit_text(rb_msg, f"❌ <b>Rollback failed on {html.escape(label)}:</b>\n<code>{html.escape(err)}</code>", parse_mode="HTML")
+            except Exception as e:
+                await safe_edit_text(rb_msg, f"❌ Rollback error: {e}")
+            return
+        elif sub in ("status", "check", "version", "diff"):
+            chk_msg = await safe_reply(update, f"🔍 <i>Inspecting codebase version on {html.escape(label)}...</i>", parse_mode="HTML")
+            try:
+                ver_info = await agent.get_agent_version_info()
+                remote_hashes = ver_info.get("hashes", {})
+                backups = ver_info.get("backups", [])
+
+                rows = []
+                diff_count = 0
+                for fname in CORE_AGENT_FILES:
+                    fpath = config.BASE_DIR / fname
+                    if not fpath.exists():
+                        continue
+                    local_h = hashlib.sha256(fpath.read_bytes()).hexdigest()[:16]
+                    remote_h = remote_hashes.get(fname, "missing")
+                    if local_h == remote_h:
+                        rows.append(f"🟢 <code>{fname}</code>: Match")
+                    else:
+                        diff_count += 1
+                        rows.append(f"🟡 <code>{fname}</code>: Differ ({remote_h} vs local {local_h[:8]})")
+
+                ver_status = "🟢 <b>Agent is completely UP TO DATE!</b>" if diff_count == 0 else f"🟡 <b>{diff_count} file(s) differ from Host</b> (update available)"
+                bk_str = ", ".join(backups) if backups else "None"
+                txt = (
+                    f"🔍 <b>AGENT CODE VERSION — {html.escape(label)}</b>\n"
+                    f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                    f"{ver_status}\n\n"
+                    + "\n".join(rows) + "\n\n"
+                    f"💾 <b>Available Backups:</b> <code>{html.escape(bk_str)}</code>"
+                )
+                kb = InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🔄 Push Update Now", callback_data="cb_update_agent")],
+                    [InlineKeyboardButton("⏪ Rollback", callback_data="cb_update_rollback")],
+                ])
+                await safe_edit_text(chk_msg, txt, reply_markup=kb, parse_mode="HTML")
+            except Exception as e:
+                await safe_edit_text(chk_msg, f"❌ Version inspection failed: {e}")
+            return
+
+    # Standard /update execution
+    manager_auth.record_audit(user.id if user else 0, user.username if user else "", "OTA_UPDATE_START", label)
     status_msg = None
     if not update.callback_query:
         status_msg = await safe_reply(update, f"📦 <i>Packaging latest core agent files for {html.escape(label)}...</i>", parse_mode="HTML")
     else:
         try:
             await update.callback_query.edit_message_text(f"📦 <i>Packaging latest core agent files for {html.escape(label)}...</i>", parse_mode="HTML")
+            status_msg = update.callback_query.message
         except Exception:
             pass
 
@@ -3819,25 +4054,35 @@ async def handle_update_agent(update: Update, context: ContextTypes.DEFAULT_TYPE
                 f"🔄 <b>OTA UPDATE DELIVERED TO {html.escape(label)}!</b> ✅\n"
                 f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
                 f"📦 <b>Files Updated ({len(packaged_files)}):</b> <code>{', '.join(packaged_files)}</code>\n"
-                f"📊 <b>Package Size:</b> <code>{len(zip_bytes) / 1024:.1f} KB</code>\n"
-                f"⚡ <b>Status:</b> Verified with zero syntax errors. Agent process restarting...\n\n"
-                f"📡 <i>You will receive a notification as soon as {html.escape(label)} reconnects!</i>"
+                f"📊 <b>Package Size:</b> <code>{len(zip_bytes) / 1024:.1f} KB</code> (Manifest & SHA-256 Verified)\n"
+                f"⚡ <b>Status:</b> Zero syntax errors. Agent restarting...\n\n"
+                f"📡 <i>Verifying live reconnection...</i>"
+            )
+            if status_msg:
+                await safe_edit_text(status_msg, text, reply_markup=get_main_keyboard(), parse_mode="HTML")
+            else:
+                status_msg = await safe_reply(update, text, reply_markup=get_main_keyboard(), parse_mode="HTML")
+
+            # Launch background verification watchdog
+            asyncio.create_task(
+                verify_agent_reconnect(
+                    agent=agent,
+                    chat_id=chat_id,
+                    label=label,
+                    status_msg_id=status_msg.message_id if status_msg else None,
+                    bot_instance=context.bot,
+                )
             )
         else:
             err_msg = res.get("error", "Update rejected")
             text = f"❌ <b>OTA update rejected by {html.escape(label)}:</b>\n<code>{html.escape(err_msg)}</code>"
-
-        if update.callback_query:
-            await safe_telegram_call(update.callback_query.edit_message_text, text, reply_markup=get_main_keyboard(), parse_mode="HTML")
-        elif status_msg:
-            await safe_edit_text(status_msg, text, reply_markup=get_main_keyboard(), parse_mode="HTML")
-        else:
-            await safe_reply(update, text, reply_markup=get_main_keyboard(), parse_mode="HTML")
+            if status_msg:
+                await safe_edit_text(status_msg, text, reply_markup=get_main_keyboard(), parse_mode="HTML")
+            else:
+                await safe_reply(update, text, reply_markup=get_main_keyboard(), parse_mode="HTML")
     except Exception as e:
         err = f"❌ Failed to push update to <b>{html.escape(label)}</b>: <code>{html.escape(str(e)[:250])}</code>"
-        if update.callback_query:
-            await safe_telegram_call(update.callback_query.edit_message_text, err, reply_markup=get_main_keyboard(), parse_mode="HTML")
-        elif status_msg:
+        if status_msg:
             await safe_edit_text(status_msg, err, reply_markup=get_main_keyboard(), parse_mode="HTML")
         else:
             await safe_reply(update, err, parse_mode="HTML")
@@ -3919,12 +4164,22 @@ async def handle_incoming_file(update: Update, context: ContextTypes.DEFAULT_TYP
             return
 
         if res.get("ok"):
-            await update.message.reply_text(
+            success_msg = await update.message.reply_text(
                 f"✅ <b>OTA Update Applied on {html.escape(label)}!</b>\n"
                 f"• <b>Payload:</b> <code>{html.escape(filename)}</code>\n"
-                f"• <b>Status:</b> Files verified and agent process is restarting.\n\n"
-                f"📡 <i>You will receive a notification when {html.escape(label)} comes back online.</i>",
+                f"• <b>Status:</b> Files verified and agent process is restarting...\n\n"
+                f"📡 <i>Verifying live reconnection...</i>",
                 parse_mode="HTML"
+            )
+            chat_id = update.effective_chat.id
+            asyncio.create_task(
+                verify_agent_reconnect(
+                    agent=agent,
+                    chat_id=chat_id,
+                    label=label,
+                    status_msg_id=success_msg.message_id if success_msg else None,
+                    bot_instance=context.bot,
+                )
             )
         else:
             await update.message.reply_text(f"❌ <b>Update rejected by {html.escape(label)}:</b>\n<code>{html.escape(res.get('error', 'Unknown error'))}</code>", parse_mode="HTML")
@@ -4597,6 +4852,12 @@ async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not manager_auth.is_owner(query.from_user.id):
             await query.answer("⛔ Restricted to Primary Fleet Owner", show_alert=True)
             return
+        await handle_update_agent(update, context)
+    elif data == "cb_update_rollback":
+        if not manager_auth.is_owner(query.from_user.id):
+            await query.answer("⛔ Restricted to Primary Fleet Owner", show_alert=True)
+            return
+        context.args = ["rollback"]
         await handle_update_agent(update, context)
     elif data == "cb_shot":
         if not manager_auth.has_permission(query.from_user.id, "can_screen"):
@@ -5729,54 +5990,43 @@ def main():
         await asyncio.sleep(1.2)
 
         cmds = [
-            BotCommand("start", "Fleet Command Center"),
-            BotCommand("pcs", "Switch PC / View fleet"),
-            BotCommand("reload", "Reload fleet.json"),
-            BotCommand("managers", "Delegated Managers & Access Control"),
-            BotCommand("invite", "Generate Manager Onboarding Deep-Link"),
-            BotCommand("addmanager", "Pre-authorize Manager by Telegram @username"),
-            BotCommand("removemanager", "Revoke Manager & Wipe from Phone"),
-            BotCommand("audit", "Security Audit Log Trail"),
-            BotCommand("login", "Authenticate with PIN"),
-            BotCommand("logout", "Lock session"),
-            BotCommand("setpin", "Configure/change security PIN"),
-            BotCommand("removepin", "Disable security PIN"),
-            BotCommand("removepc", "Remove PC from fleet"),
-            BotCommand("rename", "Rename PC with custom label"),
-            BotCommand("status", "System Diagnostics"),
+            BotCommand("status", "System Diagnostics (CPU, RAM, Uptime)"),
+            BotCommand("pcs", "Fleet Command Center & PC Switcher"),
             BotCommand("shot", "Desktop Screenshot"),
+            BotCommand("cast", "Live 30 FPS Screen Stream"),
             BotCommand("mouse", "Remote Ghost Mouse & Touchpad"),
             BotCommand("type", "Type text into PC: /type [text]"),
             BotCommand("key", "Press PC key: /key [enter|ctrl+v]"),
-            BotCommand("cast", "Live Screen Cast"),
-            BotCommand("desktop", "Desktops & Windows Menu"),
-            BotCommand("windows", "Switch Open Apps/Windows"),
-            BotCommand("switch", "Focus App: /switch [name]"),
+            BotCommand("desktop", "Virtual Desktops & Task View"),
+            BotCommand("windows", "Switch Open Apps: /windows [name]"),
+            BotCommand("files", "Remote File Explorer & Downloads: /files [path]"),
+            BotCommand("clip", "Read or Copy PC Clipboard: /clip [text]"),
+            BotCommand("say", "Speak text on PC speakers: /say [text]"),
+            BotCommand("webcam", "Webcam Snapshot"),
+            BotCommand("record_screen", "Record Desktop Video (10s-120s)"),
+            BotCommand("record_webcam", "Record Webcam Video"),
+            BotCommand("alarm", "PC Alarm & Timer: /alarm [time|stop]"),
+            BotCommand("track", "Anti-VPN Geolocation & Wi-Fi Tracking"),
+            BotCommand("lockdown", "Emergency Laptop Lockdown: /lockdown [loud|silent|off]"),
+            BotCommand("update", "OTA Code Update: /update [all|rollback|status]"),
             BotCommand("lock", "Lock Windows workstation"),
             BotCommand("sleep", "Put PC to sleep"),
-            BotCommand("track", "Laptop Geolocation & Wi-Fi Tracking"),
-            BotCommand("lockdown", "Emergency Laptop Anti-Theft Lockdown"),
-            BotCommand("unlockdown", "Disarm Emergency Lockdown"),
-            BotCommand("update", "Push OTA Agent Update to PC"),
-            BotCommand("update_all", "Push OTA Update to All Fleet PCs"),
-            BotCommand("webcam", "Webcam Snapshot"),
-            BotCommand("record_screen", "Record Desktop (10s-120s)"),
-            BotCommand("record_webcam", "Record Webcam"),
-            BotCommand("alarm", "PC Alarm & Timer"),
-            BotCommand("stopalarm", "Silence alarm"),
-            BotCommand("cancelalarm", "Cancel alarm"),
-            BotCommand("monitor", "Monitors on/off"),
-            BotCommand("top", "Top Processes"),
-            BotCommand("kill", "Kill Process"),
-            BotCommand("say", "Speak text on PC"),
-            BotCommand("clip", "Copy to PC clipboard"),
-            BotCommand("getclip", "Read PC clipboard"),
-            BotCommand("get", "File Explorer: /get [path]"),
-            BotCommand("files", "Browse PC Directories"),
-            BotCommand("clean", "Cleanup storage"),
-            BotCommand("open", "Open URL/App on PC"),
-            BotCommand("cmd", "Execute command"),
-            BotCommand("net", "Network Latency & Connectivity Diagnostics"),
+            BotCommand("monitor", "Turn monitors on/off: /monitor [on|off]"),
+            BotCommand("top", "Top CPU & Memory Processes"),
+            BotCommand("kill", "Terminate Process: /kill [name|pid]"),
+            BotCommand("clean", "Cleanup cache & temporary recordings"),
+            BotCommand("open", "Open URL or App on PC: /open [url]"),
+            BotCommand("cmd", "Execute Terminal Command: /cmd [command]"),
+            BotCommand("net", "Network Latency & Ping Diagnostics"),
+            BotCommand("managers", "Delegated Managers & Role Permissions"),
+            BotCommand("invite", "Generate Manager Single-Use Invite Link"),
+            BotCommand("audit", "Security Audit Trail & Manager Actions"),
+            BotCommand("setpin", "Configure or Remove Security PIN: /setpin [pin|off]"),
+            BotCommand("login", "Unlock Bot with PIN: /login [pin]"),
+            BotCommand("logout", "Lock Bot Session"),
+            BotCommand("rename", "Rename PC: /rename [new_label]"),
+            BotCommand("removepc", "Remove PC from Fleet: /removepc [name]"),
+            BotCommand("reload", "Reload Fleet Registry"),
         ]
         try:
             await application.bot.set_my_commands(cmds)

@@ -308,3 +308,112 @@ async def test_bot_agent_client_local_methods():
 
         status_res = await client.lockdown_status()
         assert status_res["ok"] is True
+
+
+def test_agent_ota_manifest_checksum_verification(tmp_path):
+    """Verify that OTA update with manifest validates SHA-256 and rejects corrupted files."""
+    import hashlib
+    import json
+
+    code = "DATA = 'clean_manifest_test'\n"
+    code_hash = hashlib.sha256(code.encode("utf-8")).hexdigest()
+
+    # 1. Valid manifest zip
+    valid_zip_buf = io.BytesIO()
+    manifest_data = {
+        "version": "v1.0",
+        "timestamp": 123456,
+        "files": {"module_a.py": code_hash},
+        "count": 1,
+    }
+    with zipfile.ZipFile(valid_zip_buf, "w") as zf:
+        zf.writestr("manifest.json", json.dumps(manifest_data))
+        zf.writestr("module_a.py", code)
+
+    b64_valid = base64.b64encode(valid_zip_buf.getvalue()).decode("ascii")
+
+    with patch("agent.BASE_DIR", tmp_path), \
+         patch("subprocess.Popen"), \
+         patch("threading.Thread"):
+
+        res = agent.apply_agent_update(zip_b64=b64_valid)
+        assert res["ok"] is True
+        assert (tmp_path / "module_a.py").exists()
+
+    # 2. Corrupted file hash in zip
+    corrupt_zip_buf = io.BytesIO()
+    bad_manifest_data = {
+        "version": "v1.0",
+        "timestamp": 123456,
+        "files": {"module_b.py": "0000000000000000000000000000000000000000000000000000000000000000"},
+        "count": 1,
+    }
+    with zipfile.ZipFile(corrupt_zip_buf, "w") as zf:
+        zf.writestr("manifest.json", json.dumps(bad_manifest_data))
+        zf.writestr("module_b.py", code)
+
+    b64_corrupt = base64.b64encode(corrupt_zip_buf.getvalue()).decode("ascii")
+
+    with patch("agent.BASE_DIR", tmp_path), \
+         patch("subprocess.Popen"), \
+         patch("threading.Thread"):
+
+        bad_res = agent.apply_agent_update(zip_b64=b64_corrupt)
+        assert bad_res["ok"] is False
+        assert "Checksum mismatch" in bad_res["error"]
+
+
+def test_agent_ota_rollback(tmp_path):
+    """Verify rollback engine restores previous codebase from backup_updates/."""
+    backups_dir = tmp_path / "backup_updates" / "backup_1730000000"
+    backups_dir.mkdir(parents=True)
+    (backups_dir / "agent.py").write_text("# Previous Working Agent Code\n", encoding="utf-8")
+    (backups_dir / "system_controller.py").write_text("# Previous System Controller Code\n", encoding="utf-8")
+
+    current_agent = tmp_path / "agent.py"
+    current_agent.write_text("# Corrupted Current Agent Code\n", encoding="utf-8")
+
+    with patch("agent.BASE_DIR", tmp_path), \
+         patch("subprocess.Popen"), \
+         patch("threading.Thread"):
+
+        res = agent.rollback_agent_update()
+        assert res["ok"] is True
+        assert "agent.py" in res["restored_files"]
+        assert current_agent.read_text(encoding="utf-8") == "# Previous Working Agent Code\n"
+
+
+def test_agent_version_info(tmp_path):
+    """Verify agent version inspector returns hashes and backup listing."""
+    (tmp_path / "agent.py").write_text("# Test agent code\n", encoding="utf-8")
+    backups_dir = tmp_path / "backup_updates" / "backup_999"
+    backups_dir.mkdir(parents=True)
+
+    with patch("agent.BASE_DIR", tmp_path):
+        ver = agent.get_agent_version_info()
+        assert ver["ok"] is True
+        assert "hashes" in ver
+        assert "agent.py" in ver["hashes"]
+        assert "backup_999" in ver["backups"]
+
+
+@pytest.mark.anyio
+async def test_bot_agent_client_rollback_and_version():
+    """Verify AgentClient rollback and version API bindings."""
+    pc_data = {"name": "Test-PC", "ip": "127.0.0.1", "port": 9010, "is_host": True}
+    client = bot.AgentClient(pc_data, secret="test-secret")
+
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.json.return_value = {"ok": True, "restored_files": ["agent.py"], "hashes": {"agent.py": "abc123"}}
+
+    with patch.object(client, "_post", new=AsyncMock(return_value=mock_resp)), \
+         patch.object(client, "_get", new=AsyncMock(return_value=mock_resp)):
+
+        rb_res = await client.rollback_agent_update()
+        assert rb_res["ok"] is True
+        assert "agent.py" in rb_res["restored_files"]
+
+        ver_res = await client.get_agent_version_info()
+        assert ver_res["ok"] is True
+        assert "hashes" in ver_res

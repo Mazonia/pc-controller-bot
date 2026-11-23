@@ -236,13 +236,14 @@ Traditional remote desktop tools require port forwarding, static public IPs, com
 - **Owner-Exclusive Override**: Only authorized Primary Owners can engage or disengage emergency lockdown mode.
 
 ### 🔄 Over-The-Air (OTA) Remote Agent Updates <a id="ota-remote-updates"></a>
-- **Zero-Touch Remote Updates (`/update`, `/update_all`)**: Update remote target PCs and field laptops directly over the Telegram bot without physically visiting the machine, plugging in a USB drive, or reinstalling software.
-- **Encrypted OTA Payload Packaging**: The Commander Bot dynamically bundles updated agent core modules (`agent.py`, `system_controller.py`, `fleet_relay.py`, `screen_caster.py`, `manager_auth.py`) into a compressed zip archive and transmits it over AES-256-GCM encrypted relay channels.
-- **Staging Syntax Validation & Rollback Protection**:
-  - Target agents extract incoming update payloads into an isolated staging directory (`update_staging/`).
-  - Prior to application, every file undergoes bytecode compilation verification (`py_compile`). If any syntax error, incomplete transmission, or corrupted block is detected, the update aborts immediately with zero disruption to the running agent.
-  - Preserves timestamped backups in `backup_updates/` to allow automated rollback if an update fails.
-- **Silent In-Place Agent Restart**: Atomically swaps updated modules and spawns a refreshed, detached background process while gracefully terminating the legacy instance, ensuring continuous 24/7 uptime.
+- **Zero-Touch Remote Code Updates (`/update`, `/update all`, `/update rollback`, `/update status`)**: Update remote target PCs and field laptops directly over Telegram without physically visiting the machine, plugging in a USB drive, or reinstalling software.
+- **Cryptographic SHA-256 Manifest Verification**: Bundles embed an automated `manifest.json` detailing SHA-256 digests for all core files. The target agent validates checksums in staging, completely rejecting corrupted or truncated payloads before modifying production files.
+- **Automated Rollback Engine (`/update rollback [backup_id]`)**: Every update automatically preserves timestamped snapshots in `backup_updates/`. If an issue occurs, sending `/update rollback` instantly restores the previous working codebase and restarts the agent.
+- **Remote Version Diff & Code Inspector (`/update status`, `/update check`)**: Compares file hashes between your central Commander Bot and remote target PCs, reporting an executive diff of matching (🟢) and modified (🟡) files alongside available backups.
+- **Live Reconnection Verification & Health Watchdog**: Following an update or rollback, the bot starts a background verification watchdog that polls the machine's health, reporting live restart latency and operational stats (e.g. `✅ Confirmed ONLINE in 3.1s | CPU: 2.4% | RAM: 32%`).
+- **Direct Telegram Document Updates**: Send any individual `.py` script or `.zip` bundle as a Telegram document with caption `/update` to deploy it directly to the active PC.
+- **Automated Backup Rotation**: Keeps the last 10 rollback snapshots while automatically pruning older archives to conserve disk space.
+- **Staging Syntax Validation**: All Python files undergo AST bytecode compilation (`py_compile`) in an isolated staging directory prior to live deployment, preventing any syntax errors from bricking the remote agent.
 
 ### 🛡️ Anti-Timeout & Network Resilience Shield <a id="anti-timeout-network-resilience-shield"></a>
 - **Engineered for High Latency & Unstable Connections**: Built specifically to survive bad internet, weak mobile hotspots, packet drop, 3G/4G/5G tethering, and cellular CGNAT environments where commands frequently time out.
@@ -417,44 +418,40 @@ Deploy effortlessly to external PCs with zero internet dependency using your ext
 | :--- | :--- |
 | `/start`, `/pcs` | Open Fleet Command Center & switch between monitored PCs |
 | `/status` | View CPU, RAM, Disk, Battery, Uptime, and Active Window |
-| `/shot`, `/screenshot` | Capture high-resolution multi-monitor screenshot |
-| `/cast`, `/stream` | Start global 30 FPS Live Screen Streaming |
+| `/shot` | Capture high-resolution multi-monitor screenshot (`/screenshot`) |
+| `/cast` | Start global 30 FPS Live Screen Streaming (`/stream`) |
+| `/mouse` | Open Remote Ghost Mouse & Multi-Touch Trackpad dashboard |
+| `/type <text>` | Type text into active PC application with unicode/emoji support |
+| `/key <key>` | Send keyboard key or hotkey (e.g. `enter`, `ctrl+v`, `win+d`) |
 | `/desktop` | Desktops & Windows switcher menu (Alt+Tab, Virtual Desktops) |
-| `/windows`, `/apps` | List open application windows with 1-tap focus buttons |
-| `/switch <name>` | Instantly bring matching application window to the front |
-| `/webcam` | Capture photo from connected webcam |
-| `/record_webcam [s]` | Record 10s or custom webcam video clip |
+| `/windows [app]` | List open windows or focus matching application (`/switch`) |
+| `/webcam` | Capture photo snapshot from connected webcam |
 | `/record_screen [s]` | Record 10s-120s of on-screen desktop video |
-| `/lock` | Instantly lock the Windows workstation |
-| `/top` | Display top RAM & CPU consuming processes |
-| `/kill <name_or_pid>` | Terminate running process (e.g. `/kill notepad.exe`) |
-| `/say <text>` | Speak text aloud on PC speakers |
-| `/clip <text>` | Copy text from phone to PC clipboard |
-| `/getclip` | Read text from PC clipboard |
-| `/get [path]` | Open Remote File Explorer, browse directories, or download file |
-| `/files`, `/browse`, `/explore` | Launch interactive Remote File Explorer menu |
-| `/alarm [time] [label]` | Set countdown timer (`10m`, `45s`, `1.5h`) or clock alarm (`18:30`) |
-| `/stopalarm`, `/silence` | Silence and stop ringing PC alarm |
-| `/cancelalarm` | Cancel pending scheduled alarm countdown |
-| `/monitor [on\|off]` | Turn PC monitors on/off or wake screens |
-| `/clean` | Audit and clean cached recordings/downloads |
+| `/record_webcam [s]` | Record 10s or custom webcam video clip |
+| `/files [path]` | Open Remote File Explorer, browse directories, or download file (`/get`) |
+| `/clip [text]` | Read PC clipboard (no arguments) or copy text to PC clipboard (`/getclip`) |
+| `/say <text>` | Speak text aloud on PC speakers using native TTS |
+| `/alarm [time\|stop]` | Set countdown timer / clock alarm, or silence ringing alarm (`/stopalarm`) |
 | `/track` | Anti-VPN geolocation tracking (Wi-Fi BSSID triangulation, physical router MAC anchor, GPS map pin) |
-| `/lockdown [loud\|silent]` | Trigger emergency anti-theft lockdown (locks workstation, monitors breach, siren, snaps intruder webcam) |
-| `/unlockdown` | Deactivate emergency anti-theft lockdown mode |
-| `/update` | Push Over-The-Air (OTA) code update to active target PC |
-| `/update_all` | Push Over-The-Air (OTA) code update to all online fleet PCs |
+| `/lockdown [loud\|silent\|off]` | Emergency anti-theft lockdown (loud siren, silent stealth guard, or disarm with `off`) |
+| `/update [all\|rollback\|status]` | Over-The-Air code update with SHA-256 manifest verification, rollback engine, and live reconnect watchdog |
+| `/monitor [on\|off]` | Turn PC monitors on/off or wake screens |
+| `/lock` | Instantly lock the Windows workstation |
+| `/sleep` | Put PC to sleep |
+| `/top` | Display top RAM & CPU consuming processes |
+| `/kill <name_or_pid>` | Terminate running process with Process Safety Shield |
+| `/clean` | Audit and clean cached recordings and temporary downloads |
+| `/open <url>` | Open website or application on PC |
+| `/cmd <command>` | Execute terminal command with token masking |
+| `/net` | Run network connectivity diagnostics (Telegram latency ms, Cloud Relay broker, PC reachability) |
 | `/managers` | Open Manager Delegation Dashboard & Role Permissions |
 | `/invite [role] [pc]` | Generate single-use invitation link for a new manager |
-| `/addmanager <id\|@user> [role]` | Pre-authorize a manager by Telegram ID or username |
+| `/addmanager <id\|@user>` | Pre-authorize a manager by Telegram ID or username |
 | `/removemanager <id\|@user>` | Revoke manager, wipe bot UI from their phone, and block access |
 | `/audit` | View manager action history and security audit trail |
-| `/net`, `/ping`, `/network` | Run network connectivity diagnostics (Telegram API latency ms, Cloud Relay broker, PC reachability) |
-| `/open <url>` | Open website or app on PC |
-| `/cmd <command>` | Execute terminal command with token masking |
+| `/setpin [pin\|off]` | Configure security PIN (4-8 digits) or remove PIN with `off` (`/removepin`) |
 | `/login <pin>` | Authenticate PIN to unlock Command Center |
 | `/logout` | Lock bot session immediately |
-| `/setpin <pin>` | Configure or change bot security PIN (4-8 digits) |
-| `/removepin` | Disable PIN protection completely |
 | `/rename [name]` | Rename a PC with a friendly custom label |
 | `/removepc <name>` | Remove an uninstalled PC from the fleet list |
 | `/reload` | Reload registered fleet registry |

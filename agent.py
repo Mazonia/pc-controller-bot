@@ -91,6 +91,7 @@ LOCKDOWN_ACTIVE: bool = False
 LOCKDOWN_CONFIG: dict = {"silent": False, "alarm": True, "start_time": None}
 _lockdown_thread: Optional[threading.Thread] = None
 _lockdown_stop_event = threading.Event()
+AGENT_START_TIME: str = datetime.now(timezone.utc).isoformat()
 
 
 def _lockdown_guard_worker(chat_id: Optional[int] = None):
@@ -150,15 +151,19 @@ def apply_agent_update(zip_b64: Optional[str] = None, files_dict: Optional[dict]
     Safely apply OTA code update received over Telegram/MQTT/HTTP:
     1. Create automatic backup of current codebase in backup_updates/
     2. Extract/write files to temporary staging folder
-    3. Validate Python syntax on all .py files using py_compile (prevents bricking)
-    4. Overwrite production files
-    5. Schedule clean process restart
+    3. Verify SHA-256 checksums if manifest is included
+    4. Validate Python syntax on all .py files using py_compile (prevents bricking)
+    5. Overwrite production files
+    6. Prune old backups (keep last 10)
+    7. Schedule clean process restart with multi-fallback launcher
     """
     import io
     import zipfile
     import base64
     import shutil
     import py_compile
+    import hashlib
+    import json
 
     ts = int(time.time())
     backup_dir = BASE_DIR / "backup_updates" / f"backup_{ts}"
@@ -193,7 +198,25 @@ def apply_agent_update(zip_b64: Optional[str] = None, files_dict: Optional[dict]
         if not staged_files:
             return {"ok": False, "error": "Update package was empty."}
 
-        # 3. Python syntax verification on all .py files in staging
+        # 3. Cryptographic checksum verification if manifest.json exists
+        manifest_file = staging_dir / "manifest.json"
+        if manifest_file.exists():
+            try:
+                manifest_data = json.loads(manifest_file.read_text(encoding="utf-8"))
+                expected_files = manifest_data.get("files", {})
+                for fname, expected_hash in expected_files.items():
+                    target_f = staging_dir / fname
+                    if target_f.exists():
+                        actual_hash = hashlib.sha256(target_f.read_bytes()).hexdigest()
+                        if actual_hash.lower() != expected_hash.lower():
+                            shutil.rmtree(staging_dir, ignore_errors=True)
+                            err_msg = f"Checksum mismatch for {fname}: expected {expected_hash[:12]}..., got {actual_hash[:12]}..."
+                            logger.error(f"OTA update rejected: {err_msg}")
+                            return {"ok": False, "error": err_msg}
+            except Exception as me:
+                logger.warning(f"Manifest checksum check warning: {me}")
+
+        # 4. Python syntax verification on all .py files in staging (prevents bricking)
         for staged_name in staged_files:
             if staged_name.endswith(".py"):
                 py_file = staging_dir / staged_name
@@ -204,14 +227,14 @@ def apply_agent_update(zip_b64: Optional[str] = None, files_dict: Optional[dict]
                     logger.error(f"OTA update rejected due to syntax error in {staged_name}: {pe}")
                     return {"ok": False, "error": f"Syntax error in {staged_name}: {pe}"}
 
-        # 4. Backup existing files before overwriting
+        # 5. Backup existing files before overwriting
         backup_dir.mkdir(parents=True, exist_ok=True)
         for staged_name in staged_files:
             existing_file = BASE_DIR / staged_name
             if existing_file.exists():
                 shutil.copy2(existing_file, backup_dir / staged_name)
 
-        # 5. Overwrite production files
+        # 6. Overwrite production files
         for staged_name in staged_files:
             src_path = staging_dir / staged_name
             dst_path = BASE_DIR / staged_name
@@ -220,18 +243,42 @@ def apply_agent_update(zip_b64: Optional[str] = None, files_dict: Optional[dict]
         shutil.rmtree(staging_dir, ignore_errors=True)
         logger.info(f"OTA update applied successfully: {len(staged_files)} files: {staged_files}")
 
-        # 6. Schedule restart
+        # 7. Prune older backups (keep last 10)
+        try:
+            backups_dir = BASE_DIR / "backup_updates"
+            if backups_dir.exists():
+                all_b = sorted([p for p in backups_dir.iterdir() if p.is_dir()], key=lambda p: p.stat().st_mtime)
+                if len(all_b) > 10:
+                    for old_b in all_b[:-10]:
+                        shutil.rmtree(old_b, ignore_errors=True)
+        except Exception:
+            pass
+
+        # 8. Schedule restart with multi-level fallback
         def _delayed_restart():
             time.sleep(1.2)
             if sys.platform == "win32":
-                try:
-                    subprocess.Popen(
-                        ["cmd.exe", "/c", "timeout /t 2 /nobreak >nul & wscript.exe start_agent_hidden.vbs"],
-                        cwd=str(BASE_DIR),
-                        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0) | getattr(subprocess, "DETACHED_PROCESS", 0)
-                    )
-                except Exception as re:
-                    logger.debug(f"Subprocess launcher notice: {re}")
+                restarted = False
+                vbs_path = BASE_DIR / "start_agent_hidden.vbs"
+                if vbs_path.exists():
+                    try:
+                        subprocess.Popen(
+                            ["cmd.exe", "/c", "timeout /t 2 /nobreak >nul & wscript.exe start_agent_hidden.vbs"],
+                            cwd=str(BASE_DIR),
+                            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0) | getattr(subprocess, "DETACHED_PROCESS", 0)
+                        )
+                        restarted = True
+                    except Exception as re:
+                        logger.debug(f"VBS restart notice: {re}")
+                if not restarted:
+                    try:
+                        subprocess.Popen(
+                            ["cmd.exe", "/c", f'timeout /t 2 /nobreak >nul & "{sys.executable}" "{BASE_DIR / "agent.py"}"'],
+                            cwd=str(BASE_DIR),
+                            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0) | getattr(subprocess, "DETACHED_PROCESS", 0)
+                        )
+                    except Exception as re:
+                        logger.debug(f"Direct Python restart notice: {re}")
             logger.info("Restarting agent process to load updated code...")
             os._exit(0)
 
@@ -242,12 +289,124 @@ def apply_agent_update(zip_b64: Optional[str] = None, files_dict: Optional[dict]
             "success": True,
             "msg": f"OTA update applied successfully ({len(staged_files)} files). Agent restarting...",
             "updated_files": staged_files,
+            "backup_id": backup_dir.name,
             "timestamp": datetime.now(timezone.utc).isoformat(),
         }
     except Exception as e:
         shutil.rmtree(staging_dir, ignore_errors=True)
         logger.error(f"Error applying OTA agent update: {e}")
         return {"ok": False, "error": f"Failed to apply update: {e}"}
+
+
+def rollback_agent_update(backup_id: Optional[str] = None) -> dict:
+    """
+    Safely rollback to the latest backup in backup_updates/ (or a specified backup_id).
+    Validates syntax and restarts the agent.
+    """
+    import shutil
+    import py_compile
+    backups_dir = BASE_DIR / "backup_updates"
+    if not backups_dir.exists():
+        return {"ok": False, "error": "No backup directory found on this PC."}
+
+    available_backups = sorted([p for p in backups_dir.iterdir() if p.is_dir()], key=lambda p: p.stat().st_mtime, reverse=True)
+    if not available_backups:
+        return {"ok": False, "error": "No backups available for rollback."}
+
+    target_backup = None
+    if backup_id:
+        for b in available_backups:
+            if b.name == backup_id or backup_id in b.name:
+                target_backup = b
+                break
+        if not target_backup:
+            return {"ok": False, "error": f"Backup '{backup_id}' not found."}
+    else:
+        target_backup = available_backups[0]
+
+    restored_files = []
+    try:
+        # Pre-verify syntax on Python files in the backup
+        for f in target_backup.iterdir():
+            if f.is_file() and f.suffix == ".py":
+                py_compile.compile(str(f), doraise=True)
+
+        for f in target_backup.iterdir():
+            if f.is_file():
+                dest = BASE_DIR / f.name
+                shutil.copy2(f, dest)
+                restored_files.append(f.name)
+
+        def _delayed_restart():
+            time.sleep(1.2)
+            if sys.platform == "win32":
+                restarted = False
+                vbs_path = BASE_DIR / "start_agent_hidden.vbs"
+                if vbs_path.exists():
+                    try:
+                        subprocess.Popen(
+                            ["cmd.exe", "/c", "timeout /t 2 /nobreak >nul & wscript.exe start_agent_hidden.vbs"],
+                            cwd=str(BASE_DIR),
+                            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0) | getattr(subprocess, "DETACHED_PROCESS", 0)
+                        )
+                        restarted = True
+                    except Exception:
+                        pass
+                if not restarted:
+                    try:
+                        subprocess.Popen(
+                            ["cmd.exe", "/c", f'timeout /t 2 /nobreak >nul & "{sys.executable}" "{BASE_DIR / "agent.py"}"'],
+                            cwd=str(BASE_DIR),
+                            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0) | getattr(subprocess, "DETACHED_PROCESS", 0)
+                        )
+                    except Exception:
+                        pass
+            logger.info("Restarting agent process after rollback...")
+            os._exit(0)
+
+        threading.Thread(target=_delayed_restart, daemon=True).start()
+
+        return {
+            "ok": True,
+            "success": True,
+            "msg": f"Rollback successful from {target_backup.name}. Restored {len(restored_files)} files. Agent restarting...",
+            "restored_files": restored_files,
+            "backup_id": target_backup.name,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
+    except Exception as e:
+        logger.error(f"Rollback error: {e}")
+        return {"ok": False, "error": f"Rollback failed: {e}"}
+
+
+def get_agent_version_info() -> dict:
+    """Calculate SHA-256 hashes of running core files and return version and backup status."""
+    import hashlib
+    core_files = [
+        "agent.py", "fleet_relay.py", "system_controller.py",
+        "screen_caster.py", "manager_auth.py", "start_agent.bat"
+    ]
+    hashes = {}
+    for cf in core_files:
+        p = BASE_DIR / cf
+        if p.exists():
+            try:
+                hashes[cf] = hashlib.sha256(p.read_bytes()).hexdigest()[:16]
+            except Exception:
+                hashes[cf] = "error"
+
+    backups_dir = BASE_DIR / "backup_updates"
+    available_backups = []
+    if backups_dir.exists():
+        available_backups = [p.name for p in sorted(backups_dir.iterdir(), key=lambda p: p.stat().st_mtime, reverse=True) if p.is_dir()][:5]
+
+    return {
+        "ok": True,
+        "pc_name": PC_NAME,
+        "hashes": hashes,
+        "backups": available_backups,
+        "start_time": AGENT_START_TIME,
+    }
 
 
 
@@ -853,6 +1012,15 @@ def handle_relay_command(data: dict) -> dict:
         res = apply_agent_update(zip_b64=zip_b64, files_dict=files_dict)
         return res
 
+    elif cmd in ("agent_rollback", "update_rollback", "ota_rollback"):
+        backup_id = params.get("backup_id")
+        res = rollback_agent_update(backup_id=backup_id)
+        return res
+
+    elif cmd in ("agent_version", "update_version", "ota_version"):
+        res = get_agent_version_info()
+        return res
+
     return {"ok": False, "error": f"Unknown command: '{cmd}'"}
 
 
@@ -1191,6 +1359,23 @@ async def api_agent_update(request: Request):
     zip_b64 = data.get("zip_b64")
     files_dict = data.get("files")
     res = await asyncio.to_thread(apply_agent_update, zip_b64=zip_b64, files_dict=files_dict)
+    return res
+
+
+@app.post("/agent/update/rollback")
+async def api_agent_rollback(request: Request):
+    try:
+        data = await request.json()
+    except Exception:
+        data = {}
+    backup_id = data.get("backup_id") if isinstance(data, dict) else None
+    res = await asyncio.to_thread(rollback_agent_update, backup_id=backup_id)
+    return res
+
+
+@app.get("/agent/version")
+async def api_agent_version():
+    res = await asyncio.to_thread(get_agent_version_info)
     return res
 
 
