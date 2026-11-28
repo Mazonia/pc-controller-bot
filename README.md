@@ -513,6 +513,14 @@ Yes. Using the `/pcs` command, administrators can list all registered workstatio
 
 For security guidelines, vulnerability disclosure, and details on encryption protocols, please refer to [SECURITY.md](SECURITY.md).
 
+### Fleet secret hardening (important)
+
+- The relay runs over a **public** MQTT broker, and both the topic and the AES-256-GCM key come from `FLEET_SECRET`. A missing, example or short secret (anything under 16 characters) means anyone could command your PCs.
+- Agents on a weak or default secret now run in **quarantine**: they only accept `status`, `health` and `rotate_fleet_secret`. Set `ALLOW_INSECURE_DEFAULT_SECRET=true` only if you knowingly accept the risk.
+- **Secure an existing fleet:** restart the bot on the new code, push `/update_all`, then send `/rotatesecret` and `/rotatesecret confirm`. Online agents switch to a freshly generated secret over the encrypted relay. Offline PCs need `FLEET_SECRET` copied into their `agent.env`.
+- Every relay command carries a timestamp, a unique ID and the target PC. Agents drop stale, replayed or misdirected messages, so commands captured from the public broker can't be replayed.
+- The agent's LAN API (`:9010`, exposing `/cmd`, `/upload`, `/file` and more) always requires `X-Agent-Secret`. It falls back to `FLEET_SECRET` when `AGENT_SECRET` is unset; previously it was unauthenticated in that case.
+
 ---
 
 ## 📄 License <a id="license"></a>

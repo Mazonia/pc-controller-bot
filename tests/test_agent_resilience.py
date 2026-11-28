@@ -117,7 +117,7 @@ def test_api_play_audio(tmp_path):
     from fastapi.testclient import TestClient
     from agent import app
 
-    client = TestClient(app)
+    client = TestClient(app, headers={"X-Agent-Secret": agent.AGENT_SECRET or agent.FLEET_SECRET})
     with patch("agent.DOWNLOADS_DIR", tmp_path):
         with patch("agent.SystemController.play_audio_file", return_value=(True, "Audio played")):
             files = {"file": ("voice_test.ogg", b"fake_voice_data", "audio/ogg")}

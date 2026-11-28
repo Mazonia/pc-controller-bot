@@ -31,13 +31,89 @@ import paho.mqtt.client as mqtt
 #   CRYPTOGRAPHY & TOPIC HELPERS
 # ═══════════════════════════════════════════════════════════════════════
 
+# Secrets that are public (shipped in this repository or its examples) or too short.
+# Anyone who knows them can derive the fleet topic AND the AES key on the public broker.
+LEGACY_DEFAULT_SECRET = "sentinel-fleet-secret-2026"
+KNOWN_WEAK_SECRETS = {
+    "",
+    LEGACY_DEFAULT_SECRET,
+    "your-random-shared-secret-key-here",
+    "your_fleet_secret_here",
+    "changeme",
+    "secret",
+}
+MIN_SECRET_LENGTH = 16
+
+# Commands an agent still accepts while running on a weak secret ("quarantine"),
+# so the owner can rotate the secret remotely instead of losing the machine.
+QUARANTINE_ALLOWED_COMMANDS = {"health", "status", "ping", "rotate_fleet_secret"}
+
+MAX_COMMAND_AGE_SECONDS = 300      # reject commands older/newer than this (clock skew tolerance)
+REPLAY_CACHE_SECONDS = 900
+
+
+def is_weak_secret(secret: Optional[str]) -> bool:
+    value = (secret or "").strip()
+    return value.lower() in KNOWN_WEAK_SECRETS or len(value) < MIN_SECRET_LENGTH
+
+
+def generate_fleet_secret() -> str:
+    import secrets as _secrets
+    return _secrets.token_urlsafe(32)
+
+
+def allow_insecure_secret() -> bool:
+    return os.getenv("ALLOW_INSECURE_DEFAULT_SECRET", "").strip().lower() in ("1", "true", "yes")
+
+
+class ReplayGuard:
+    """
+    Rejects stale, duplicated or mis-addressed commands.
+
+    The broker is public: anyone can record encrypted payloads and publish them
+    again later. Each command therefore carries an epoch ``ts``, a unique ``id``
+    and the ``target`` PC name.
+    """
+
+    def __init__(self, max_age: float = MAX_COMMAND_AGE_SECONDS, cache_seconds: float = REPLAY_CACHE_SECONDS):
+        self.max_age = max_age
+        self.cache_seconds = cache_seconds
+        self._seen: Dict[str, float] = {}
+        self._lock = threading.Lock()
+
+    def check(self, data: dict, pc_name: str, now: Optional[float] = None) -> tuple:
+        now = now if now is not None else time.time()
+        try:
+            ts = float(data.get("ts"))
+        except (TypeError, ValueError):
+            return False, "missing timestamp (sender must be updated)"
+        if abs(now - ts) > self.max_age:
+            return False, f"stale command ({int(now - ts)}s old)"
+        target = data.get("target")
+        if target is not None and str(target) != str(pc_name):
+            return False, f"command addressed to '{target}'"
+        req_id = str(data.get("id") or "")
+        if not req_id:
+            return False, "missing command id"
+        with self._lock:
+            for k in [k for k, t in self._seen.items() if now - t > self.cache_seconds]:
+                self._seen.pop(k, None)
+            if req_id in self._seen:
+                return False, "replayed command id"
+            self._seen[req_id] = now
+        return True, "ok"
+
+
 class FleetCrypto:
     """AES-256-GCM encryption/decryption using shared FLEET_SECRET."""
 
     def __init__(self, secret: str):
+        secret = (secret or "").strip()
         if not secret:
-            secret = "sentinel-fleet-secret-2026"
+            # Kept only so legacy fleets keep talking; such agents run in quarantine.
+            secret = LEGACY_DEFAULT_SECRET
         self.secret = secret
+        self.is_weak = is_weak_secret(secret)
         self.key = hashlib.sha256(secret.encode("utf-8")).digest()
         self.aesgcm = AESGCM(self.key)
         self.fleet_id = hashlib.sha256((secret + "_fleet_salt").encode("utf-8")).hexdigest()[:12]
@@ -132,6 +208,14 @@ class FleetAgentRelay:
         self.port = port
         self.use_tls = use_tls
         self.command_handler = command_handler
+        self.replay_guard = ReplayGuard()
+        self.quarantined = self.crypto.is_weak and not allow_insecure_secret()
+        if self.quarantined:
+            logger.critical(
+                "FLEET_SECRET is missing, default or too short — anyone could command this PC via the public "
+                "broker. Agent is in QUARANTINE (only status/health/rotate_fleet_secret accepted). "
+                "Send /rotatesecret from the bot, or set a strong FLEET_SECRET in agent.env."
+            )
         self.client: Optional[mqtt.Client] = None
         self.is_connected = False
         self._running = False
@@ -215,6 +299,21 @@ class FleetAgentRelay:
 
             req_id = data.get("id", "")
             cmd = data.get("cmd", "")
+
+            ok, reason = self.replay_guard.check(data, self.pc_name)
+            if not ok:
+                logger.warning(f"Dropped fleet command [{cmd}] (req_id={req_id}): {reason}")
+                return
+
+            if self.quarantined and cmd not in QUARANTINE_ALLOWED_COMMANDS:
+                logger.warning(f"Quarantine: refused fleet command [{cmd}] — weak fleet secret")
+                self.send_response({
+                    "id": req_id, "ok": False,
+                    "error": "Agent is in security quarantine (weak/default FLEET_SECRET). "
+                             "Run /rotatesecret in the bot to secure this PC.",
+                })
+                return
+
             logger.info(f"Received fleet command [{cmd}] (req_id={req_id})")
 
             if self.command_handler:
@@ -454,12 +553,14 @@ class FleetCommanderRelay:
         topic = f"{self.prefix}/cmd/{pc_name}"
 
         for attempt in range(retries + 1):
-            req_id = uuid.uuid4().hex[:8]
+            req_id = uuid.uuid4().hex
             payload_dict = {
                 "id": req_id,
                 "cmd": cmd,
                 "params": params or {},
                 "timestamp": datetime.now().isoformat(),
+                "ts": time.time(),          # replay protection (epoch, timezone independent)
+                "target": pc_name,          # binds the command to one PC
             }
 
             future = self._loop.create_future()

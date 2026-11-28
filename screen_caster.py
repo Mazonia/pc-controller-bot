@@ -13,6 +13,7 @@ import time
 import io
 import json
 import socket
+import hmac
 import secrets
 import threading
 import ctypes
@@ -1782,7 +1783,8 @@ class StreamHTTPHandler(BaseHTTPRequestHandler):
     def authenticate(self) -> bool:
         query = parse_qs(urlparse(self.path).query)
         token_param = query.get("token", [""])[0]
-        return bool(token_param and token_param == self.caster.auth_token)
+        expected = self.caster.auth_token or ""
+        return bool(token_param and expected and hmac.compare_digest(token_param.encode("utf-8"), expected.encode("utf-8")))
 
     def do_GET(self):
         parsed = urlparse(self.path)
