@@ -6,7 +6,7 @@ import agent
 from agent import app, handle_relay_command
 
 
-client = TestClient(app)
+client = TestClient(app, headers={"X-Agent-Secret": agent.AGENT_SECRET or agent.FLEET_SECRET})
 
 
 def test_system_controller_cursor_and_mouse():

@@ -216,10 +216,43 @@ def save_fleet(fleet: dict):
 
 
 def get_fleet_secret(fleet: Optional[dict] = None) -> str:
-    """Get the active fleet encryption secret from fleet.json or environment."""
+    """
+    Get the active fleet encryption secret from fleet.json or environment.
+
+    Falls back to the legacy public default ONLY so un-rotated fleets keep
+    working; such agents run in quarantine until /rotatesecret is used.
+    """
     if fleet is None:
         fleet = load_fleet()
-    return (fleet.get("secret", "") or "").strip() or os.getenv("FLEET_SECRET", "").strip() or "sentinel-fleet-secret-2026"
+    from fleet_relay import LEGACY_DEFAULT_SECRET
+    return (fleet.get("secret", "") or "").strip() or os.getenv("FLEET_SECRET", "").strip() or LEGACY_DEFAULT_SECRET
+
+
+def fleet_secret_is_weak(fleet: Optional[dict] = None) -> bool:
+    from fleet_relay import is_weak_secret
+    return is_weak_secret(get_fleet_secret(fleet))
+
+
+def persist_fleet_secret(new_secret: str) -> None:
+    """Save the rotated secret to fleet.json and FLEET_SECRET in .env."""
+    fleet = load_fleet()
+    fleet["secret"] = new_secret
+    save_fleet(fleet)
+    env_path = Path(__file__).resolve().parent / ".env"
+    lines = env_path.read_text(encoding="utf-8").splitlines() if env_path.exists() else []
+    out, found = [], False
+    for line in lines:
+        if line.split("=", 1)[0].strip() == "FLEET_SECRET":
+            out.append(f"FLEET_SECRET={new_secret}")
+            found = True
+        else:
+            out.append(line)
+    if not found:
+        out.append(f"FLEET_SECRET={new_secret}")
+    tmp = env_path.with_suffix(".env.tmp")
+    tmp.write_text("\n".join(out) + "\n", encoding="utf-8")
+    os.replace(tmp, env_path)
+    os.environ["FLEET_SECRET"] = new_secret
 
 
 class AgentClient:
@@ -805,6 +838,15 @@ class AgentClient:
         if self.should_use_relay():
             return await commander_relay.send_command(self.name, "lockdown_status", timeout=10.0)
         r = await self._get("/lockdown/status", timeout=10.0)
+        r.raise_for_status()
+        return r.json()
+
+    async def rotate_secret(self, new_secret: str) -> dict:
+        """Ask the agent to switch to a new fleet secret (authenticated with the current one)."""
+        payload = {"new_secret": new_secret}
+        if self.should_use_relay():
+            return await commander_relay.send_command(self.name, "rotate_fleet_secret", payload, timeout=20.0)
+        r = await self._post("/security/rotate-secret", json=payload, timeout=20.0)
         r.raise_for_status()
         return r.json()
 
@@ -4088,6 +4130,87 @@ async def handle_update_agent(update: Update, context: ContextTypes.DEFAULT_TYPE
             await safe_reply(update, err, parse_mode="HTML")
 
 
+async def handle_rotate_secret(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    /rotatesecret [confirm] — replace the shared fleet secret on every online agent.
+    Agents prove the old secret (the command decrypts), save the new one and reconnect.
+    """
+    global commander_relay
+    if not await check_access(update, context):
+        return
+    if not await check_owner_only(update, context, "Fleet Secret Rotation (/rotatesecret)"):
+        return
+    fleet = load_fleet()
+    pcs = fleet.get("pcs", [])
+    online = []
+    for pc in pcs:
+        agent = AgentClient(pc, get_fleet_secret(fleet))
+        try:
+            if agent.is_local or agent.is_relay_online():
+                online.append(pc)
+        except Exception:
+            pass
+    offline = [pc for pc in pcs if pc not in online]
+
+    if not context.args or context.args[0].lower() != "confirm":
+        weak = fleet_secret_is_weak(fleet)
+        lines = [
+            "🔐 <b>FLEET SECRET ROTATION</b>",
+            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+            f"Current secret: {'⚠️ <b>WEAK / PUBLIC DEFAULT</b> — anyone could command your PCs' if weak else '✅ strong'}",
+            f"Online agents: <b>{len(online)}</b> / {len(pcs)}",
+        ]
+        if offline:
+            lines.append("⚠️ Offline PCs keep the old secret and must be updated manually (agent.env → FLEET_SECRET):")
+            lines += [f"• {html.escape(pc.get('label', pc.get('name', '?')))}" for pc in offline]
+        lines.append("\nAgents still on old code must be OTA-updated first (/update_all).")
+        lines.append("Send <code>/rotatesecret confirm</code> to proceed.")
+        await update.effective_message.reply_text("\n".join(lines), parse_mode="HTML")
+        return
+
+    from fleet_relay import generate_fleet_secret, FleetCommanderRelay as _FCR
+    new_secret = generate_fleet_secret()
+    results, success = [], 0
+    for pc in online:
+        label = html.escape(pc.get("label", pc.get("name", "?")))
+        try:
+            res = await AgentClient(pc, get_fleet_secret(fleet)).rotate_secret(new_secret)
+            if res.get("ok"):
+                success += 1
+                results.append(f"• {label}: ✅ switched")
+            else:
+                results.append(f"• {label}: ❌ {html.escape(str(res.get('error', 'failed')))}")
+        except Exception as e:
+            results.append(f"• {label}: ❌ {html.escape(str(e))[:80]}")
+
+    if pcs and success == 0:
+        await update.effective_message.reply_text(
+            "❌ No agent accepted the new secret — nothing was changed.\n" + "\n".join(results), parse_mode="HTML")
+        return
+
+    persist_fleet_secret(new_secret)
+    try:
+        if commander_relay:
+            old = commander_relay
+            old.stop()
+            commander_relay = _FCR(
+                secret=new_secret, broker=old.broker, port=old.port, use_tls=old.use_tls,
+                on_alert_callback=old.on_alert_callback, on_status_callback=old.on_status_callback,
+            )
+            commander_relay.start(asyncio.get_running_loop())
+    except Exception as e:
+        logger.error(f"Commander relay restart failed after rotation: {e}")
+
+    user = update.effective_user
+    manager_auth.record_audit(user.id if user else 0, user.username if user else "", "FLEET_SECRET_ROTATED",
+                              "ALL_PCS", f"{success}/{len(online)} online agents")
+    await update.effective_message.reply_text(
+        "🔐 <b>Fleet secret rotated</b>\n" + "\n".join(results or ["(no registered PCs)"]) +
+        ("\n\n⚠️ Update offline PCs manually: copy FLEET_SECRET from the bot's .env into their agent.env." if offline else ""),
+        parse_mode="HTML",
+    )
+
+
 async def handle_update_all_fleet(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await check_access(update, context):
         return
@@ -4110,7 +4233,7 @@ async def handle_update_all_fleet(update: Update, context: ContextTypes.DEFAULT_
     for pc in pcs:
         name = pc.get("name")
         label = pc.get("label", name)
-        agent = AgentClient(pc, fleet.get("secret", ""))
+        agent = AgentClient(pc, get_fleet_secret(fleet))
         try:
             res = await agent.push_agent_update(zip_b64=b64_zip)
             if res.get("ok"):
@@ -5759,7 +5882,7 @@ async def poll_agent_events(app: Application):
         try:
             await asyncio.sleep(30)
             fleet = load_fleet()
-            secret = fleet.get("secret", "")
+            secret = get_fleet_secret(fleet)
             for pc in fleet["pcs"]:
                 client = AgentClient(pc, secret)
                 events = await client.get_events()
@@ -5902,6 +6025,7 @@ def main():
     app.add_handler(CommandHandler(["unlockdown", "disarm"], handle_unlockdown))
     app.add_handler(CommandHandler(["update", "updatepc", "ota"], handle_update_agent))
     app.add_handler(CommandHandler(["updateall", "update_all"], handle_update_all_fleet))
+    app.add_handler(CommandHandler(["rotatesecret", "rotate_secret"], handle_rotate_secret))
     app.add_handler(CommandHandler("monitor", handle_monitor))
     app.add_handler(CommandHandler(["mouse", "touchpad", "trackpad"], handle_mouse))
     app.add_handler(CommandHandler(["type", "typing", "sendtext"], handle_type))
@@ -5988,6 +6112,19 @@ def main():
         commander_relay.start(asyncio.get_running_loop())
         # Allow relay a brief moment to connect and ingest retained status
         await asyncio.sleep(1.2)
+
+        if fleet_secret_is_weak():
+            logger.critical("FLEET_SECRET is missing/default/weak — agents are in quarantine. Use /rotatesecret.")
+            for uid in config.AUTHORIZED_USER_IDS:
+                try:
+                    asyncio.create_task(application.bot.send_message(
+                        chat_id=uid, parse_mode="HTML",
+                        text=("🔐 <b>SECURITY: weak fleet secret</b>\n"
+                              "Your fleet uses a missing/public default secret on a public broker, so anyone could "
+                              "command your PCs. Updated agents now run in quarantine.\n"
+                              "Run <code>/rotatesecret</code> to secure the fleet.")))
+                except Exception:
+                    pass
 
         cmds = [
             BotCommand("status", "System Diagnostics (CPU, RAM, Uptime)"),

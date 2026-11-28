@@ -62,7 +62,8 @@ logger.add(
 PC_NAME = os.getenv("PC_NAME", "").strip() or os.environ.get("COMPUTERNAME") or socket.gethostname() or "Unknown-PC"
 AGENT_PORT = int(os.getenv("AGENT_PORT", "9010"))
 AGENT_SECRET = os.getenv("AGENT_SECRET", "").strip()
-FLEET_SECRET = os.getenv("FLEET_SECRET", "").strip() or AGENT_SECRET or "sentinel-fleet-secret-2026"
+# No hard-coded fallback: a missing/weak secret puts the agent in quarantine (see fleet_relay.py)
+FLEET_SECRET = os.getenv("FLEET_SECRET", "").strip() or AGENT_SECRET
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
 AUTHORIZED_USER_IDS = os.getenv("AUTHORIZED_USER_IDS", "").strip()
 MQTT_BROKER = os.getenv("MQTT_BROKER", "broker.emqx.io").strip()
@@ -81,7 +82,13 @@ DOWNLOADS_DIR.mkdir(parents=True, exist_ok=True)
 
 from system_controller import SystemController
 from screen_caster import screen_caster, get_active_window_title
-from fleet_relay import FleetAgentRelay, get_network_info
+from fleet_relay import (
+    FleetAgentRelay,
+    get_network_info,
+    is_weak_secret,
+    allow_insecure_secret,
+    QUARANTINE_ALLOWED_COMMANDS,
+)
 
 hardware_lock = threading.Lock()
 relay: Optional[FleetAgentRelay] = None
@@ -521,6 +528,67 @@ def send_document_to_telegram(chat_id: int, file_path: Path, caption: str = "") 
 #   CLOUD RELAY COMMAND DISPATCHER
 # ═══════════════════════════════════════════════════════════════════════
 
+def _persist_env_value(key: str, value: str, env_path: Optional[Path] = None) -> None:
+    """Insert/replace KEY=value in agent.env atomically."""
+    env_path = env_path or (BASE_DIR / "agent.env")
+    lines = env_path.read_text(encoding="utf-8").splitlines() if env_path.exists() else []
+    out, found = [], False
+    for line in lines:
+        if line.split("=", 1)[0].strip() == key:
+            out.append(f"{key}={value}")
+            found = True
+        else:
+            out.append(line)
+    if not found:
+        out.append(f"{key}={value}")
+    tmp = env_path.with_suffix(env_path.suffix + ".tmp")
+    tmp.write_text("\n".join(out) + "\n", encoding="utf-8")
+    os.replace(tmp, env_path)
+
+
+def _restart_relay_with_secret(new_secret: str) -> None:
+    global relay
+    try:
+        if relay:
+            relay.stop()
+        relay = FleetAgentRelay(
+            pc_name=PC_NAME,
+            secret=new_secret,
+            broker=MQTT_BROKER,
+            port=MQTT_PORT,
+            use_tls=MQTT_USE_TLS,
+            command_handler=handle_relay_command,
+        )
+        relay.start()
+        logger.success("🔐 Fleet relay restarted with the rotated secret")
+    except Exception as e:
+        logger.error(f"Relay restart after secret rotation failed: {e}")
+
+
+def rotate_fleet_secret(new_secret: str) -> dict:
+    """
+    Replace the shared fleet secret. The caller already proved knowledge of the
+    current secret (the command decrypted). The response is sent with the OLD
+    key, then the relay switches to the new one.
+    """
+    global FLEET_SECRET, AGENT_SECRET
+    new_secret = (new_secret or "").strip()
+    if is_weak_secret(new_secret):
+        return {"ok": False, "error": "New secret is too weak (min 16 chars, not a known default)."}
+    try:
+        _persist_env_value("FLEET_SECRET", new_secret)
+        if AGENT_SECRET:
+            _persist_env_value("AGENT_SECRET", new_secret)
+    except Exception as e:
+        return {"ok": False, "error": f"Could not persist new secret: {e}"}
+    FLEET_SECRET = new_secret
+    if AGENT_SECRET:
+        AGENT_SECRET = new_secret
+    threading.Timer(2.0, _restart_relay_with_secret, args=(new_secret,)).start()
+    logger.warning("🔐 Fleet secret rotated — relay will reconnect with the new key in 2s")
+    return {"ok": True, "msg": f"{PC_NAME} switched to the new fleet secret."}
+
+
 def handle_relay_command(data: dict) -> dict:
     """
     Handle commands received via MQTT Cloud Relay.
@@ -532,6 +600,10 @@ def handle_relay_command(data: dict) -> dict:
     chat_id = params.get("chat_id")
 
     logger.info(f"Processing command [{cmd}] for {PC_NAME}")
+
+    # 0. SECURITY: rotate the shared fleet secret (accepted even in quarantine)
+    if cmd == "rotate_fleet_secret":
+        return rotate_fleet_secret(params.get("new_secret", ""))
 
     # 1. STATUS
     if cmd == "status":
@@ -1047,12 +1119,25 @@ def _alarm_callback(label: str, time_str: str):
 #   LOCAL FASTAPI SERVER (For Direct LAN Access)
 # ═══════════════════════════════════════════════════════════════════════
 
+LAN_QUARANTINE_PATHS = {"/health", "/status", "/security/rotate-secret"}
+
+
 async def verify_secret(request: Request):
-    """Validate shared secret header on local LAN requests."""
-    if AGENT_SECRET:
-        token = request.headers.get("X-Agent-Secret", "")
-        if not hmac.compare_digest(token, AGENT_SECRET):
-            raise HTTPException(status_code=403, detail="Invalid agent secret")
+    """
+    Validate the shared secret header on LAN requests. Always enforced: the
+    expected value is AGENT_SECRET, or FLEET_SECRET (what the bot sends) when
+    AGENT_SECRET is unset. Previously an empty AGENT_SECRET meant NO auth on a
+    0.0.0.0 server exposing /cmd, /upload, /file and /agent/update.
+    """
+    expected = AGENT_SECRET or FLEET_SECRET
+    token = request.headers.get("X-Agent-Secret", "")
+    if not expected or not hmac.compare_digest(token.encode("utf-8"), expected.encode("utf-8")):
+        raise HTTPException(status_code=403, detail="Invalid agent secret")
+    if is_weak_secret(expected) and not allow_insecure_secret() and request.url.path not in LAN_QUARANTINE_PATHS:
+        raise HTTPException(
+            status_code=423,
+            detail="Agent in security quarantine (weak/default secret). Rotate the fleet secret first.",
+        )
 
 
 app = FastAPI(
@@ -1061,6 +1146,12 @@ app = FastAPI(
     redoc_url=None,
     dependencies=[Depends(verify_secret)],
 )
+
+
+@app.post("/security/rotate-secret")
+async def lan_rotate_secret(request: Request):
+    body = await request.json()
+    return rotate_fleet_secret(str(body.get("new_secret", "")))
 
 
 @app.get("/health")
